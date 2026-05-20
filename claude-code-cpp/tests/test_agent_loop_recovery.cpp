@@ -34,3 +34,12 @@ TEST_CASE("AgentLoop OnStopHook callback type is invocable", "[agentloop]") {
     REQUIRE(result.shouldContinue);
     REQUIRE(result.reason == "test reason");
 }
+
+TEST_CASE("AgentLoop max_output_tokens escalation constants", "[agentloop]") {
+    REQUIRE(AgentLoop::MAX_OUTPUT_TOKENS_RECOVERY == 3);
+    REQUIRE(AgentLoop::ESCALATED_MAX_TOKENS > 16384);
+}
+
+TEST_CASE("AgentLoop reactive compact on 413 error", "[agentloop]") {
+    REQUIRE(AgentLoop::MAX_REACTIVE_COMPACT_ATTEMPTS == 2);
+}

@@ -41,6 +41,12 @@ public:
     /// max_output_tokens 恢复最大重试次数
     static constexpr int MAX_OUTPUT_TOKENS_RECOVERY = 3;
 
+    /// Escalated max_tokens for recovery (when default is too small)
+    static constexpr int ESCALATED_MAX_TOKENS = 65536;
+
+    /// Maximum reactive compact attempts on 413 errors
+    static constexpr int MAX_REACTIVE_COMPACT_ATTEMPTS = 2;
+
     /// Result from a stop hook evaluation.
     /// If shouldContinue is true, the loop continues even though the model said end_turn.
     struct StopHookResult {
@@ -299,6 +305,10 @@ private:
     /// 匹配原版 TS 的 auto-compact 行为
     bool applyAutoCompact();
 
+    /// Reactive compact: attempt compact on 413 (prompt too long) errors.
+    /// Returns true if compact succeeded and the caller should retry.
+    bool attemptReactiveCompact();
+
     // ========== 辅助方法 ==========
 
     /// 构建 API 请求
@@ -362,6 +372,9 @@ private:
     int maxIterations_ = DEFAULT_MAX_ITERATIONS;
     double temperature_ = -1;      // -1 = use API default
     int maxTokensOverride_ = -1;   // -1 = use ApiClient default
+
+    // Reactive compact state
+    int reactiveCompactAttempts_ = 0;
 
     // 当前用户输入 (用于回调)
     String currentUserInput_;

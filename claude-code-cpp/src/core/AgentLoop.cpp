@@ -78,6 +78,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
     int iteration = 0;
     String lastAssistantText;
     int maxOutputTokensRecoveryCount = 0;
+    reactiveCompactAttempts_ = 0;
 
     while (iteration < maxIterations_) {
         iteration++;
@@ -115,7 +116,20 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                 result = blockingIteration(request);
             }
         } catch (const std::exception& e) {
-            return std::unexpected("API call failed: " + String(e.what()));
+            String errorMsg = e.what();
+
+            // ========== 413 Prompt-Too-Long: Reactive Compact Recovery ==========
+            if (errorMsg.find("413") != String::npos ||
+                errorMsg.find("prompt-too-long") != String::npos ||
+                errorMsg.find("context_length_exceeded") != String::npos) {
+                spdlog::warn("413 prompt-too-long detected, attempting reactive compact");
+                if (attemptReactiveCompact()) {
+                    continue;  // Retry with compressed context
+                }
+                return std::unexpected("Context too long and compact failed. Try /compact manually.");
+            }
+
+            return std::unexpected("API call failed: " + errorMsg);
         }
 
         // 记录使用量
@@ -183,6 +197,12 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             if (maxOutputTokensRecoveryCount <= MAX_OUTPUT_TOKENS_RECOVERY) {
                 spdlog::info("max_output_tokens reached, recovery iteration {}/{}",
                     maxOutputTokensRecoveryCount, MAX_OUTPUT_TOKENS_RECOVERY);
+
+                // Escalate max_tokens on 2nd+ recovery attempt
+                if (maxOutputTokensRecoveryCount >= 2 && maxTokensOverride_ < ESCALATED_MAX_TOKENS) {
+                    maxTokensOverride_ = ESCALATED_MAX_TOKENS;
+                    spdlog::info("Escalating max_tokens to {} for recovery", ESCALATED_MAX_TOKENS);
+                }
 
                 // 添加续写指令 (匹配原版TS: "Resume directly — no apology, no recap")
                 messageHistory_.push_back(Message::assistant(
@@ -1050,6 +1070,43 @@ bool AgentLoop::applyAutoCompact() {
         oldSize, messageHistory_.size());
 
     return true;
+}
+
+bool AgentLoop::attemptReactiveCompact() {
+    if (reactiveCompactAttempts_ >= MAX_REACTIVE_COMPACT_ATTEMPTS) {
+        spdlog::warn("Reactive compact: max attempts ({}) reached", MAX_REACTIVE_COMPACT_ATTEMPTS);
+        return false;
+    }
+
+    reactiveCompactAttempts_++;
+    spdlog::info("Reactive compact: attempt {}/{} (413 prompt-too-long recovery)",
+        reactiveCompactAttempts_, MAX_REACTIVE_COMPACT_ATTEMPTS);
+
+    // Force compact regardless of threshold
+    if (autoCompact_) {
+        auto newHistory = autoCompact_->compact(messageHistory_);
+        if (newHistory) {
+            compact::PostCompactCleanup::cleanup(*newHistory);
+            messageHistory_ = std::move(*newHistory);
+
+            // Adjust token tracker
+            long estimatedNewTokens = 0;
+            for (const auto& msg : messageHistory_) {
+                estimatedNewTokens += static_cast<long>(msg.content.size()) / 4;
+            }
+            tokenTracker_.adjustAfterCompaction(estimatedNewTokens);
+            return true;
+        }
+    }
+
+    // Fallback: aggressive micro-compact
+    int compacted = compact::MicroCompact::applyByPressure(messageHistory_, 0.50);
+    if (compacted > 0) {
+        spdlog::info("Reactive compact (micro): cleared {} tool results", compacted);
+        return true;
+    }
+
+    return false;
 }
 
 // ========== Stream Event Emission ==========
