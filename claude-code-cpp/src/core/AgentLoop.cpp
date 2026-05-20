@@ -132,9 +132,11 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         // 添加助手消息到历史
         messageHistory_.push_back(result.message);
 
-        // ========== PostResponse Stop Hook ==========
-        // 匹配原版 TS: PostResponse hooks 可以阻止继续执行
+        // ========== Stop Hook ==========
+        // When the model stops with end_turn (not max_tokens), run stop hooks.
+        // Stop hooks can force the loop to continue (matching TS handleStopHooks).
         if (result.stopReason != "max_tokens" && result.stopReason != "length") {
+            // First: fire PostResponse hook for backward compat
             HookContext hookCtx;
             hookCtx.toolName = "response";
             hookCtx.extras["stopReason"] = result.stopReason;
@@ -145,6 +147,17 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                 String reason = hookCtx.extras.count("reason") ? hookCtx.extras["reason"] : "Hook blocked continuation";
                 lastAssistantText += "\n\n[Stopped by hook: " + reason + "]";
                 break;
+            }
+
+            // Then: run Stop hook (can force continuation)
+            if (onStopHook_) {
+                auto stopResult = onStopHook_();
+                if (stopResult.shouldContinue) {
+                    spdlog::info("Stop hook forced continuation: {}", stopResult.reason);
+                    messageHistory_.push_back(Message::user(
+                        "[System: Continue your work. " + stopResult.reason + "]"));
+                    continue;
+                }
             }
         }
 

@@ -47,6 +47,17 @@ public:
     /// max_output_tokens 恢复最大重试次数
     static constexpr int MAX_OUTPUT_TOKENS_RECOVERY = 3;
 
+    /// Result from a stop hook evaluation.
+    /// If shouldContinue is true, the loop continues even though the model said end_turn.
+    struct StopHookResult {
+        bool shouldContinue = false;
+        String reason;
+    };
+
+    /// Stop hook callback type.
+    /// Called when the model stops with end_turn (not max_tokens).
+    using OnStopHook = std::function<StopHookResult()>;
+
     // ========== 构造 ==========
 
     AgentLoop(
@@ -137,6 +148,12 @@ public:
     /// 向后兼容：现有独立回调仍然生效（作为回退）
     void setOnStreamEvent(std::function<void(const StreamEvent&)> callback) {
         onStreamEvent_ = std::move(callback);
+    }
+
+    /// Set the stop hook callback.
+    /// When the model stops (end_turn), this hook runs and can force continuation.
+    void setOnStopHook(OnStopHook callback) {
+        onStopHook_ = std::move(callback);
     }
 
     /// 设置上下文压缩预警回调 — 当 token 使用量接近上下文窗口上限时触发
@@ -336,6 +353,7 @@ private:
     std::function<void(const String& toolName, const String& result, bool isError)> onToolResult_;  // 单工具完成
     std::function<void(int iteration, int totalIterations)> onLoopContinue_;  // TAOR循环继续
     std::function<void()> onCancelled_;  // Cancelled callback for UI notification
+    OnStopHook onStopHook_;
 
     // 统一事件回调 (优先于独立回调)
     std::function<void(const StreamEvent&)> onStreamEvent_;
