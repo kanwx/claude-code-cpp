@@ -1,5 +1,11 @@
 #include <claude/core/AgentLoop.hpp>
 #include <claude/core/compact/CompactPrompt.hpp>
+#include <claude/core/compact/MicroCompact.hpp>
+#include <claude/core/compact/PostCompactCleanup.hpp>
+#include <claude/core/compact/SessionMemoryCompact.hpp>
+#include <claude/core/compact/MessageGrouping.hpp>
+#include <claude/core/compact/ApiMicroCompact.hpp>
+#include <claude/tool/ResultTruncation.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 

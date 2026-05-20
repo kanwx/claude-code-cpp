@@ -3,7 +3,6 @@
 #include <claude/api/ApiClient.hpp>
 #include <optional>
 #include <vector>
-#include <set>
 
 namespace claude::compact {
 
