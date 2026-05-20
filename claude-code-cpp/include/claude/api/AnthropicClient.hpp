@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ApiClient.hpp"
+#include "BetaHeaders.hpp"
 #include "../core/Types.hpp"
 #include <httplib.h>
 #include <memory>
@@ -119,6 +120,13 @@ public:
         streamIdleTimeoutSec_ = seconds;
     }
 
+    void setBetaHeaders(const std::vector<String>& betas) {
+        betaHeaders_ = betas;
+    }
+    const std::vector<String>& getBetaHeaders() const {
+        return betaHeaders_;
+    }
+
     // ========== 信息 ==========
 
     String getProviderName() const override { return "anthropic"; }
@@ -141,6 +149,7 @@ private:
     bool promptCachingEnabled_ = true;  // 默认启用
     bool isCustomBaseUrl_ = false;      // 是否为自定义 base URL
     String querySource_;
+    std::vector<String> betaHeaders_;
 
     std::unique_ptr<httplib::Client> httpClient_;
 
@@ -153,7 +162,7 @@ private:
 
     // 请求构建
     Json buildRequest(const Json& messages, const Json& tools);
-    String buildHeaders();
+    httplib::Headers buildHttpHeaders();
 
     // Internal: process a single SSE event into StreamingState
     void processSseEvent(const Json& event, StreamingState& state);

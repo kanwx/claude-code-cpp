@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <claude/api/BetaHeaders.hpp>
+#include <claude/api/AnthropicClient.hpp>
 
 using namespace claude::api;
+using claude::AnthropicClient;
 
 TEST_CASE("BetaHeaders default list", "[beta_headers]") {
     auto betas = BetaHeaders::getDefault();
@@ -40,4 +42,17 @@ TEST_CASE("BetaHeaders for context management", "[beta_headers]") {
     // Also contains defaults
     REQUIRE(std::find(betas.begin(), betas.end(),
                       BetaHeaders::PROMPT_CACHING) != betas.end());
+}
+
+TEST_CASE("AnthropicClient has beta headers member", "[beta]") {
+    AnthropicClient client("test-key");
+    REQUIRE_FALSE(client.getBetaHeaders().empty());
+}
+
+TEST_CASE("AnthropicClient setBetaHeaders", "[beta]") {
+    AnthropicClient client("test-key");
+    std::vector<claude::String> custom = {"custom-beta-2025-01-01"};
+    client.setBetaHeaders(custom);
+    REQUIRE(client.getBetaHeaders().size() == 1);
+    REQUIRE(client.getBetaHeaders()[0] == "custom-beta-2025-01-01");
 }

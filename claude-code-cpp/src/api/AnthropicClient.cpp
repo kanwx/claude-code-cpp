@@ -19,6 +19,7 @@ AnthropicClient::AnthropicClient() {
     httpClient_ = std::make_unique<httplib::Client>(baseUrl_);
     httpClient_->set_connection_timeout(30);
     httpClient_->set_read_timeout(120);
+    betaHeaders_ = api::BetaHeaders::getDefault();
 }
 
 AnthropicClient::AnthropicClient(const String& apiKey) : AnthropicClient() {
@@ -59,6 +60,9 @@ void AnthropicClient::setTemperature(double temp) {
 
 void AnthropicClient::setThinkingEnabled(bool enabled) {
     thinkingEnabled_ = enabled;
+    if (enabled) {
+        betaHeaders_ = api::BetaHeaders::merge(betaHeaders_, api::BetaHeaders::forExtendedThinking());
+    }
 }
 
 void AnthropicClient::setThinkingBudget(int budget) {
@@ -149,10 +153,21 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
     return req;
 }
 
-String AnthropicClient::buildHeaders() {
-    return "x-api-key: " + apiKey_ + "\r\n"
-           "anthropic-version: 2023-06-01\r\n"
-           "Content-Type: application/json\r\n";
+httplib::Headers AnthropicClient::buildHttpHeaders() {
+    httplib::Headers headers = {
+        {"Content-Type", "application/json"}
+    };
+    if (!apiKey_.empty()) {
+        headers.emplace("x-api-key", apiKey_);
+    }
+    headers.emplace("anthropic-version", "2023-06-01");
+    if (!betaHeaders_.empty()) {
+        String betaValue = api::BetaHeaders::buildHeaderString(betaHeaders_);
+        if (!betaValue.empty()) {
+            headers.emplace("anthropic-beta", betaValue);
+        }
+    }
+    return headers;
 }
 
 // ============================================================================
@@ -163,13 +178,7 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
     Json req = buildRequest(messages, tools);
     String body = req.dump();
 
-    httplib::Headers headers = {
-        {"Content-Type", "application/json"}
-    };
-    if (!apiKey_.empty()) {
-        headers.emplace("x-api-key", apiKey_);
-    }
-    headers.emplace("anthropic-version", "2023-06-01");
+    httplib::Headers headers = buildHttpHeaders();
 
     String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
 
@@ -591,13 +600,7 @@ Result<StreamingState> AnthropicClient::streamWithState(
 
     String body = req.dump();
 
-    httplib::Headers headers = {
-        {"Content-Type", "application/json"}
-    };
-    if (!apiKey_.empty()) {
-        headers.emplace("x-api-key", apiKey_);
-    }
-    headers.emplace("anthropic-version", "2023-06-01");
+    httplib::Headers headers = buildHttpHeaders();
 
     String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
 
