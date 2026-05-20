@@ -4,6 +4,7 @@
 #include <claude/core/compact/SessionMemoryCompact.hpp>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <set>
 
 namespace claude::compact {
 
