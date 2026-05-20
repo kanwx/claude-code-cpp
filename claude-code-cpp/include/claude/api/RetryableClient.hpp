@@ -87,6 +87,23 @@ public:
     /// Used before model fallback to prevent cross-provider incompatibility.
     static Json stripThinkingBlocks(const Json& messages);
 
+    /// Information about a model fallback event.
+    struct FallbackInfo {
+        String fromModel;
+        String toModel;
+        String fromBaseUrl;
+        String toBaseUrl;
+    };
+
+    /// Callback type for fallback events.
+    using OnFallback = std::function<void(const FallbackInfo&)>;
+
+    /// Set the fallback event callback.
+    /// Called when the client switches to the fallback model.
+    void setOnFallback(OnFallback callback) {
+        onFallback_ = std::move(callback);
+    }
+
     // ========== 直接代理 ==========
 
     std::expected<Json, String> call(const Json& messages, const Json& tools) {
@@ -115,6 +132,7 @@ private:
     String fallbackApiKey_;
     std::atomic<bool> fallbackActive_{false};
     std::atomic<int> consecutiveOverloadErrors_{0};
+    OnFallback onFallback_;
 
     static constexpr int OVERLOAD_THRESHOLD = 2;  // 连续 2 次 529 → 回退
 };

@@ -72,3 +72,13 @@ TEST_CASE("stripThinkingBlocks handles empty array", "[retry]") {
     REQUIRE(result.is_array());
     REQUIRE(result.empty());
 }
+
+TEST_CASE("RetryableClient FallbackInfo struct", "[retry]") {
+    RetryableClient::FallbackInfo info;
+    info.fromModel = "claude-opus";
+    info.toModel = "claude-sonnet";
+    REQUIRE(info.fromModel == "claude-opus");
+    REQUIRE(info.toModel == "claude-sonnet");
+    REQUIRE(info.fromBaseUrl.empty());
+    REQUIRE(info.toBaseUrl.empty());
+}

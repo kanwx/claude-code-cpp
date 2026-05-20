@@ -174,8 +174,12 @@ bool RetryableClient::attemptFallback() {
         return true;  // 已经在回退模型上了
     }
 
+    // Capture previous values before switching
+    String previousModel = client_->getModelName();
+    String previousBaseUrl;  // No getter for base URL currently
+
     spdlog::warn("Model fallback triggered: switching from {} to {}",
-        client_->getModelName(), fallbackModel_);
+        previousModel, fallbackModel_);
 
     // 切换模型
     client_->setModel(fallbackModel_);
@@ -189,6 +193,17 @@ bool RetryableClient::attemptFallback() {
     }
 
     fallbackActive_ = true;
+
+    // Notify callback about the fallback
+    if (onFallback_) {
+        FallbackInfo info;
+        info.fromModel = previousModel;
+        info.toModel = fallbackModel_;
+        info.fromBaseUrl = previousBaseUrl;
+        info.toBaseUrl = fallbackBaseUrl_;
+        onFallback_(info);
+    }
+
     return true;
 }
 
