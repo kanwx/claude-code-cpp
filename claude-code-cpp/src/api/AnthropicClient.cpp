@@ -274,6 +274,14 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
             if (blockType == "thinking" && block.contains("thinking")) {
                 state.accumulatedText = block.value("thinking", "");
             }
+            // For redacted_thinking blocks, capture the encrypted data
+            else if (blockType == "redacted_thinking") {
+                state.currentBlockType = "redacted_thinking";
+                state.accumulatedText.clear();
+                if (block.contains("data")) {
+                    state.accumulatedText = block["data"].get<String>();
+                }
+            }
             // For text blocks, capture initial text
             if (blockType == "text" && block.contains("text")) {
                 state.accumulatedText = block.value("text", "");
@@ -306,6 +314,11 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
                 }
             }
         }
+        else if (deltaType == "redacted_thinking_delta" && state.currentBlockType == "redacted_thinking") {
+            if (delta.contains("data")) {
+                state.accumulatedText += delta["data"].get<String>();
+            }
+        }
         else if (deltaType == "signature_delta") {
             // Extended thinking signature — accumulate but don't need separate field
             // These are handled at block finalization
@@ -332,6 +345,12 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
             };
             // Signature would be captured from the final signature_delta
             // if present; for now we include what we have
+        }
+        else if (state.currentBlockType == "redacted_thinking") {
+            completedBlock = {
+                {"type", "redacted_thinking"},
+                {"data", state.accumulatedText}
+            };
         }
         else if (state.currentBlockType == "tool_use" || state.currentBlockType == "server_tool_use") {
             // Parse accumulated input JSON
