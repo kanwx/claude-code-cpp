@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ApiClient.hpp"
-#include "BetaHeaders.hpp"
 #include "../core/Types.hpp"
 #include <httplib.h>
 #include <memory>
