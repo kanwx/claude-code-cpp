@@ -252,6 +252,13 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         lastAssistantText += "\n\n[WARNING: Maximum loop iteration limit reached]";
     }
 
+    // Reset escalated max_tokens to default — only reset if we escalated
+    // (don't reset user-set overrides that weren't from recovery escalation)
+    if (maxTokensOverride_ > 0 && maxTokensOverride_ == ESCALATED_MAX_TOKENS) {
+        apiClient_.setMaxTokens(16384);
+        maxTokensOverride_ = -1;  // Reset override
+    }
+
     return lastAssistantText;
 }
 
