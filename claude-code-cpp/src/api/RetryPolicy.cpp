@@ -42,13 +42,20 @@ bool RetryPolicy::shouldRetry(const ApiError& error, int attempt) const {
 // 错误分类
 // ============================================================================
 
-ApiError RetryPolicy::classifyError(int statusCode, const String& body) {
+ApiError RetryPolicy::classifyError(int statusCode, const String& body,
+    const std::map<String, String>& headers) {
     ApiError error;
     error.statusCode = statusCode;
     error.message = body;
 
-    // 解析 Retry-After (简化处理，从 body 中提取)
-    // 实际应从响应头获取
+    // Parse Retry-After from HTTP headers (authoritative source)
+    if (headers.count("retry-after")) {
+        try {
+            error.retryAfter = std::stoi(headers.at("retry-after"));
+        } catch (...) {
+            // Could be HTTP-date format; ignore parse failure
+        }
+    }
 
     switch (statusCode) {
         case 200:
@@ -157,6 +164,13 @@ ApiError RetryPolicy::classifyNetworkError(const String& errorMsg) {
         errorMsg.find("Timeout") != String::npos ||
         errorMsg.find("timed out") != String::npos) {
         error.type = ApiErrorType::Timeout;
+    }
+    else if (errorMsg.find("ECONNRESET") != String::npos ||
+             errorMsg.find("Connection reset") != String::npos ||
+             errorMsg.find("EPIPE") != String::npos ||
+             errorMsg.find("Broken pipe") != String::npos) {
+        // Stale connection — retryable
+        error.type = ApiErrorType::NetworkError;
     }
     else if (errorMsg.find("connection") != String::npos ||
              errorMsg.find("Connection") != String::npos ||

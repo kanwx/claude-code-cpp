@@ -87,8 +87,9 @@ public:
     /// @param attempt 当前尝试次数
     bool shouldRetry(const ApiError& error, int attempt) const;
 
-    /// 分类错误
-    static ApiError classifyError(int statusCode, const String& body);
+    /// 分类错误 (with optional headers for Retry-After parsing)
+    static ApiError classifyError(int statusCode, const String& body,
+        const std::map<String, String>& headers = {});
 
     /// 分类网络错误
     static ApiError classifyNetworkError(const String& errorMsg);
