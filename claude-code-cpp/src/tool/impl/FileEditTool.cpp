@@ -1,5 +1,7 @@
 #include <claude/tool/impl/FileEditTool.hpp>
 #include <claude/utils/FileCache.hpp>
+#include <claude/utils/FileHistory.hpp>
+#include <claude/lsp/LspManager.hpp>
 #include <spdlog/spdlog.h>
 #include <fstream>
 #include <sstream>
@@ -193,6 +195,9 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
         count = 1;
     }
 
+    // Backup file before writing
+    claude::utils::backupFile(path);
+
     // Generate diff
     String diff = generateDiff(originalContent, content, path.string(), oldString, newString);
 
@@ -202,6 +207,10 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
 
     // Invalidate cache + update mtime
     FileCache::instance().invalidate(path.string());
+
+    // Notify LSP servers of the file change
+    auto& lspManager = lsp::LspManager::instance();
+    lspManager.notifyDidChange(path, content);
 
     // Build result with diff
     std::ostringstream result;

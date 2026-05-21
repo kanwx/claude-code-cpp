@@ -1,5 +1,7 @@
 #include <claude/tool/impl/FileWriteTool.hpp>
 #include <claude/utils/FileCache.hpp>
+#include <claude/utils/FileHistory.hpp>
+#include <claude/lsp/LspManager.hpp>
 #include <fstream>
 #include <algorithm>
 #include <cstdlib>
@@ -110,6 +112,11 @@ String FileWriteTool::execute(const Json& input, ToolContext& context) {
         std::filesystem::create_directories(parent);
     }
 
+    // Backup file before writing (if it already exists)
+    if (std::filesystem::exists(path)) {
+        claude::utils::backupFile(path);
+    }
+
     std::ofstream file(path);
     if (!file) {
         return "Error: Cannot write to file: " + path.string();
@@ -119,6 +126,10 @@ String FileWriteTool::execute(const Json& input, ToolContext& context) {
 
     // Update file cache after successful write
     FileCache::instance().invalidate(path.string());
+
+    // Notify LSP servers of the file change
+    auto& lspManager = lsp::LspManager::instance();
+    lspManager.notifyDidChange(path, content);
 
     return "Successfully wrote to " + path.string() +
            " (" + std::to_string(content.size()) + " bytes)";
