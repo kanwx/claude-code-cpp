@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ApiClient.hpp"
+#include "RateLimitTracker.hpp"
 #include "../core/Types.hpp"
 #include <httplib.h>
 #include <memory>
@@ -197,6 +198,10 @@ public:
     /// Get last quota status from response headers
     const QuotaStatus& lastQuotaStatus() const { return lastQuotaStatus_; }
 
+    /// Get the rate limit tracker (updated on every API response)
+    RateLimitTracker& rateLimitTracker() { return rateLimitTracker_; }
+    const RateLimitTracker& rateLimitTracker() const { return rateLimitTracker_; }
+
     /// Whether the last stream() fell back to non-streaming
     bool didFallBackToNonStreaming() const { return lastDidFallBack_; }
 
@@ -221,6 +226,7 @@ private:
 
     // Quota tracking
     QuotaStatus lastQuotaStatus_;
+    RateLimitTracker rateLimitTracker_;
 
     // 请求构建
     Json buildRequest(const Json& messages, const Json& tools);

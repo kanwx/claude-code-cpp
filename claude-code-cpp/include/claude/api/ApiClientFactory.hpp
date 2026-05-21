@@ -3,7 +3,6 @@
 #include "ApiClient.hpp"
 #include "../core/Types.hpp"
 #include <memory>
-#include <string>
 
 namespace claude {
 

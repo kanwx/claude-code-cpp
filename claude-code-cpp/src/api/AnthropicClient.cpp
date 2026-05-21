@@ -499,6 +499,10 @@ Json AnthropicClient::finalizeStreamingState(const StreamingState& state) {
 // ============================================================================
 
 void AnthropicClient::extractQuotaFromHeaders(const httplib::Headers& headers) {
+    // Update unified rate limit tracker
+    rateLimitTracker_.updateFromHttpHeaders(headers);
+
+    // Legacy QuotaStatus (kept for backward compat)
     auto getLong = [&](const char* key) -> long {
         auto it = headers.find(key);
         if (it != headers.end()) {
