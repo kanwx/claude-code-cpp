@@ -157,6 +157,28 @@ namespace {
         html = std::regex_replace(html, std::regex(R"(<li[^>]*>)", std::regex::icase), "\n  - ");
         html = std::regex_replace(html, std::regex(R"(</li>)", std::regex::icase), "\n");
 
+        // Preserve links: <a href="url">text</a> → [text](url)
+        html = std::regex_replace(html,
+            std::regex(R"re(<a\s+[^>]*href="([^"]*)"[^>]*>([^<]*)</a>)re", std::regex::icase),
+            "[$2]($1)");
+
+        // Preserve image alt text: <img alt="desc"> → [Image: desc]
+        html = std::regex_replace(html,
+            std::regex(R"re(<img\s+[^>]*alt="([^"]*)"[^>]*/?\s*>)re", std::regex::icase),
+            "[Image: $1]");
+
+        // Preserve code blocks: <pre><code>...</code></pre> → ```\n...\n```
+        html = std::regex_replace(html,
+            std::regex(R"(<pre[^>]*>\s*<code[^>]*>)", std::regex::icase), "```\n");
+        html = std::regex_replace(html,
+            std::regex(R"(</code>\s*</pre>)", std::regex::icase), "\n```");
+
+        // Convert headings to markdown format
+        html = std::regex_replace(html, std::regex(R"(<h1[^>]*>)", std::regex::icase), "# ");
+        html = std::regex_replace(html, std::regex(R"(<h2[^>]*>)", std::regex::icase), "## ");
+        html = std::regex_replace(html, std::regex(R"(<h3[^>]*>)", std::regex::icase), "### ");
+        html = std::regex_replace(html, std::regex(R"(<h4[^>]*>)", std::regex::icase), "#### ");
+
         // Remove all remaining HTML tags
         html = std::regex_replace(html, std::regex(R"(<[^>]+>)"), "");
 
@@ -167,6 +189,33 @@ namespace {
         html = std::regex_replace(html, std::regex(R"(&gt;)"), ">");
         html = std::regex_replace(html, std::regex(R"(&quot;)"), "\"");
         html = std::regex_replace(html, std::regex(R"(&apos;)"), "'");
+        html = std::regex_replace(html, std::regex(R"(&#39;)"), "'");
+        html = std::regex_replace(html, std::regex(R"(&mdash;)"), "--");
+        html = std::regex_replace(html, std::regex(R"(&ndash;)"), "-");
+        html = std::regex_replace(html, std::regex(R"(&hellip;)"), "...");
+        // Numeric entities: &#NNN;
+        {
+            std::string result;
+            std::regex numEntity(R"(&#(\d+);)");
+            std::smatch m;
+            std::string s = html;
+            while (std::regex_search(s, m, numEntity)) {
+                result += m.prefix();
+                try {
+                    int code = std::stoi(m[1].str());
+                    if (code >= 32 && code < 127) {
+                        result += static_cast<char>(code);
+                    } else {
+                        result += m[0].str();
+                    }
+                } catch (...) {
+                    result += m[0].str();
+                }
+                s = m.suffix();
+            }
+            result += s;
+            html = result;
+        }
 
         // Clean up whitespace
         html = std::regex_replace(html, std::regex(R"(\n\s*\n\s*\n)"), "\n\n");
