@@ -1,5 +1,6 @@
 #include <claude/tool/impl/FileEditTool.hpp>
 #include <claude/utils/FileCache.hpp>
+#include <spdlog/spdlog.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -158,7 +159,35 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
     } else {
         pos = content.find(oldString);
         if (pos == String::npos) {
-            return "Error: String not found in file:\n" + oldString;
+            // Try quote normalization (handles curly quotes, smart quotes, unicode dashes)
+            String normalizedContent = content;
+            String normalizedOld = oldString;
+            static const std::vector<std::pair<String, String>> quoteReplacements = {
+                {"\xe2\x80\x9c", "\""}, {"\xe2\x80\x9d", "\""},  // smart double quotes
+                {"\xe2\x80\x98", "'"},  {"\xe2\x80\x99", "'"},   // smart single quotes
+                {"\xc2\xab", "\""},     {"\xc2\xbb", "\""},       // angle quotes
+                {"\xe2\x80\x93", "-"},  {"\xe2\x80\x94", "--"},   // en/em dashes
+            };
+            for (const auto& [from, to] : quoteReplacements) {
+                size_t rpos = 0;
+                while ((rpos = normalizedContent.find(from, rpos)) != String::npos) {
+                    normalizedContent.replace(rpos, from.size(), to);
+                    rpos += to.size();
+                }
+                rpos = 0;
+                while ((rpos = normalizedOld.find(from, rpos)) != String::npos) {
+                    normalizedOld.replace(rpos, from.size(), to);
+                    rpos += to.size();
+                }
+            }
+            pos = normalizedContent.find(normalizedOld);
+            if (pos != String::npos) {
+                spdlog::info("FileEditTool: matched via quote normalization at pos {}", pos);
+            } else {
+                return "Error: String not found in file:\n" + oldString +
+                       "\n\nThe exact string was not found, and no similar string was found "
+                       "after normalizing Unicode quotes. Check for whitespace or indentation differences.";
+            }
         }
         content.replace(pos, oldString.length(), newString);
         count = 1;
