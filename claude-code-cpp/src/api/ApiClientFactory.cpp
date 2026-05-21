@@ -1,5 +1,6 @@
 #include <claude/api/ApiClientFactory.hpp>
 #include <claude/api/AnthropicClient.hpp>
+#include <claude/api/BedrockClient.hpp>
 #include <claude/api/VertexClient.hpp>
 #include <claude/utils/Provider.hpp>
 #include <spdlog/spdlog.h>
@@ -42,23 +43,21 @@ std::unique_ptr<ApiClient> ApiClientFactory::createForProvider(
             return client;
         }
         case APIProvider::Bedrock: {
-            // BedrockClient not yet implemented — use AnthropicClient with Bedrock URL
             String region = getBedrockRegion();
-            String bedrockUrl = "https://bedrock-runtime." + region + ".amazonaws.com";
-            auto client = std::make_unique<AnthropicClient>(effectiveKey);
-            client->setBaseUrl(bedrockUrl);
+            auto client = std::make_unique<BedrockClient>(region);
             client->setModel(getDefaultSonnetModel(APIProvider::Bedrock));
-            spdlog::info("Created Bedrock client (region: {}, using AnthropicClient as bridge)", region);
+            spdlog::info("Created Bedrock client (region: {})", region);
             return client;
         }
         case APIProvider::Vertex: {
-            // VertexClient not yet implemented — use AnthropicClient with Vertex URL
             String region = getVertexRegionForModel("claude-sonnet-4-20250514");
-            String vertexUrl = "https://" + region + "-aiplatform.googleapis.com/v1";
-            auto client = std::make_unique<AnthropicClient>(effectiveKey);
-            client->setBaseUrl(vertexUrl);
+            const char* envProject = std::getenv("GOOGLE_CLOUD_PROJECT");
+            if (!envProject || !envProject[0]) envProject = std::getenv("GCLOUD_PROJECT");
+            String project = (envProject && envProject[0]) ? envProject : "";
+            auto client = std::make_unique<VertexClient>(region, project);
             client->setModel(getDefaultSonnetModel(APIProvider::Vertex));
-            spdlog::info("Created Vertex client (region: {}, using AnthropicClient as bridge)", region);
+            spdlog::info("Created Vertex client (region: {}, project: {})",
+                          region, project.empty() ? "not set" : project);
             return client;
         }
         case APIProvider::Foundry: {

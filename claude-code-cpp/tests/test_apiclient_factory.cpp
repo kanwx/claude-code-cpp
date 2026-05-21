@@ -30,20 +30,18 @@ TEST_CASE("ApiClientFactory createForProvider creates correct type", "[factory]"
     REQUIRE(client->getProviderName() == "anthropic");
 }
 
-TEST_CASE("ApiClientFactory createForProvider with Bedrock uses AnthropicClient as bridge", "[factory]") {
-    // Bedrock client not yet implemented, should fall back to AnthropicClient
+TEST_CASE("ApiClientFactory createForProvider with Bedrock creates BedrockClient", "[factory]") {
     auto client = ApiClientFactory::createForProvider(APIProvider::Bedrock);
     REQUIRE(client != nullptr);
-    // AnthropicClient is used as bridge for Bedrock
-    REQUIRE(client->getProviderName() == "anthropic");
+    REQUIRE(client->getProviderName() == "bedrock");
+    REQUIRE_FALSE(client->getModelName().empty());
 }
 
-TEST_CASE("ApiClientFactory createForProvider with Vertex uses AnthropicClient as bridge", "[factory]") {
-    // Vertex client not yet implemented, should fall back to AnthropicClient
+TEST_CASE("ApiClientFactory createForProvider with Vertex creates VertexClient", "[factory]") {
     auto client = ApiClientFactory::createForProvider(APIProvider::Vertex);
     REQUIRE(client != nullptr);
-    // AnthropicClient is used as bridge for Vertex
-    REQUIRE(client->getProviderName() == "anthropic");
+    REQUIRE(client->getProviderName() == "vertex");
+    REQUIRE_FALSE(client->getModelName().empty());
 }
 
 TEST_CASE("ApiClientFactory createForProvider with Foundry uses AnthropicClient as placeholder", "[factory]") {
