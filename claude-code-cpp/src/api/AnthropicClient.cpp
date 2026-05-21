@@ -732,6 +732,9 @@ Result<StreamingState> AnthropicClient::streamWithState(
     }
 
     if (shouldFallback) {
+        // Finalize any partially-completed blocks before fallback
+        state.finalizePartialBlocks();
+
         if (isNonStreamingFallbackDisabled()) {
             spdlog::warn("Streaming failed ({}) but non-streaming fallback is disabled via env",
                           fallbackReason);

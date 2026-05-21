@@ -73,6 +73,9 @@ target_link_libraries(test_retry_policy_413 PRIVATE claude_core Catch2::Catch2Wi
 add_executable(test_redacted_thinking test_redacted_thinking.cpp)
 target_link_libraries(test_redacted_thinking PRIVATE claude_core Catch2::Catch2WithMain)
 
+add_executable(test_agent_loop_abort test_agent_loop_abort.cpp)
+target_link_libraries(test_agent_loop_abort PRIVATE claude_core Catch2::Catch2WithMain)
+
 # 添加测试
 include(Catch)
 catch_discover_tests(test_tool)
@@ -95,3 +98,4 @@ catch_discover_tests(test_autocompact_circuit)
 catch_discover_tests(test_retryable_client)
 catch_discover_tests(test_retry_policy_413)
 catch_discover_tests(test_redacted_thinking)
+catch_discover_tests(test_agent_loop_abort)

@@ -49,6 +49,69 @@ struct StreamingState {
         stallCount = 0;
         totalStallTimeMs = 0.0;
     }
+
+    /// Check if there are partially-completed content blocks (stream interrupted)
+    bool hasPartialBlocks() const {
+        return currentBlockIndex >= 0 && !currentBlockType.empty();
+    }
+
+    /// Finalize any partially-completed blocks (e.g., on stream abort).
+    /// Partial tool_use blocks get their accumulated input_json as-is;
+    /// partial text/thinking/redacted_thinking blocks get their accumulated text.
+    void finalizePartialBlocks() {
+        if (!hasPartialBlocks()) return;
+
+        Json partialBlock;
+        if (currentBlockType == "tool_use" || currentBlockType == "server_tool_use") {
+            Json inputJson;
+            try {
+                inputJson = Json::parse(accumulatedInputJson);
+            } catch (...) {
+                inputJson = Json::object();
+            }
+            partialBlock = {
+                {"type", currentBlockType},
+                {"id", currentBlockId},
+                {"name", currentBlockName},
+                {"input", inputJson},
+                {"partial", true}
+            };
+        } else if (currentBlockType == "thinking") {
+            partialBlock = {
+                {"type", "thinking"},
+                {"thinking", accumulatedText},
+                {"partial", true}
+            };
+        } else if (currentBlockType == "redacted_thinking") {
+            partialBlock = {
+                {"type", "redacted_thinking"},
+                {"data", accumulatedText},
+                {"partial", true}
+            };
+        } else if (currentBlockType == "text") {
+            partialBlock = {
+                {"type", "text"},
+                {"text", accumulatedText}
+            };
+        } else {
+            partialBlock = {
+                {"type", currentBlockType},
+                {"partial", true}
+            };
+        }
+
+        while (static_cast<int>(contentBlocks.size()) <= currentBlockIndex) {
+            contentBlocks.push_back(Json::object());
+        }
+        contentBlocks[currentBlockIndex] = partialBlock;
+
+        currentBlockIndex = -1;
+        currentBlockType.clear();
+        currentBlockId.clear();
+        currentBlockName.clear();
+        accumulatedText.clear();
+        accumulatedInputJson.clear();
+    }
 };
 
 /// Quota status extracted from response headers
