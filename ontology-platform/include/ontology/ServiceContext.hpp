@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Storage.hpp"
-#include "Api.hpp"
+#include "Inference.hpp"
+#include "Swrl.hpp"
+#include "Sparql.hpp"
 #include "TextEmbedding.hpp"
 #include "EmbeddingService.hpp"
 #include "RagStorage.hpp"
@@ -22,6 +24,15 @@
 #include <memory>
 
 namespace ontology {
+
+// Type aliases for reasoning — these were previously in Api.hpp.
+// Now defined here alongside ServiceContext so that Api.hpp does not
+// need to carry them.
+using HybridReasonerPtr   = std::shared_ptr<HybridReasoner>;
+using SymbolicReasonerPtr = std::shared_ptr<SymbolicReasoner>;
+using NeuralReasonerPtr   = std::shared_ptr<NeuralReasoner>;
+using SwrlEnginePtr       = std::shared_ptr<SwrlEngine>;
+using SparqlEndpointPtr   = std::shared_ptr<SparqlEndpoint>;
 
 /// Dependency injection container holding all service instances.
 /// Replaces the 20+ setter injection methods on HttpServer with a single struct.
