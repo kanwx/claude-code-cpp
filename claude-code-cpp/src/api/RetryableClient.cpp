@@ -1,4 +1,5 @@
 #include <claude/api/RetryableClient.hpp>
+#include <claude/services/OAuthService.hpp>
 #include <spdlog/spdlog.h>
 
 namespace claude {
@@ -87,6 +88,29 @@ std::expected<Json, String> RetryableClient::callWithRetry(
                 } catch (...) {}
             }
             throw PromptTooLongException(actualTokens, maxTokens);
+        }
+
+        // ========== 401 Unauthorized — try refreshing the OAuth token before giving up ==========
+        if (error.type == ApiErrorType::AuthError && attempt == 1) {
+            try {
+                auto& oauthManager = oauth::OAuthManager::instance();
+                auto& anthropicClient = oauthManager.getClient("anthropic");
+                if (anthropicClient.isAuthenticated()) {
+                    spdlog::info("401 received, attempting OAuth token refresh");
+                    bool refreshed = anthropicClient.ensureValidToken();
+                    if (refreshed) {
+                        auto tokenOpt = anthropicClient.getCurrentToken();
+                        if (tokenOpt) {
+                            client_->setApiKey(tokenOpt->accessToken);
+                            spdlog::info("OAuth token refreshed, retrying with new token");
+                            continue;
+                        }
+                    }
+                    spdlog::warn("OAuth token refresh failed on 401");
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("OAuth token refresh attempt failed: {}", e.what());
+            }
         }
 
         // 检查是否应该重试
@@ -195,6 +219,29 @@ void RetryableClient::streamWithRetry(
                 } catch (...) {}
             }
             throw PromptTooLongException(actualTokens, maxTokens);
+        }
+
+        // ========== 401 Unauthorized — try refreshing the OAuth token before giving up ==========
+        if ((error.type == ApiErrorType::AuthError || errorMsg.find("401") != String::npos) && attempt == 1) {
+            try {
+                auto& oauthManager = oauth::OAuthManager::instance();
+                auto& anthropicClient = oauthManager.getClient("anthropic");
+                if (anthropicClient.isAuthenticated()) {
+                    spdlog::info("401 received on stream, attempting OAuth token refresh");
+                    bool refreshed = anthropicClient.ensureValidToken();
+                    if (refreshed) {
+                        auto tokenOpt = anthropicClient.getCurrentToken();
+                        if (tokenOpt) {
+                            client_->setApiKey(tokenOpt->accessToken);
+                            spdlog::info("OAuth token refreshed, retrying stream with new token");
+                            continue;
+                        }
+                    }
+                    spdlog::warn("OAuth token refresh failed on 401 stream error");
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("OAuth token refresh attempt failed: {}", e.what());
+            }
         }
 
         if (!policy_.shouldRetry(error, attempt)) {
