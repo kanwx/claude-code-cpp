@@ -118,12 +118,29 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         } catch (const std::exception& e) {
             String errorMsg = e.what();
 
+            // Add synthetic tool_results for any dangling tool_uses
+            addMissingToolResults();
+
             // ========== 413 Prompt-Too-Long: Reactive Compact Recovery ==========
             if (errorMsg.find("413") != String::npos ||
                 errorMsg.find("prompt-too-long") != String::npos ||
                 errorMsg.find("context_length_exceeded") != String::npos) {
                 spdlog::warn("413 prompt-too-long detected, attempting reactive compact");
-                if (attemptReactiveCompact()) {
+                // Try to extract token gap from error message
+                long tokenGap = 0;
+                auto gtPos = errorMsg.find(" tokens > ");
+                if (gtPos != String::npos) {
+                    try {
+                        auto numEnd = errorMsg.rfind(' ', gtPos - 1);
+                        if (numEnd == String::npos) numEnd = 0; else numEnd++;
+                        long actualTokens = std::stol(errorMsg.substr(numEnd, gtPos - numEnd));
+                        auto maxStart = gtPos + 11;
+                        auto maxEnd = errorMsg.find(' ', maxStart);
+                        long maxTokens = std::stol(errorMsg.substr(maxStart, maxEnd - maxStart));
+                        tokenGap = actualTokens - maxTokens;
+                    } catch (...) {}
+                }
+                if (attemptReactiveCompact(tokenGap)) {
                     continue;  // Retry with compressed context
                 }
                 return std::unexpected("Context too long and compact failed. Try /compact manually.");
@@ -1079,15 +1096,15 @@ bool AgentLoop::applyAutoCompact() {
     return true;
 }
 
-bool AgentLoop::attemptReactiveCompact() {
+bool AgentLoop::attemptReactiveCompact(long tokenGap) {
     if (reactiveCompactAttempts_ >= MAX_REACTIVE_COMPACT_ATTEMPTS) {
         spdlog::warn("Reactive compact: max attempts ({}) reached", MAX_REACTIVE_COMPACT_ATTEMPTS);
         return false;
     }
 
     reactiveCompactAttempts_++;
-    spdlog::info("Reactive compact: attempt {}/{} (413 prompt-too-long recovery)",
-        reactiveCompactAttempts_, MAX_REACTIVE_COMPACT_ATTEMPTS);
+    spdlog::info("Reactive compact: attempt {}/{} (413 prompt-too-long recovery, token gap: {})",
+        reactiveCompactAttempts_, MAX_REACTIVE_COMPACT_ATTEMPTS, tokenGap);
 
     // Force compact regardless of threshold
     if (autoCompact_) {
@@ -1114,6 +1131,43 @@ bool AgentLoop::attemptReactiveCompact() {
     }
 
     return false;
+}
+
+void AgentLoop::addMissingToolResults() {
+    if (messageHistory_.empty()) return;
+
+    // Find the last assistant message with tool calls
+    auto it = messageHistory_.rbegin();
+    for (; it != messageHistory_.rend(); ++it) {
+        if (it->role == MessageRole::Assistant && it->hasToolCalls()) {
+            break;
+        }
+    }
+    if (it == messageHistory_.rend()) return;
+
+    // Check if the message after this assistant message is a tool_result
+    auto assistantIdx = std::distance(messageHistory_.begin(), it.base()) - 1;
+    bool hasToolResult = false;
+    if (assistantIdx + 1 < static_cast<long>(messageHistory_.size())) {
+        hasToolResult = (messageHistory_[assistantIdx + 1].role == MessageRole::ToolResult);
+    }
+
+    if (!hasToolResult) {
+        // Generate synthetic error results for each tool call
+        std::vector<ToolResponse> errorResults;
+        for (const auto& tc : it->toolCalls) {
+            ToolResponse resp;
+            resp.callId = tc.id;
+            resp.toolName = tc.name;
+            resp.content = "[Error: API call failed before tool execution completed]";
+            resp.isError = true;
+            errorResults.push_back(std::move(resp));
+        }
+        if (!errorResults.empty()) {
+            messageHistory_.push_back(Message::toolResult(std::move(errorResults)));
+            spdlog::info("Added {} synthetic error tool_results for unmatched tool_uses", errorResults.size());
+        }
+    }
 }
 
 // ========== Stream Event Emission ==========

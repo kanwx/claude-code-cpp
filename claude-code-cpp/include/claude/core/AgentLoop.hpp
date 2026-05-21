@@ -307,7 +307,12 @@ private:
 
     /// Reactive compact: attempt compact on 413 (prompt too long) errors.
     /// Returns true if compact succeeded and the caller should retry.
-    bool attemptReactiveCompact();
+    /// @param tokenGap How many tokens over the limit (from 413 error body)
+    bool attemptReactiveCompact(long tokenGap = 0);
+
+    /// Generate synthetic error tool_results for any tool_use blocks
+    /// in the last assistant message that lack matching tool_results.
+    void addMissingToolResults();
 
     // ========== 辅助方法 ==========
 
