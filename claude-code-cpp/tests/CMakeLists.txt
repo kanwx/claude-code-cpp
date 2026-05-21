@@ -79,6 +79,9 @@ target_link_libraries(test_agent_loop_abort PRIVATE claude_core Catch2::Catch2Wi
 add_executable(test_fallback_tombstone test_fallback_tombstone.cpp)
 target_link_libraries(test_fallback_tombstone PRIVATE claude_core Catch2::Catch2WithMain)
 
+add_executable(test_apiclient_factory test_apiclient_factory.cpp)
+target_link_libraries(test_apiclient_factory PRIVATE claude_core Catch2::Catch2WithMain)
+
 # 添加测试
 include(Catch)
 catch_discover_tests(test_tool)
@@ -103,3 +106,4 @@ catch_discover_tests(test_retry_policy_413)
 catch_discover_tests(test_redacted_thinking)
 catch_discover_tests(test_agent_loop_abort)
 catch_discover_tests(test_fallback_tombstone)
+catch_discover_tests(test_apiclient_factory)
