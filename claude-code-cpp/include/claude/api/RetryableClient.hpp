@@ -140,6 +140,26 @@ public:
         onFallback_ = std::move(callback);
     }
 
+    // ========== Unattended/Persistent Retry Mode ==========
+
+    /// Set keep-alive callback for unattended mode.
+    /// Called periodically during persistent retries to inform the user
+    /// that the client is still waiting.
+    void setOnKeepAlive(std::function<void(const String& message)> callback) {
+        onKeepAlive_ = std::move(callback);
+    }
+
+    /// Enable or disable unattended mode.
+    /// In unattended mode, 429/529 errors trigger persistent retry
+    /// instead of giving up after max retries.
+    void setUnattendedMode(bool enabled) {
+        policy_.config().unattended = enabled;
+    }
+
+    bool isUnattendedMode() const {
+        return policy_.config().unattended;
+    }
+
     // ========== 直接代理 ==========
 
     std::expected<Json, String> call(const Json& messages, const Json& tools) {
@@ -159,6 +179,10 @@ private:
     /// 返回 true 如果成功切换
     bool attemptFallback();
 
+    /// Check if an HTTP status code is retryable (rate-limit / server overload).
+    /// Used by unattended mode to decide whether to keep retrying indefinitely.
+    static bool isRetryableStatus(int status);
+
     std::unique_ptr<ApiClient> client_;
     RetryPolicy policy_;
 
@@ -169,6 +193,7 @@ private:
     std::atomic<bool> fallbackActive_{false};
     std::atomic<int> consecutiveOverloadErrors_{0};
     OnFallback onFallback_;
+    std::function<void(const String&)> onKeepAlive_;
     String lastFallbackFromModel_;  // Set by attemptFallback
 };
 

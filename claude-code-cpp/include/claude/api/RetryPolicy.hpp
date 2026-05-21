@@ -56,6 +56,10 @@ struct RetryConfig {
     // 针对不同错误类型的配置
     int rateLimitInitialDelayMs = 1000;   // Rate limit 初始延迟
     int networkErrorInitialDelayMs = 500; // 网络错误初始延迟
+
+    // Unattended/persistent retry mode for CI/agency sessions
+    bool unattended = false;                  // Persistent retry for CI/agency sessions
+    int keepAliveIntervalMs = 30000;          // How often to yield keep-alive messages (30s)
 };
 
 /// 重试策略
@@ -71,6 +75,7 @@ public:
 
     /// 获取配置
     const RetryConfig& config() const { return config_; }
+    RetryConfig& config() { return config_; }
 
     /// 计算下次重试的等待时间 (毫秒)
     /// @param error 错误信息

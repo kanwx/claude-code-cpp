@@ -3,6 +3,10 @@
 
 namespace claude {
 
+bool RetryableClient::isRetryableStatus(int status) {
+    return status == 429 || status == 503 || status == 529;
+}
+
 std::expected<Json, String> RetryableClient::callWithRetry(
     const Json& messages,
     const Json& tools,
@@ -87,16 +91,29 @@ std::expected<Json, String> RetryableClient::callWithRetry(
 
         // 检查是否应该重试
         if (!policy_.shouldRetry(error, attempt)) {
-            SPDLOG_ERROR("API call failed (attempt {}): {} - {}",
-                        attempt, static_cast<int>(error.type), errorMsg);
-            return std::unexpected(errorMsg);
+            // In unattended mode, keep retrying indefinitely on rate-limit / server overload
+            if (policy_.config().unattended && isRetryableStatus(statusCode)) {
+                if (onKeepAlive_) {
+                    onKeepAlive_("Still waiting for API availability... (attempt " +
+                        std::to_string(attempt + 1) + ")");
+                }
+                spdlog::info("Unattended mode: persistent retry on status {}", statusCode);
+                // Fall through to delay calculation and continue retrying
+            } else {
+                SPDLOG_ERROR("API call failed (attempt {}): {} - {}",
+                            attempt, static_cast<int>(error.type), errorMsg);
+                return std::unexpected(errorMsg);
+            }
         }
 
         // 计算延迟
         int delayMs = policy_.calculateDelay(error, attempt);
 
-        SPDLOG_WARN("API call failed, retrying in {}ms (attempt {}/{}): {}",
-                   delayMs, attempt, policy_.config().maxRetries, errorMsg);
+        SPDLOG_WARN("API call failed, retrying in {}ms (attempt {}{}): {}",
+                   delayMs, attempt,
+                   policy_.config().unattended ? " [unattended]" :
+                   "/" + std::to_string(policy_.config().maxRetries),
+                   errorMsg);
 
         // 回调
         if (onRetry) {
@@ -181,13 +198,32 @@ void RetryableClient::streamWithRetry(
         }
 
         if (!policy_.shouldRetry(error, attempt)) {
-            SPDLOG_ERROR("Stream failed (attempt {}): {}", attempt, errorMsg);
-            throw std::runtime_error(errorMsg);
+            // In unattended mode, keep retrying indefinitely on rate-limit / server overload
+            // Extract status code from error message for isRetryableStatus check
+            int streamStatus = 0;
+            if (errorMsg.find("429") != String::npos) streamStatus = 429;
+            else if (errorMsg.find("503") != String::npos) streamStatus = 503;
+            else if (errorMsg.find("529") != String::npos) streamStatus = 529;
+
+            if (policy_.config().unattended && isRetryableStatus(streamStatus)) {
+                if (onKeepAlive_) {
+                    onKeepAlive_("Still waiting for API availability... (attempt " +
+                        std::to_string(attempt + 1) + ")");
+                }
+                spdlog::info("Unattended mode: persistent retry on status {}", streamStatus);
+                // Fall through to delay calculation and continue retrying
+            } else {
+                SPDLOG_ERROR("Stream failed (attempt {}): {}", attempt, errorMsg);
+                throw std::runtime_error(errorMsg);
+            }
         }
 
         int delayMs = policy_.calculateDelay(error, attempt);
-        SPDLOG_WARN("Stream failed, retrying in {}ms (attempt {}/{}): {}",
-                   delayMs, attempt, policy_.config().maxRetries, errorMsg);
+        SPDLOG_WARN("Stream failed, retrying in {}ms (attempt {}{}): {}",
+                   delayMs, attempt,
+                   policy_.config().unattended ? " [unattended]" :
+                   "/" + std::to_string(policy_.config().maxRetries),
+                   errorMsg);
 
         if (onRetry) {
             onRetry(error, attempt, delayMs);
