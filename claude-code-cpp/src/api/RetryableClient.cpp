@@ -67,6 +67,24 @@ std::expected<Json, String> RetryableClient::callWithRetry(
             consecutiveOverloadErrors_ = 0;
         }
 
+        // ========== 413 Prompt Too Long — surface as structured exception (no retry) ==========
+        if (statusCode == 413 || errorMsg.find("prompt-too-long") != String::npos ||
+            errorMsg.find("context_length_exceeded") != String::npos) {
+            long actualTokens = 0, maxTokens = 0;
+            auto gtPos = errorMsg.find(" tokens > ");
+            if (gtPos != String::npos) {
+                try {
+                    auto numEnd = errorMsg.rfind(' ', gtPos - 1);
+                    if (numEnd == String::npos) numEnd = 0; else numEnd++;
+                    actualTokens = std::stol(errorMsg.substr(numEnd, gtPos - numEnd));
+                    auto maxStart = gtPos + 11;
+                    auto maxEnd = errorMsg.find(' ', maxStart);
+                    maxTokens = std::stol(errorMsg.substr(maxStart, maxEnd - maxStart));
+                } catch (...) {}
+            }
+            throw PromptTooLongException(actualTokens, maxTokens);
+        }
+
         // 检查是否应该重试
         if (!policy_.shouldRetry(error, attempt)) {
             SPDLOG_ERROR("API call failed (attempt {}): {} - {}",
@@ -141,6 +159,25 @@ void RetryableClient::streamWithRetry(
             }
         } else {
             consecutiveOverloadErrors_ = 0;
+        }
+
+        // ========== 413 Prompt Too Long — surface as structured exception (no retry) ==========
+        if (errorMsg.find("413") != String::npos ||
+            errorMsg.find("prompt-too-long") != String::npos ||
+            errorMsg.find("context_length_exceeded") != String::npos) {
+            long actualTokens = 0, maxTokens = 0;
+            auto gtPos = errorMsg.find(" tokens > ");
+            if (gtPos != String::npos) {
+                try {
+                    auto numEnd = errorMsg.rfind(' ', gtPos - 1);
+                    if (numEnd == String::npos) numEnd = 0; else numEnd++;
+                    actualTokens = std::stol(errorMsg.substr(numEnd, gtPos - numEnd));
+                    auto maxStart = gtPos + 11;
+                    auto maxEnd = errorMsg.find(' ', maxStart);
+                    maxTokens = std::stol(errorMsg.substr(maxStart, maxEnd - maxStart));
+                } catch (...) {}
+            }
+            throw PromptTooLongException(actualTokens, maxTokens);
         }
 
         if (!policy_.shouldRetry(error, attempt)) {

@@ -116,6 +116,15 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             } else {
                 result = blockingIteration(request);
             }
+        } catch (const PromptTooLongException& ptl) {
+            // ========== 413 Prompt-Too-Long: Reactive Compact Recovery ==========
+            spdlog::warn("413 prompt-too-long: {} tokens > {} limit (gap: {})",
+                ptl.actualTokens(), ptl.maxTokens(), ptl.tokenGap());
+            addMissingToolResults();
+            if (attemptReactiveCompact(ptl.tokenGap())) {
+                continue;  // Retry with compressed context
+            }
+            return std::unexpected("Context too long and compact failed. Try /compact manually.");
         } catch (const FallbackTriggered& fb) {
             // ========== Model Fallback: Tombstone + System Warning ==========
             spdlog::warn("Model fallback: {} -> {}", fb.fromModel, fb.toModel);
@@ -146,37 +155,8 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 
             continue;  // Retry with fallback model
         } catch (const std::exception& e) {
-            String errorMsg = e.what();
-
-            // Add synthetic tool_results for any dangling tool_uses
             addMissingToolResults();
-
-            // ========== 413 Prompt-Too-Long: Reactive Compact Recovery ==========
-            if (errorMsg.find("413") != String::npos ||
-                errorMsg.find("prompt-too-long") != String::npos ||
-                errorMsg.find("context_length_exceeded") != String::npos) {
-                spdlog::warn("413 prompt-too-long detected, attempting reactive compact");
-                // Try to extract token gap from error message
-                long tokenGap = 0;
-                auto gtPos = errorMsg.find(" tokens > ");
-                if (gtPos != String::npos) {
-                    try {
-                        auto numEnd = errorMsg.rfind(' ', gtPos - 1);
-                        if (numEnd == String::npos) numEnd = 0; else numEnd++;
-                        long actualTokens = std::stol(errorMsg.substr(numEnd, gtPos - numEnd));
-                        auto maxStart = gtPos + 11;
-                        auto maxEnd = errorMsg.find(' ', maxStart);
-                        long maxTokens = std::stol(errorMsg.substr(maxStart, maxEnd - maxStart));
-                        tokenGap = actualTokens - maxTokens;
-                    } catch (...) {}
-                }
-                if (attemptReactiveCompact(tokenGap)) {
-                    continue;  // Retry with compressed context
-                }
-                return std::unexpected("Context too long and compact failed. Try /compact manually.");
-            }
-
-            return std::unexpected("API call failed: " + errorMsg);
+            return std::unexpected("API call failed: " + String(e.what()));
         }
 
         // 记录使用量
@@ -197,6 +177,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // 添加助手消息到历史
+        result.message.apiRound = iteration;
         messageHistory_.push_back(result.message);
 
         // ========== Stop Hook ==========
@@ -264,13 +245,25 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // 没有工具调用 → 结束
-        if (!result.message.hasToolCalls()) {
+        if (!result.message.hasToolCalls() && result.interleavedToolResults.empty()) {
             break;
         }
 
         // ========== TAOR: Act + Observe ==========
-        // 执行工具调用 (只读工具并发执行)
-        auto toolResponses = executeToolCalls(result.message.toolCalls);
+        std::vector<ToolResponse> toolResponses;
+
+        // Add interleaved results (already executed during streaming)
+        if (!result.interleavedToolResults.empty()) {
+            toolResponses = std::move(result.interleavedToolResults);
+        }
+
+        // Execute any remaining tool calls (not interleaved)
+        if (result.message.hasToolCalls()) {
+            auto batchResponses = executeToolCalls(result.message.toolCalls);
+            toolResponses.insert(toolResponses.end(),
+                std::make_move_iterator(batchResponses.begin()),
+                std::make_move_iterator(batchResponses.end()));
+        }
 
         // Check cancellation after tool execution
         if (cancelled_.load(std::memory_order_acquire)) {
@@ -283,7 +276,11 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // 添加工具结果到历史
-        messageHistory_.push_back(Message::toolResult(std::move(toolResponses)));
+        {
+            auto toolMsg = Message::toolResult(std::move(toolResponses));
+            toolMsg.apiRound = iteration;
+            messageHistory_.push_back(std::move(toolMsg));
+        }
 
         // ========== 微压缩：清除过期工具结果 ==========
         applyMicrocompact();
@@ -377,6 +374,13 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     Usage usage;
     bool firstToken = true;
     String stopReason = "end_turn";
+
+    // Initialize tool executor early if interleaving is enabled
+    if (interleaveToolExecution_ && !toolExecutor_) {
+        toolExecutor_.emplace(tools_, toolContext_, hookManager_, permissionEngine_);
+        toolExecutor_->setOnPermissionRequest(onPermissionRequest_);
+        toolExecutor_->setTranscript(&messageHistory_);
+    }
 
     // For real-time token estimation
     int estimatedOutputTokens = 0;
@@ -509,6 +513,22 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
 
             if (anthropicToolCalls.contains(index)) {
                 blockType = "tool_use";
+
+                // Interleaved execution: dispatch this tool call immediately
+                if (interleaveToolExecution_ && toolExecutor_) {
+                    auto it = anthropicToolCalls.find(index);
+                    if (it != anthropicToolCalls.end()) {
+                        // Validate JSON before dispatching
+                        try {
+                            auto parsed = Json::parse(it->second.arguments);
+                            (void)parsed;
+                            toolExecutor_->enqueue(std::move(it->second), index);
+                            anthropicToolCalls.erase(it);
+                        } catch (...) {
+                            // Invalid JSON — leave in map, will be filtered later
+                        }
+                    }
+                }
             } else if (thinkingBlocks.contains(index)) {
                 blockType = "thinking";
             } else {
@@ -629,6 +649,23 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         }
     });
 
+    // Collect interleaved execution results
+    std::vector<ToolResponse> interleavedToolResponses;
+    if (interleaveToolExecution_ && toolExecutor_ && toolExecutor_->hasPending()) {
+        auto interleaveExecResults = toolExecutor_->collectResults();
+        interleavedToolResponses.reserve(interleaveExecResults.size());
+        for (auto& ier : interleaveExecResults) {
+            StreamEvent toolResultEvent;
+            toolResultEvent.type = StreamEvent::Type::ToolResultReady;
+            toolResultEvent.toolName = ier.response.toolName;
+            toolResultEvent.toolResult = ier.response.content;
+            toolResultEvent.toolIsError = ier.response.isError;
+            emitStreamEvent(std::move(toolResultEvent));
+
+            interleavedToolResponses.push_back(std::move(ier.response));
+        }
+    }
+
     // Convert Anthropic tool calls
     if (!anthropicToolCalls.empty()) {
         for (auto& [index, tc] : anthropicToolCalls) {
@@ -668,10 +705,10 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         msg.signature = signatureBuffer;
     }
 
-    spdlog::debug("streamingIteration done: text={} bytes, toolCalls={}, stopReason={}",
-        textBuffer.size(), msg.toolCalls.size(), stopReason);
+    spdlog::debug("streamingIteration done: text={} bytes, toolCalls={}, stopReason={}, interleaved={}",
+        textBuffer.size(), msg.toolCalls.size(), stopReason, interleavedToolResponses.size());
 
-    return {msg, usage, stopReason};
+    return {msg, usage, stopReason, std::move(interleavedToolResponses)};
 }
 
 std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall>& calls) {

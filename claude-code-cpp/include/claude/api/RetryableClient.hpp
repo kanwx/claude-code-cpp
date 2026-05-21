@@ -25,6 +25,24 @@ public:
     Json strippedMessages;  // Messages after stripping thinking/signature blocks
 };
 
+/// Thrown when the API returns 413 prompt-too-long.
+/// Carries structured token gap data instead of requiring string parsing.
+class PromptTooLongException : public std::runtime_error {
+public:
+    PromptTooLongException(long actualTokens, long maxTokens)
+        : std::runtime_error("Prompt too long: " + std::to_string(actualTokens) +
+                             " tokens > " + std::to_string(maxTokens) + " limit")
+        , actualTokens_(actualTokens), maxTokens_(maxTokens) {}
+
+    long actualTokens() const { return actualTokens_; }
+    long maxTokens() const { return maxTokens_; }
+    long tokenGap() const { return actualTokens_ - maxTokens_; }
+
+private:
+    long actualTokens_;
+    long maxTokens_;
+};
+
 /// 带重试功能和模型回退的 API 客户端包装器
 ///
 /// 模型回退行为 (匹配原版 TS):
