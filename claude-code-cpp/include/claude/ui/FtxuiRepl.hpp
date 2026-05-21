@@ -43,9 +43,9 @@ public:
         costUsd_ = costUsd;
     }
 
-    /// Access the Completer for configuration (add commands, tools, set workDir)
-    Completer& completer() { return completer_; }
-    const Completer& completer() const { return completer_; }
+    /// Access the ReplCompleter for configuration (add commands, tools, set workDir)
+    ReplCompleter& completer() { return completer_; }
+    const ReplCompleter& completer() const { return completer_; }
 
     // Thread-safe message operations (use Post internally)
     void addUserMessage(const String& content);
@@ -145,7 +145,7 @@ private:
     std::atomic<bool> refreshActive_{false};
 
     // ========== Completion state ==========
-    Completer completer_;
+    ReplCompleter completer_;
 
     // ========== Permission prompt state ==========
     bool permissionPromptActive_ = false;   // UI is showing permission prompt

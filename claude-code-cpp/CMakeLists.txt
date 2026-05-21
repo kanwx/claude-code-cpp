@@ -329,6 +329,7 @@ set(CONFIG_SOURCES
 # LSP源文件
 set(LSP_SOURCES
     src/lsp/LSPClient.cpp
+    src/lsp/LspManager.cpp
     src/lsp/LSPServerManager.cpp
 )
 

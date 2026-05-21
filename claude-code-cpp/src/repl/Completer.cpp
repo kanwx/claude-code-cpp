@@ -7,26 +7,26 @@
 
 namespace claude {
 
-void Completer::addCandidate(const String& candidate) {
+void ReplCompleter::addCandidate(const String& candidate) {
     // 避免重复
     if (std::find(candidates_.begin(), candidates_.end(), candidate) == candidates_.end()) {
         candidates_.push_back(candidate);
     }
 }
 
-void Completer::addCommand(const String& cmd) {
+void ReplCompleter::addCommand(const String& cmd) {
     // 命令以 / 开头
     String fullCmd = cmd[0] == '/' ? cmd : "/" + cmd;
     addCandidate(fullCmd);
 }
 
-void Completer::addTool(const String& tool) {
+void ReplCompleter::addTool(const String& tool) {
     if (std::find(tools_.begin(), tools_.end(), tool) == tools_.end()) {
         tools_.push_back(tool);
     }
 }
 
-void Completer::addHistory(const String& cmd) {
+void ReplCompleter::addHistory(const String& cmd) {
     // 避免重复的连续历史
     if (!history_.empty() && history_.front() == cmd) {
         return;
@@ -46,7 +46,7 @@ void Completer::addHistory(const String& cmd) {
     }
 }
 
-std::vector<String> Completer::complete(const String& prefix) const {
+std::vector<String> ReplCompleter::complete(const String& prefix) const {
     std::vector<String> matches;
 
     // 空前缀返回所有候选
@@ -68,12 +68,12 @@ std::vector<String> Completer::complete(const String& prefix) const {
     return matches;
 }
 
-bool Completer::isCommandContext(const String& input) const {
+bool ReplCompleter::isCommandContext(const String& input) const {
     // 输入以 / 开头
     return !input.empty() && input[0] == '/';
 }
 
-bool Completer::isFilePathContext(const String& input) const {
+bool ReplCompleter::isFilePathContext(const String& input) const {
     // 检测文件路径模式
     // 例如: "read " 或 "edit " 后面跟着路径
     std::istringstream iss(input);
@@ -111,9 +111,9 @@ bool Completer::isFilePathContext(const String& input) const {
     return false;
 }
 
-CompletionResult Completer::smartComplete(const String& input, const std::filesystem::path& workDir) const {
-    CompletionResult result;
-    result.type = CompletionType::Command;
+ReplCompletionResult ReplCompleter::smartComplete(const String& input, const std::filesystem::path& workDir) const {
+    ReplCompletionResult result;
+    result.type = ReplCompletionType::Command;
 
     if (input.empty()) {
         result.matches = candidates_;
@@ -123,7 +123,7 @@ CompletionResult Completer::smartComplete(const String& input, const std::filesy
     // 命令补全
     if (isCommandContext(input)) {
         result.matches = complete(input);
-        result.type = CompletionType::Command;
+        result.type = ReplCompletionType::Command;
 
         // 计算共同前缀
         if (result.matches.size() == 1) {
@@ -160,7 +160,7 @@ CompletionResult Completer::smartComplete(const String& input, const std::filesy
         }
 
         result.matches = completeFilePath(pathPart, workDir);
-        result.type = CompletionType::FilePath;
+        result.type = ReplCompletionType::FilePath;
 
         // 保留前面的工具名
         if (!result.matches.empty() && !firstWord.empty()) {
@@ -174,7 +174,7 @@ CompletionResult Completer::smartComplete(const String& input, const std::filesy
     // 历史搜索
     result.matches = searchHistory(input);
     if (!result.matches.empty()) {
-        result.type = CompletionType::History;
+        result.type = ReplCompletionType::History;
         return result;
     }
 
@@ -183,7 +183,7 @@ CompletionResult Completer::smartComplete(const String& input, const std::filesy
     return result;
 }
 
-std::vector<String> Completer::searchHistory(const String& prefix) const {
+std::vector<String> ReplCompleter::searchHistory(const String& prefix) const {
     std::vector<String> matches;
 
     for (const auto& cmd : history_) {
@@ -199,8 +199,8 @@ std::vector<String> Completer::searchHistory(const String& prefix) const {
 // ========== 辅助函数 ==========
 
 /// 创建默认补全器
-Completer createDefaultCompleter(const std::vector<String>& commands) {
-    Completer completer;
+ReplCompleter createDefaultCompleter(const std::vector<String>& commands) {
+    ReplCompleter completer;
 
     // 添加命令
     for (const auto& cmd : commands) {
@@ -365,7 +365,7 @@ std::vector<String> completeArgument(const String& command, const String& argPre
 
 // ========== Fuzzy matching ==========
 
-std::vector<std::pair<String, int>> Completer::fuzzyFilter(
+std::vector<std::pair<String, int>> ReplCompleter::fuzzyFilter(
     const std::vector<String>& candidates, const String& query) {
     std::vector<std::pair<String, int>> results;
 
@@ -410,7 +410,7 @@ std::vector<std::pair<String, int>> Completer::fuzzyFilter(
 
 // ========== Tab completion support ==========
 
-String Completer::commonPrefix(const String& input) const {
+String ReplCompleter::commonPrefix(const String& input) const {
     if (lastCompletions_.empty()) return input;
 
     if (lastCompletions_.size() == 1) {
@@ -430,7 +430,7 @@ String Completer::commonPrefix(const String& input) const {
     return prefix;
 }
 
-void Completer::updateCompletions(const String& input, size_t cursorPos) {
+void ReplCompleter::updateCompletions(const String& input, size_t cursorPos) {
     lastCompletions_.clear();
 
     if (input.empty() || cursorPos < input.size()) {

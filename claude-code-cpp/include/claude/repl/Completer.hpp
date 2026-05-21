@@ -10,7 +10,7 @@
 namespace claude {
 
 /// 补全类型
-enum class CompletionType {
+enum class ReplCompletionType {
     Command,      // 斜杠命令
     FilePath,     // 文件路径
     ToolName,     // 工具名称
@@ -19,14 +19,14 @@ enum class CompletionType {
 };
 
 /// 补全结果
-struct CompletionResult {
+struct ReplCompletionResult {
     std::vector<String> matches;
-    CompletionType type;
+    ReplCompletionType type;
     String commonPrefix;  // 共同前缀（用于自动补全）
 };
 
 /// Tab 补全器
-class Completer {
+class ReplCompleter {
 public:
     /// 添加候选词
     void addCandidate(const String& candidate);
@@ -44,7 +44,7 @@ public:
     std::vector<String> complete(const String& prefix) const;
 
     /// 智能补全（根据上下文）
-    CompletionResult smartComplete(const String& input, const std::filesystem::path& workDir) const;
+    ReplCompletionResult smartComplete(const String& input, const std::filesystem::path& workDir) const;
 
     /// 获取历史命令（搜索）
     std::vector<String> searchHistory(const String& prefix) const;
@@ -88,7 +88,7 @@ private:
 };
 
 /// 创建默认补全器
-Completer createDefaultCompleter(const std::vector<String>& commands);
+ReplCompleter createDefaultCompleter(const std::vector<String>& commands);
 
 /// 文件路径补全
 std::vector<String> completeFilePath(const String& prefix, const std::filesystem::path& baseDir);
