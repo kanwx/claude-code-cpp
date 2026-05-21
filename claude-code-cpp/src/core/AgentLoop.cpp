@@ -6,6 +6,7 @@
 #include <claude/core/compact/MessageGrouping.hpp>
 #include <claude/core/compact/ApiMicroCompact.hpp>
 #include <claude/tool/ResultTruncation.hpp>
+#include <claude/api/RetryableClient.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 
@@ -115,6 +116,35 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             } else {
                 result = blockingIteration(request);
             }
+        } catch (const FallbackTriggered& fb) {
+            // ========== Model Fallback: Tombstone + System Warning ==========
+            spdlog::warn("Model fallback: {} -> {}", fb.fromModel, fb.toModel);
+
+            // 1. Add missing tool_results for any dangling tool_uses
+            addMissingToolResults();
+
+            // 2. Strip thinking/signature blocks from message history
+            stripThinkingFromHistory();
+
+            // 3. Emit tombstone event for any partial content already yielded
+            StreamEvent tombstoneEvent;
+            tombstoneEvent.type = StreamEvent::Type::Tombstone;
+            tombstoneEvent.fallbackFromModel = fb.fromModel;
+            tombstoneEvent.fallbackToModel = fb.toModel;
+            emitStreamEvent(std::move(tombstoneEvent));
+
+            // 4. Inject system warning message
+            messageHistory_.push_back(Message::user(
+                "[System: Switched to " + fb.toModel + " due to high demand for " +
+                (fb.fromModel.empty() ? String("primary model") : fb.fromModel) + "]"));
+            messageHistory_.push_back(Message::assistant(
+                "Understood. I'll continue with " + fb.toModel + "."));
+
+            // 5. Reset recovery counters
+            maxOutputTokensRecoveryCount = 0;
+            reactiveCompactAttempts_ = 0;
+
+            continue;  // Retry with fallback model
         } catch (const std::exception& e) {
             String errorMsg = e.what();
 
@@ -1170,6 +1200,14 @@ void AgentLoop::addMissingToolResults() {
     }
 }
 
+void AgentLoop::stripThinkingFromHistory() {
+    for (auto& msg : messageHistory_) {
+        msg.thinking.reset();
+        msg.signature.reset();
+    }
+    spdlog::debug("Stripped thinking/signature blocks from message history");
+}
+
 // ========== Stream Event Emission ==========
 
 void AgentLoop::emitStreamEvent(StreamEvent event) {
@@ -1196,6 +1234,10 @@ void AgentLoop::emitStreamEvent(StreamEvent event) {
             break;
         case StreamEvent::Type::ToolResultReady:
             if (onToolResult_) onToolResult_(event.toolName, event.toolResult, event.toolIsError);
+            break;
+        case StreamEvent::Type::Tombstone:
+            // Tombstone events notify the UI that previous content is invalidated
+            // No individual callback equivalent — only via onStreamEvent_
             break;
         case StreamEvent::Type::StreamEnd:
         case StreamEvent::Type::StreamError:

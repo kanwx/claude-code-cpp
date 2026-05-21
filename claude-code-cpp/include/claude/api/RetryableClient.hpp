@@ -102,6 +102,9 @@ public:
     /// Used before model fallback to prevent cross-provider incompatibility.
     static Json stripThinkingBlocks(const Json& messages);
 
+    /// Number of consecutive 529/overload errors before triggering fallback.
+    static constexpr int OVERLOAD_THRESHOLD = 3;  // Match TS MAX_529_RETRIES
+
     /// Information about a model fallback event.
     struct FallbackInfo {
         String fromModel;
@@ -149,8 +152,6 @@ private:
     std::atomic<int> consecutiveOverloadErrors_{0};
     OnFallback onFallback_;
     String lastFallbackFromModel_;  // Set by attemptFallback
-
-    static constexpr int OVERLOAD_THRESHOLD = 3;  // Match TS MAX_529_RETRIES
 };
 
 } // namespace claude

@@ -314,6 +314,10 @@ private:
     /// in the last assistant message that lack matching tool_results.
     void addMissingToolResults();
 
+    /// Strip thinking/signature/redacted_thinking from message history.
+    /// Called before retrying with a fallback model to prevent 400 errors.
+    void stripThinkingFromHistory();
+
     // ========== 辅助方法 ==========
 
     /// 构建 API 请求
