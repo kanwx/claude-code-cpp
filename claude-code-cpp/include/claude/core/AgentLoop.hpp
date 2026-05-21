@@ -176,6 +176,11 @@ public:
     void setMaxTokensOverride(int maxTokens) { maxTokensOverride_ = maxTokens; }
     int getMaxTokensOverride() const { return maxTokensOverride_; }
 
+    /// Set per-task token budget (0 = unlimited). Loop stops when exceeded.
+    void setTaskBudget(long budget) { tokenTracker_.setTaskBudget(budget); }
+    long getTaskBudget() const { return tokenTracker_.getTaskBudget(); }
+    long getTaskBudgetUsed() const { return tokenTracker_.getTaskBudgetUsed(); }
+
     // ========== 权限引擎 ==========
 
     void setPermissionEngine(RuleEngine* engine) {
@@ -272,11 +277,23 @@ private:
         OnToken onToken
     );
 
+    /// Enable or disable interleaved tool execution during streaming.
+    /// When enabled, tool calls are dispatched at content_block_stop time
+    /// instead of waiting for the entire stream to complete.
+    void setInterleaveToolExecution(bool enable) {
+        interleaveToolExecution_ = enable;
+    }
+    bool isInterleaveToolExecution() const {
+        return interleaveToolExecution_;
+    }
+
     /// 阻塞迭代
     struct IterationResult {
         Message message;
         Usage usage;
         String stopReason;  // "end_turn", "max_tokens", "tool_use", etc.
+        // Interleaved tool results (already executed during streaming)
+        std::vector<ToolResponse> interleavedToolResults;
     };
     IterationResult blockingIteration(const Json& prompt);
 
@@ -384,6 +401,9 @@ private:
 
     // Reactive compact state
     int reactiveCompactAttempts_ = 0;
+
+    // Interleaved tool execution
+    bool interleaveToolExecution_ = false;
 
     // 当前用户输入 (用于回调)
     String currentUserInput_;

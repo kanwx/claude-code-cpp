@@ -162,6 +162,17 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         // 记录使用量
         if (result.usage.promptTokens > 0 || result.usage.completionTokens > 0) {
             tokenTracker_.recordUsage(result.usage.promptTokens, result.usage.completionTokens);
+            tokenTracker_.recordTaskUsage(result.usage.promptTokens, result.usage.completionTokens);
+        }
+
+        // Check task budget
+        if (tokenTracker_.isTaskBudgetExceeded()) {
+            spdlog::info("Task budget exceeded: {}/{} tokens",
+                tokenTracker_.getTaskBudgetUsed(), tokenTracker_.getTaskBudget());
+            lastAssistantText += "\n\n[Task budget exceeded: " +
+                std::to_string(tokenTracker_.getTaskBudgetUsed()) + "/" +
+                std::to_string(tokenTracker_.getTaskBudget()) + " tokens used]";
+            break;
         }
 
         // Check cancellation after API call returns
