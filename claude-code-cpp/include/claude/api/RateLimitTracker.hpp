@@ -24,6 +24,10 @@ struct RateLimitInfo {
     int retryAfter = 0;             // retry-after (秒)
     bool isOverloaded = false;      // 529/429 状态码
 
+    // Overage & tier
+    bool isOverage = false;         // Currently in overage (remaining < 0)
+    String tierName;                // Tier name if detected (e.g., "tier_1", "tier_2+", "free")
+
     // 提取时间
     std::chrono::system_clock::time_point lastUpdated;
 
@@ -103,6 +107,18 @@ public:
     /// Returns empty string if no warning is needed.
     String statusMessage() const;
 
+    /// Check if currently in overage (remaining < 0 or explicit overage header)
+    bool isOverage() const;
+
+    /// Get tier name if detected from response headers
+    const String& tierName() const;
+
+    /// Get human-readable reset time string for request limit
+    String requestLimitResetsAt() const;
+
+    /// Get human-readable reset time string for token limit
+    String tokenLimitResetsAt() const;
+
     /// 连续错误次数
     int consecutiveErrors() const { return consecutiveErrors_; }
 
@@ -132,6 +148,9 @@ private:
     std::chrono::steady_clock::time_point lastWarningShown_;
 
     static constexpr auto WARNING_COOLDOWN = std::chrono::minutes(5);
+
+    /// Format a time_point as "resets at HH:MM:SS", or "unknown" if default
+    static String formatResetTime(const std::chrono::system_clock::time_point& tp);
 };
 
 } // namespace claude

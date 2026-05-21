@@ -63,6 +63,18 @@ RateLimitInfo RateLimitInfo::fromHeaders(const std::map<String, String>& headers
         try { info.retryAfter = std::stoi(it->second); } catch (...) {}
     }
 
+    // Detect overage: remaining < 0 means we've exceeded the limit
+    info.isOverage = (info.requestsRemaining < 0 || info.tokensRemaining < 0);
+
+    // Detect tier based on request limit
+    if (info.requestsLimit > 4000) {
+        info.tierName = "tier_2+";
+    } else if (info.requestsLimit > 1000) {
+        info.tierName = "tier_1";
+    } else if (info.requestsLimit > 0) {
+        info.tierName = "free";
+    }
+
     return info;
 }
 
@@ -198,11 +210,33 @@ String RateLimitTracker::usageSummary() const {
 String RateLimitTracker::statusMessage() const {
     std::lock_guard lock(mutex_);
 
-    if (info_.requestsRemaining > 0 && info_.requestsLimit > 0) {
+    // Overage takes highest priority
+    if (info_.isOverage) {
+        String msg = "Rate limit OVERAGE — ";
+        if (info_.requestsRemaining < 0) {
+            msg += "requests: " + std::to_string(info_.requestsRemaining) + "/" + std::to_string(info_.requestsLimit);
+        }
+        if (info_.tokensRemaining < 0) {
+            if (info_.requestsRemaining < 0) msg += ", ";
+            msg += "tokens: " + std::to_string(info_.tokensRemaining) + "/" + std::to_string(info_.tokensLimit);
+        }
+        String resets = formatResetTime(info_.requestsResetTime);
+        if (resets != "unknown") {
+            msg += " (" + resets + ")";
+        }
+        return msg;
+    }
+
+    if (info_.requestsRemaining >= 0 && info_.requestsLimit > 0) {
         double usagePercent = 100.0 * (1.0 - static_cast<double>(info_.requestsRemaining) / info_.requestsLimit);
         if (usagePercent >= 95.0) {
-            return "Rate limit nearly exhausted (" + std::to_string(info_.requestsRemaining) +
+            String msg = "Rate limit nearly exhausted (" + std::to_string(info_.requestsRemaining) +
                    "/" + std::to_string(info_.requestsLimit) + " requests remaining)";
+            String resets = formatResetTime(info_.requestsResetTime);
+            if (resets != "unknown") {
+                msg += " (" + resets + ")";
+            }
+            return msg;
         }
         if (usagePercent >= 80.0) {
             return "Rate limit usage high (" +
@@ -215,6 +249,37 @@ String RateLimitTracker::statusMessage() const {
     }
 
     return "";
+}
+
+bool RateLimitTracker::isOverage() const {
+    std::lock_guard lock(mutex_);
+    return info_.isOverage;
+}
+
+const String& RateLimitTracker::tierName() const {
+    std::lock_guard lock(mutex_);
+    return info_.tierName;
+}
+
+String RateLimitTracker::requestLimitResetsAt() const {
+    std::lock_guard lock(mutex_);
+    return formatResetTime(info_.requestsResetTime);
+}
+
+String RateLimitTracker::tokenLimitResetsAt() const {
+    std::lock_guard lock(mutex_);
+    return formatResetTime(info_.tokensResetTime);
+}
+
+String RateLimitTracker::formatResetTime(const std::chrono::system_clock::time_point& tp) {
+    if (tp == std::chrono::system_clock::time_point{}) {
+        return "unknown";
+    }
+    auto timeT = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm = *std::localtime(&timeT);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm);
+    return String("resets at ") + buf;
 }
 
 } // namespace claude
