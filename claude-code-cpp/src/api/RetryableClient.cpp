@@ -55,14 +55,12 @@ std::expected<Json, String> RetryableClient::callWithRetry(
             consecutiveOverloadErrors_++;
 
             if (consecutiveOverloadErrors_ >= OVERLOAD_THRESHOLD && attemptFallback()) {
-                spdlog::info("Switched to fallback model: {}", client_->getModelName());
-                // 用剥离 thinking 的消息重试
                 auto stripped = stripThinkingBlocks(messages);
-                result = client_->call(stripped, tools);
-                if (result) {
-                    consecutiveOverloadErrors_ = 0;
-                    return result;
-                }
+                throw FallbackTriggered(
+                    lastFallbackFromModel_,
+                    client_->getModelName(),
+                    stripped
+                );
             }
         } else {
             // 非 overload 错误 → 重置计数器
@@ -134,15 +132,12 @@ void RetryableClient::streamWithRetry(
             errorMsg.find("429") != String::npos) {
             consecutiveOverloadErrors_++;
             if (consecutiveOverloadErrors_ >= OVERLOAD_THRESHOLD && attemptFallback()) {
-                spdlog::info("Switched to fallback model for stream: {}", client_->getModelName());
                 auto stripped = stripThinkingBlocks(messages);
-                try {
-                    client_->stream(stripped, tools, onChunk);
-                    consecutiveOverloadErrors_ = 0;
-                    return;
-                } catch (const std::exception& e) {
-                    errorMsg = e.what();
-                }
+                throw FallbackTriggered(
+                    lastFallbackFromModel_,
+                    client_->getModelName(),
+                    stripped
+                );
             }
         } else {
             consecutiveOverloadErrors_ = 0;
@@ -176,6 +171,7 @@ bool RetryableClient::attemptFallback() {
 
     // Capture previous values before switching
     String previousModel = client_->getModelName();
+    lastFallbackFromModel_ = previousModel;
     String previousBaseUrl;  // No getter for base URL currently
 
     spdlog::warn("Model fallback triggered: switching from {} to {}",

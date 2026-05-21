@@ -10,6 +10,21 @@
 
 namespace claude {
 
+/// Exception thrown when model fallback is triggered.
+/// AgentLoop catches this to inject tombstone messages and system warnings.
+class FallbackTriggered : public std::runtime_error {
+public:
+    FallbackTriggered(const String& fromModel, const String& toModel, const Json& strippedMessages)
+        : std::runtime_error("Model fallback triggered: " + fromModel + " -> " + toModel)
+        , fromModel(fromModel)
+        , toModel(toModel)
+        , strippedMessages(strippedMessages) {}
+
+    String fromModel;
+    String toModel;
+    Json strippedMessages;  // Messages after stripping thinking/signature blocks
+};
+
 /// 带重试功能和模型回退的 API 客户端包装器
 ///
 /// 模型回退行为 (匹配原版 TS):
@@ -133,8 +148,9 @@ private:
     std::atomic<bool> fallbackActive_{false};
     std::atomic<int> consecutiveOverloadErrors_{0};
     OnFallback onFallback_;
+    String lastFallbackFromModel_;  // Set by attemptFallback
 
-    static constexpr int OVERLOAD_THRESHOLD = 2;  // 连续 2 次 529 → 回退
+    static constexpr int OVERLOAD_THRESHOLD = 3;  // Match TS MAX_529_RETRIES
 };
 
 } // namespace claude
