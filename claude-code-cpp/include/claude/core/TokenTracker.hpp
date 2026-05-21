@@ -26,6 +26,8 @@ public:
         : inputTokens_(other.inputTokens_.load())
         , outputTokens_(other.outputTokens_.load())
         , apiCallCount_(other.apiCallCount_.load())
+        , cacheCreationTokens_(other.cacheCreationTokens_.load())
+        , cacheReadTokens_(other.cacheReadTokens_.load())
         , contextWindow_(other.contextWindow_)
         , model_(std::move(other.model_))
         , lastUpdateTime_(other.lastUpdateTime_) {}
@@ -35,6 +37,8 @@ public:
             inputTokens_ = other.inputTokens_.load();
             outputTokens_ = other.outputTokens_.load();
             apiCallCount_ = other.apiCallCount_.load();
+            cacheCreationTokens_ = other.cacheCreationTokens_.load();
+            cacheReadTokens_ = other.cacheReadTokens_.load();
             contextWindow_ = other.contextWindow_;
             model_ = std::move(other.model_);
             lastUpdateTime_ = other.lastUpdateTime_;
@@ -125,6 +129,23 @@ public:
         taskBudgetUsed_ += inputTokens + outputTokens;
     }
 
+    /// Record cache usage from an API response
+    void recordCacheUsage(long creationTokens, long readTokens) {
+        cacheCreationTokens_ += creationTokens;
+        cacheReadTokens_ += readTokens;
+    }
+
+    long getCacheCreationTokens() const { return cacheCreationTokens_; }
+    long getCacheReadTokens() const { return cacheReadTokens_; }
+
+    /// Check if cache hit rate is unexpectedly low (potential cache break)
+    bool isCacheBreakSuspected() const {
+        long totalCacheTokens = cacheCreationTokens_.load() + cacheReadTokens_.load();
+        if (totalCacheTokens == 0) return false;
+        double hitRate = static_cast<double>(cacheReadTokens_.load()) / totalCacheTokens;
+        return hitRate < 0.3 && totalCacheTokens > 10000;
+    }
+
     void setContextWindow(long window) {
         contextWindow_ = window;
     }
@@ -139,6 +160,8 @@ public:
         inputTokens_ = 0;
         outputTokens_ = 0;
         apiCallCount_ = 0;
+        cacheCreationTokens_ = 0;
+        cacheReadTokens_ = 0;
     }
 
     /// Adjust token counts after compaction.
@@ -164,6 +187,8 @@ private:
     std::atomic<long> inputTokens_{0};
     std::atomic<long> outputTokens_{0};
     std::atomic<long> apiCallCount_{0};
+    std::atomic<long> cacheCreationTokens_{0};
+    std::atomic<long> cacheReadTokens_{0};
     long contextWindow_ = DEFAULT_CONTEXT_WINDOW;
     long taskBudget_ = 0;        // 0 = unlimited
     long taskBudgetUsed_ = 0;

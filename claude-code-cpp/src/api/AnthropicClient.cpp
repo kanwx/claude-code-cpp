@@ -761,6 +761,16 @@ Result<StreamingState> AnthropicClient::streamWithState(
     state.usage.stallCount = state.stallCount;
     state.usage.totalStallTimeMs = state.totalStallTimeMs;
 
+    // Cache break detection: warn if hit rate is suspiciously low
+    long cacheTotal = state.usage.cacheReadTokens + state.usage.cacheCreationTokens;
+    if (cacheTotal > 10000) {
+        double hitRate = static_cast<double>(state.usage.cacheReadTokens) / cacheTotal;
+        if (hitRate < 0.3) {
+            spdlog::warn("Cache break suspected: hit rate {:.1f}% (read={}, creation={}, total={})",
+                hitRate * 100, state.usage.cacheReadTokens, state.usage.cacheCreationTokens, cacheTotal);
+        }
+    }
+
     return state;
 }
 
