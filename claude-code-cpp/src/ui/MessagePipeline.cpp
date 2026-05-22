@@ -170,6 +170,9 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
             messages.push_back(std::move(msg));
             return true;
         }
+
+        case StreamEvent::Type::Tombstone:
+            return false;
     }
     return false;
 }

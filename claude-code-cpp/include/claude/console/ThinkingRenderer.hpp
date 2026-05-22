@@ -4,7 +4,6 @@
 
 #include <chrono>
 #include <ostream>
-#include <vector>
 
 namespace claude {
 

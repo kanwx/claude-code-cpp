@@ -2,9 +2,8 @@
 
 #include "../core/Types.hpp"
 
-#include <string>
 #include <ostream>
-#include <sstream>
+#include <vector>
 
 namespace claude {
 

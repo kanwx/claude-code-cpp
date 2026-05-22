@@ -3,7 +3,6 @@
 #include <claude/utils/FileHistory.hpp>
 #include <claude/lsp/LspManager.hpp>
 #include <fstream>
-#include <algorithm>
 #include <cstdlib>
 
 namespace claude {

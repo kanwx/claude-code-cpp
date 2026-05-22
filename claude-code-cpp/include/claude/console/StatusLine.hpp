@@ -3,13 +3,11 @@
 #include "../core/Types.hpp"
 #include "../core/TokenTracker.hpp"
 
-#include <string>
 #include <ostream>
 #include <chrono>
 #include <functional>
 #include <atomic>
 #include <thread>
-#include <cstdio>
 
 namespace claude {
 
