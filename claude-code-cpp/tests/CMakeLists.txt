@@ -30,7 +30,6 @@ target_link_libraries(test_claude_md PRIVATE claude_core Catch2::Catch2WithMain)
 add_executable(test_task_manager test_task_manager.cpp)
 target_link_libraries(test_task_manager PRIVATE claude_core Catch2::Catch2WithMain)
 
-# New comprehensive tests
 add_executable(test_sse_parser test_sse_parser.cpp)
 target_link_libraries(test_sse_parser PRIVATE claude_core Catch2::Catch2WithMain)
 
@@ -85,7 +84,20 @@ target_link_libraries(test_apiclient_factory PRIVATE claude_core Catch2::Catch2W
 add_executable(test_rate_limit_tracking test_rate_limit_tracking.cpp)
 target_link_libraries(test_rate_limit_tracking PRIVATE claude_core Catch2::Catch2WithMain)
 
-# 添加测试
+add_executable(test_streaming_interleave test_streaming_interleave.cpp)
+target_link_libraries(test_streaming_interleave PRIVATE claude_core Catch2::Catch2WithMain)
+
+# P6-1 Integration tests for key subsystems
+add_executable(test_compaction test_compaction.cpp)
+target_link_libraries(test_compaction PRIVATE claude_core Catch2::Catch2WithMain)
+
+add_executable(test_retry_policy test_retry_policy.cpp)
+target_link_libraries(test_retry_policy PRIVATE claude_core Catch2::Catch2WithMain)
+
+add_executable(test_prompt_command test_prompt_command.cpp)
+target_link_libraries(test_prompt_command PRIVATE claude_core Catch2::Catch2WithMain)
+
+# Discover tests
 include(Catch)
 catch_discover_tests(test_tool)
 catch_discover_tests(test_permission)
@@ -111,3 +123,7 @@ catch_discover_tests(test_agent_loop_abort)
 catch_discover_tests(test_fallback_tombstone)
 catch_discover_tests(test_apiclient_factory)
 catch_discover_tests(test_rate_limit_tracking)
+catch_discover_tests(test_streaming_interleave)
+catch_discover_tests(test_retry_policy)
+catch_discover_tests(test_prompt_command)
+catch_discover_tests(test_compaction)
