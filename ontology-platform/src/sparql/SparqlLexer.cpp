@@ -154,7 +154,10 @@ Token SparqlLexer::scanNumber() {
         num += advance();
     }
 
-    if (num.find('.') != String::npos || num.find('e') != String::npos || num.find('E') != String::npos) {
+    if (num.find('e') != String::npos || num.find('E') != String::npos) {
+        tok.type = DOUBLE;
+        tok.numValue = std::stod(num);
+    } else if (num.find('.') != String::npos) {
         tok.type = DECIMAL;
         tok.numValue = std::stod(num);
     } else {
@@ -335,12 +338,12 @@ Token SparqlLexer::scanToken() {
 
     // Operators
     if (c == '=') { advance(); Token tok; tok.type = EQ; tok.value = "="; tok.line = startLine; tok.column = startCol; return tok; }
-    if (c == '!' && pos_ < source_.size() && source_[pos_] == '=') {
+    if (c == '!' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
         advance(); advance();
         Token tok; tok.type = NE; tok.value = "!="; tok.line = startLine; tok.column = startCol; return tok;
     }
     if (c == '!') { advance(); Token tok; tok.type = NOT; tok.value = "!"; tok.line = startLine; tok.column = startCol; return tok; }
-    if (c == '>' && pos_ < source_.size() && source_[pos_] == '=') {
+    if (c == '>' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
         advance(); advance();
         Token tok; tok.type = GE; tok.value = ">="; tok.line = startLine; tok.column = startCol; return tok;
     }
@@ -349,11 +352,11 @@ Token SparqlLexer::scanToken() {
     if (c == '-') { advance(); Token tok; tok.type = MINUS; tok.value = "-"; tok.line = startLine; tok.column = startCol; return tok; }
     if (c == '*') { advance(); Token tok; tok.type = MUL;   tok.value = "*"; tok.line = startLine; tok.column = startCol; return tok; }
     if (c == '/') { advance(); Token tok; tok.type = DIV;   tok.value = "/"; tok.line = startLine; tok.column = startCol; return tok; }
-    if (c == '&' && pos_ < source_.size() && source_[pos_] == '&') {
+    if (c == '&' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '&') {
         advance(); advance();
         Token tok; tok.type = AND; tok.value = "&&"; tok.line = startLine; tok.column = startCol; return tok;
     }
-    if (c == '|' && pos_ < source_.size() && source_[pos_] == '|') {
+    if (c == '|' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '|') {
         advance(); advance();
         Token tok; tok.type = OR; tok.value = "||"; tok.line = startLine; tok.column = startCol; return tok;
     }
