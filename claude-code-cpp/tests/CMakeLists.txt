@@ -127,3 +127,7 @@ catch_discover_tests(test_streaming_interleave)
 catch_discover_tests(test_retry_policy)
 catch_discover_tests(test_prompt_command)
 catch_discover_tests(test_compaction)
+
+add_executable(test_tool_render test_tool_render.cpp)
+target_link_libraries(test_tool_render PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_tool_render)

@@ -102,6 +102,20 @@ struct ToolResponse {
     String toolName;     // 工具名称
     String content;      // 响应内容
     bool isError = false;
+    bool isCancelled = false;
+    bool isRejected = false;
+};
+
+/// Data for rendering a tool use/result pair (used by grouped rendering)
+struct ToolUseRenderData {
+    String toolUseId;
+    String toolName;
+    String arguments;     // JSON string
+    String result;
+    bool isError = false;
+    bool isCancelled = false;
+    bool isRejected = false;
+    bool isInProgress = false;
 };
 
 /// 消息角色
