@@ -356,6 +356,7 @@ set(UTILS_SOURCES
     src/utils/TaskWatcher.cpp
     src/utils/OutputStyles.cpp
     src/utils/UserMessage.cpp
+    src/utils/ConnectionPool.cpp
 )
 
 # Swarm源文件

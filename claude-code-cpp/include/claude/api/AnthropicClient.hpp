@@ -3,6 +3,8 @@
 #include "ApiClient.hpp"
 #include "RateLimitTracker.hpp"
 #include "../core/Types.hpp"
+#include "../utils/CircuitBreaker.hpp"
+#include "../core/Cache.hpp"
 #include <httplib.h>
 #include <memory>
 #include <chrono>
@@ -202,6 +204,14 @@ public:
     RateLimitTracker& rateLimitTracker() { return rateLimitTracker_; }
     const RateLimitTracker& rateLimitTracker() const { return rateLimitTracker_; }
 
+    /// Circuit breaker access
+    CircuitBreaker& circuitBreaker() { return circuitBreaker_; }
+    const CircuitBreaker& circuitBreaker() const { return circuitBreaker_; }
+
+    /// Enable/disable API response caching
+    void setCacheEnabled(bool enabled) { cacheEnabled_ = enabled; }
+    bool isCacheEnabled() const { return cacheEnabled_; }
+
     /// Whether the last stream() fell back to non-streaming
     bool didFallBackToNonStreaming() const { return lastDidFallBack_; }
 
@@ -228,6 +238,11 @@ private:
     // Quota tracking
     QuotaStatus lastQuotaStatus_;
     RateLimitTracker rateLimitTracker_;
+
+    // Resilience: circuit breaker + API response cache
+    CircuitBreaker circuitBreaker_;
+    ApiCache apiCache_;
+    bool cacheEnabled_ = false;
 
     // 请求构建
     Json buildRequest(const Json& messages, const Json& tools);

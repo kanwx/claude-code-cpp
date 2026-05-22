@@ -188,6 +188,25 @@ httplib::Headers AnthropicClient::buildHttpHeaders() {
 // ============================================================================
 
 std::expected<Json, String> AnthropicClient::call(const Json& messages, const Json& tools) {
+    // Circuit breaker check
+    if (!circuitBreaker_.allowCall()) {
+        return std::unexpected("Circuit breaker open — too many recent failures");
+    }
+
+    // Cache lookup (only for non-streaming calls with caching enabled)
+    String cacheKey;
+    if (cacheEnabled_) {
+        String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
+        cacheKey = apiCache_.makeKey(baseUrl_ + path, buildRequest(messages, tools).dump());
+        auto cached = apiCache_.getCached(cacheKey);
+        if (cached) {
+            try {
+                spdlog::debug("API cache hit for key={}", cacheKey.substr(0, 32));
+                return Json::parse(*cached);
+            } catch (...) {}
+        }
+    }
+
     Json req = buildRequest(messages, tools);
     String body = req.dump();
 
@@ -198,6 +217,7 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
     auto res = httpClient_->Post(path.c_str(), headers, body, "application/json");
 
     if (!res) {
+        circuitBreaker_.recordFailure();
         auto err = httplib::to_string(res.error());
         return std::unexpected("HTTP request failed: " + err);
     }
@@ -208,7 +228,15 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
     }
 
     if (res->status != 200) {
+        circuitBreaker_.recordFailure();
         return std::unexpected("API error: " + std::to_string(res->status) + " - " + res->body);
+    }
+
+    // Success — record in circuit breaker and cache
+    circuitBreaker_.recordSuccess();
+
+    if (cacheEnabled_ && !cacheKey.empty()) {
+        apiCache_.cacheResponse(cacheKey, res->body);
     }
 
     try {

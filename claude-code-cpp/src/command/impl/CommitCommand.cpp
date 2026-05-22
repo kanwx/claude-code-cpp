@@ -5,7 +5,6 @@
 #include <claude/utils/I18n.hpp>
 #include <sstream>
 #include <algorithm>
-#include <iomanip>
 #include <cstdlib>
 
 namespace {
@@ -218,120 +217,5 @@ String CommitCommand::execute(const String& args, CommandContext& context) {
     return oss.str();
 }
 
-String CompactCommand::execute(const String& args, CommandContext& context) {
-    std::ostringstream oss;
-    oss << "=== Compact Context ===\n\n";
-
-    if (context.agentLoop) {
-        // 获取当前 token 使用情况
-        auto& tracker = context.agentLoop->getTokenTracker();
-        long totalTokens = tracker.getTotalTokens();
-        double usage = tracker.getUsagePercentage();
-
-        oss << "Current context usage:\n";
-        oss << "  Tokens: " << totalTokens << "\n";
-        oss << "  Usage: " << std::fixed << std::setprecision(1) << (usage * 100) << "%\n\n";
-
-        if (usage >= 0.9) {
-            oss << "Context is near capacity. Compacting...\n";
-            // 实际压缩由 CompactService 处理
-            oss << "Compaction would:\n";
-            oss << "  - Remove old tool results\n";
-            oss << "  - Summarize long conversations\n";
-            oss << "  - Keep recent context\n";
-        } else {
-            oss << "Context is within acceptable limits.\n";
-            oss << "No compaction needed.\n";
-        }
-    } else {
-        oss << "No active conversation to compact.\n";
-    }
-
-    return oss.str();
-}
-
-String ConfigCommand::execute(const String& args, CommandContext& context) {
-    std::ostringstream oss;
-    oss << "=== Configuration ===\n\n";
-
-    if (args.empty()) {
-        // 显示当前配置
-        oss << "Environment variables:\n";
-        const char* relevantVars[] = {
-            "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
-            "CLAUDE_MODEL", "CLAUDE_PROVIDER",
-            "CLAUDE_THEME", "CLAUDE_EFFORT"
-        };
-
-        for (const char* var : relevantVars) {
-            const char* val = std::getenv(var);
-            oss << "  " << var << ": ";
-            if (val) {
-                // 隐藏敏感信息
-                if (String(var).find("KEY") != String::npos) {
-                    oss << "***" << "\n";
-                } else {
-                    oss << val << "\n";
-                }
-            } else {
-                oss << "(not set)\n";
-            }
-        }
-
-        oss << "\nUse /config <key>=<value> to set.\n";
-    } else {
-        // 解析设置
-        auto pos = args.find('=');
-        if (pos != String::npos) {
-            String key = args.substr(0, pos);
-            String value = args.substr(pos + 1);
-            // 去除空格
-            key.erase(0, key.find_first_not_of(" \t"));
-            key.erase(key.find_last_not_of(" \t") + 1);
-            value.erase(0, value.find_first_not_of(" \t"));
-            value.erase(value.find_last_not_of(" \t") + 1);
-
-            // 设置环境变量
-            setenv(key.c_str(), value.c_str(), 1);
-            oss << "Set " << key << " = " << value << "\n";
-        } else {
-            oss << "Invalid format. Use: /config <key>=<value>\n";
-        }
-    }
-
-    return oss.str();
-}
-
-String MemoryCommand::execute(const String& args, CommandContext& context) {
-    std::ostringstream oss;
-    oss << "=== Memory Management ===\n\n";
-
-    auto memoryDir = context.homeDir / ".claude" / "memory";
-
-    if (args == "clear") {
-        if (std::filesystem::exists(memoryDir)) {
-            std::filesystem::remove_all(memoryDir);
-            std::filesystem::create_directories(memoryDir);
-            oss << "Memory cleared.\n";
-        }
-    } else if (args == "list" || args.empty()) {
-        if (!std::filesystem::exists(memoryDir)) {
-            oss << "No memory files found.\n";
-            oss << "Memory files are stored in: " << memoryDir << "\n";
-            return oss.str();
-        }
-
-        oss << "Memory files:\n";
-        for (const auto& entry : std::filesystem::directory_iterator(memoryDir)) {
-            if (entry.path().extension() == ".md") {
-                oss << "  - " << entry.path().filename().string() << "\n";
-            }
-        }
-    } else {
-        oss << "Usage: /memory [list|clear]\n";
-    }
-
-    return oss.str();
-}
 
 } // namespace claude
