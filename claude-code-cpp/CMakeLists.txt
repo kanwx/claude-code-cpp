@@ -450,6 +450,9 @@ set(UI_SOURCES
     src/ui/components/AssistantTextRenderer.cpp
     src/ui/components/ToolUseRenderer.cpp
     src/ui/components/StatusBarRenderer.cpp
+    src/ui/components/PermissionPrompt.cpp
+    src/ui/components/ModalOverlay.cpp
+    src/ui/components/TextInputComponent.cpp
 )
 
 # RAG源文件
