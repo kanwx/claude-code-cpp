@@ -52,3 +52,12 @@ add_test(NAME sparql_parser COMMAND test_sparql_parser)
 add_executable(test_sparql_executor test_sparql_executor.cpp)
 target_link_libraries(test_sparql_executor PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME sparql_executor COMMAND test_sparql_executor)
+
+# SWRL tests
+add_executable(test_swrl_forward test_swrl_forward.cpp)
+target_link_libraries(test_swrl_forward PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME swrl_forward COMMAND test_swrl_forward)
+
+add_executable(test_swrl_backward test_swrl_backward.cpp)
+target_link_libraries(test_swrl_backward PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME swrl_backward COMMAND test_swrl_backward)
