@@ -470,6 +470,11 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 currentTextBlockIndex = index;
             } else if (blockType == "thinking") {
                 thinkingBlocks[index] = {"", ""};
+            } else if (blockType == "redacted_thinking") {
+                // Redacted thinking blocks contain encrypted content from extended thinking.
+                // Track them so content_block_stop can skip UI dispatch while preserving
+                // them in the assembled response for API conversation continuity.
+                thinkingBlocks[index] = {"[redacted]", ""};
             }
         }
 
@@ -541,12 +546,21 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     }
                 }
             } else if (thinkingBlocks.contains(index)) {
-                blockType = "thinking";
+                // Distinguish redacted_thinking from regular thinking:
+                // redacted_thinking blocks were stored with "[redacted]" marker text
+                blockType = (thinkingBlocks[index].first == "[redacted]")
+                    ? "redacted_thinking" : "thinking";
             } else {
                 blockType = "text";
             }
 
-            if (onContentBlockStop_) {
+            // Redacted thinking blocks are preserved in the assembled response for
+            // API conversation continuity but must NOT be displayed to the user.
+            // Skip UI callbacks for redacted_thinking entirely.
+            if (blockType == "redacted_thinking") {
+                // Erase from thinkingBlocks so it doesn't interfere with subsequent logic
+                thinkingBlocks.erase(index);
+            } else if (onContentBlockStop_) {
                 String content;
                 if (blockType == "thinking" && thinkingBlocks.contains(index)) {
                     content = thinkingBlocks[index].first;

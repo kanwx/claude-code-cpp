@@ -14,6 +14,7 @@
 #include "../permission/PermissionTypes.hpp"
 #include "../console/CreativeVerbs.hpp"
 #include "../repl/Completer.hpp"
+#include "../core/ReactiveState.hpp"
 #include <functional>
 #include <vector>
 #include <atomic>
@@ -42,6 +43,10 @@ public:
         contextMaxTokens_ = maxTokens;
         costUsd_ = costUsd;
     }
+
+    /// Link to AppState for reactive state accessors.
+    /// When set, the status bar can derive values via reactive::accessors.
+    void setAppState(AppState* state) { appState_ = state; }
 
     /// Access the ReplCompleter for configuration (add commands, tools, set workDir)
     ReplCompleter& completer() { return completer_; }
@@ -164,6 +169,9 @@ private:
 
     // Creative verb index for turn duration
     std::atomic<size_t> turnVerbIndex_{0};
+
+    // Optional AppState link for reactive state accessors
+    AppState* appState_ = nullptr;
 };
 
 } // namespace claude

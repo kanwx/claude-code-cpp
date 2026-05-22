@@ -121,6 +121,7 @@ set(CORE_SOURCES
     src/core/HookSettings.cpp
     src/core/FeatureFlags.cpp
     src/core/QueryEngine.cpp
+    src/core/ReactiveState.cpp
 )
 
 # 工具源文件

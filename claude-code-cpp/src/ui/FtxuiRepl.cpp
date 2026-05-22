@@ -1168,19 +1168,35 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 tickCounter_++;
             } else {
                 // Idle: show model + context + cost
+                // Use reactive accessors when AppState is linked, fall back to local fields
                 std::vector<Element> idleParts;
-                if (!r->modelInfo_.empty()) {
-                    idleParts.push_back(text(r->modelInfo_) | color(MacCream));
+
+                // Model: prefer reactive accessor, fall back to local modelInfo_
+                String displayModel;
+                if (r->appState_) {
+                    displayModel = reactive::accessors::currentModel(*r->appState_);
+                } else {
+                    displayModel = r->modelInfo_;
                 }
+                if (!displayModel.empty()) {
+                    idleParts.push_back(text(displayModel) | color(MacCream));
+                }
+
                 if (r->contextMaxTokens_ > 0) {
                     int pct = static_cast<int>(r->contextUsedTokens_ * 100 / r->contextMaxTokens_);
                     Color pctColor = pct >= 85 ? MacRose : pct >= 70 ? MacGold : MacCream;
                     if (!idleParts.empty()) idleParts.push_back(text(" · ") | dim | color(MacShadow));
                     idleParts.push_back(text(std::to_string(pct) + "% ctx") | color(pctColor));
                 }
-                if (r->costUsd_ > 0.0) {
+
+                // Cost: prefer reactive accessor from AppState, fall back to local costUsd_
+                double displayCost = r->costUsd_;
+                if (r->appState_) {
+                    displayCost = r->appState_->totalCostUSD();
+                }
+                if (displayCost > 0.0) {
                     char costBuf[32];
-                    snprintf(costBuf, sizeof(costBuf), "$%.4f", r->costUsd_);
+                    snprintf(costBuf, sizeof(costBuf), "$%.4f", displayCost);
                     if (!idleParts.empty()) idleParts.push_back(text(" · ") | dim | color(MacShadow));
                     idleParts.push_back(text(costBuf) | color(MacCream));
                 }
