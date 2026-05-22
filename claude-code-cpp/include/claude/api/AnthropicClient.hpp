@@ -218,7 +218,8 @@ private:
     String querySource_;
     std::vector<String> betaHeaders_;
 
-    std::unique_ptr<httplib::Client> httpClient_;
+    std::shared_ptr<httplib::Client> httpClient_;
+    String pooledBaseUrl_;  // tracks which baseUrl is checked out from ConnectionPool
 
     // Streaming fallback & watchdog config
     int streamIdleTimeoutSec_ = 30;     // seconds before stall detection

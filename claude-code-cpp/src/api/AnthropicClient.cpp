@@ -1,6 +1,7 @@
 #include <claude/api/AnthropicClient.hpp>
 #include <claude/api/BetaHeaders.hpp>
 #include <claude/api/MessageRepair.hpp>
+#include <claude/utils/ConnectionPool.hpp>
 #include <claude/utils/SseParser.hpp>
 #include <claude/utils/SystemPrompt.hpp>
 #include <spdlog/spdlog.h>
@@ -17,9 +18,9 @@ using namespace std::chrono_literals;
 // ============================================================================
 
 AnthropicClient::AnthropicClient() {
-    httpClient_ = std::make_unique<httplib::Client>(baseUrl_);
-    httpClient_->set_connection_timeout(30);
-    httpClient_->set_read_timeout(120);
+    // Use connection pool for HTTP connection reuse
+    httpClient_ = ConnectionPool::instance().getConnection(baseUrl_);
+    pooledBaseUrl_ = baseUrl_;
     betaHeaders_ = api::BetaHeaders::getDefault();
 }
 
@@ -27,17 +28,28 @@ AnthropicClient::AnthropicClient(const String& apiKey) : AnthropicClient() {
     setApiKey(apiKey);
 }
 
-AnthropicClient::~AnthropicClient() = default;
+AnthropicClient::~AnthropicClient() {
+    if (!pooledBaseUrl_.empty()) {
+        ConnectionPool::instance().releaseConnection(pooledBaseUrl_);
+    }
+}
 
 void AnthropicClient::setApiKey(const String& key) {
     apiKey_ = key;
 }
 
 void AnthropicClient::setBaseUrl(const String& url) {
+    // Release old pooled connection before switching
+    if (!pooledBaseUrl_.empty()) {
+        ConnectionPool::instance().releaseConnection(pooledBaseUrl_);
+        pooledBaseUrl_.clear();
+    }
+
     baseUrl_ = url;
-    httpClient_ = std::make_unique<httplib::Client>(baseUrl_);
-    httpClient_->set_connection_timeout(30);
-    httpClient_->set_read_timeout(120);
+
+    // Get a pooled client for the new base URL (reuses existing connections)
+    httpClient_ = ConnectionPool::instance().getConnection(baseUrl_);
+    pooledBaseUrl_ = baseUrl_;
 
     // Check if this is the official Anthropic API or a custom server
     isCustomBaseUrl_ = (url.find("api.anthropic.com") == String::npos);
