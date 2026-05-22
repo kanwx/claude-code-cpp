@@ -2,6 +2,10 @@
 #include <unordered_set>
 #include <algorithm>
 
+// Ensure Json and String are available in ontology::sparql scope
+using ontology::Json;
+using ontology::String;
+
 namespace ontology::sparql {
 
 // ============================================================================

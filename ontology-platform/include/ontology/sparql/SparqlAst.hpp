@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ontology/Sparql.hpp>
+#include "SparqlTypes.hpp"
 #include <variant>
 
 namespace ontology::sparql {
