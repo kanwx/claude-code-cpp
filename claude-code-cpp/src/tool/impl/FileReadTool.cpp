@@ -166,4 +166,13 @@ String FileReadTool::execute(const Json& input, ToolContext& context) {
     return output.str();
 }
 
+String FileReadTool::renderToolResult(const String& result, bool isError,
+                                      bool isCancelled, bool isRejected) const {
+    if (isError || isCancelled || isRejected) return "";  // use default rendering
+    int lines = 0;
+    for (char c : result) { if (c == '\n') lines++; }
+    if (!result.empty() && result.back() != '\n') lines++;
+    return "Read " + std::to_string(lines) + " line" + (lines != 1 ? "s" : "");
+}
+
 } // namespace claude
