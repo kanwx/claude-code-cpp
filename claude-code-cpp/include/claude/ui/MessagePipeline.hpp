@@ -38,6 +38,8 @@ struct StreamEvent {
     String toolInput;          // ToolUseStart (partial), ToolUseComplete (full JSON)
     String toolResult;         // ToolResultReady
     bool toolIsError = false;  // ToolResultReady
+    bool toolIsCancelled = false; // ToolResultReady
+    bool toolIsRejected = false;  // ToolResultReady
     bool success = true;       // StreamEnd
     String fallbackFromModel;   // For Tombstone events
     String fallbackToModel;     // For Tombstone events

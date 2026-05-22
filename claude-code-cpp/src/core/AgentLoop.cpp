@@ -286,11 +286,64 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             return std::unexpected("Cancelled by user");
         }
 
+        // ========== Skill sentinel detection ==========
+        // When SkillTool returns __SKILL_PROMPT__, inject the skill prompt as
+        // a new user message so the AI executes the skill instructions.
+        String pendingSkillPrompt;
+        String pendingSkillModel;
+        std::vector<String> pendingSkillTools;
+
+        for (auto& resp : toolResponses) {
+            if (resp.toolName != "Skill" || resp.content.empty()) continue;
+            auto sentinelPos = resp.content.find("__SKILL_PROMPT__");
+            if (sentinelPos == String::npos) continue;
+
+            String displayInfo = resp.content.substr(0, sentinelPos);
+            String afterSentinel = resp.content.substr(sentinelPos);
+            std::istringstream sStream(afterSentinel);
+            String headerLine;
+            bool pastHeaders = false;
+            String promptBody;
+
+            while (std::getline(sStream, headerLine)) {
+                if (!pastHeaders) {
+                    if (headerLine.rfind("__SKILL_PROMPT__", 0) == 0) {
+                        pendingSkillModel = headerLine.substr(16);
+                    } else if (headerLine.rfind("__SKILL_TOOLS__", 0) == 0) {
+                        String toolsStr = headerLine.substr(15);
+                        std::istringstream tStream(toolsStr);
+                        String tool;
+                        while (std::getline(tStream, tool, ',')) {
+                            if (!tool.empty()) pendingSkillTools.push_back(tool);
+                        }
+                    } else if (headerLine.empty()) {
+                        pastHeaders = true;
+                    }
+                } else {
+                    if (!promptBody.empty()) promptBody += "\n";
+                    promptBody += headerLine;
+                }
+            }
+
+            resp.content = displayInfo;
+            pendingSkillPrompt = std::move(promptBody);
+            spdlog::info("SkillTool detected: model='{}', tools={}, prompt={} chars",
+                pendingSkillModel, pendingSkillTools.size(), pendingSkillPrompt.size());
+        }
+
         // 添加工具结果到历史
         {
             auto toolMsg = Message::toolResult(std::move(toolResponses));
             toolMsg.apiRound = iteration;
             messageHistory_.push_back(std::move(toolMsg));
+        }
+
+        // Inject skill prompt as a new user message
+        if (!pendingSkillPrompt.empty()) {
+            messageHistory_.push_back(Message::user(pendingSkillPrompt));
+            // TODO: If pendingSkillModel is non-empty, switch model for this turn
+            // TODO: If pendingSkillTools is non-empty, restrict tools for this turn
+            spdlog::debug("Skill prompt injected as user message");
         }
 
         // ========== 微压缩：清除过期工具结果 ==========
@@ -685,6 +738,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             toolResultEvent.toolName = ier.response.toolName;
             toolResultEvent.toolResult = ier.response.content;
             toolResultEvent.toolIsError = ier.response.isError;
+            toolResultEvent.toolIsCancelled = ier.response.isCancelled;
+            toolResultEvent.toolIsRejected = ier.response.isRejected;
             emitStreamEvent(std::move(toolResultEvent));
 
             interleavedToolResponses.push_back(std::move(ier.response));
@@ -781,6 +836,8 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
         toolResultEvent.toolName = er.response.toolName;
         toolResultEvent.toolResult = er.response.content;
         toolResultEvent.toolIsError = isError;
+        toolResultEvent.toolIsCancelled = er.response.isCancelled;
+        toolResultEvent.toolIsRejected = er.response.isRejected;
         for (const auto& call : calls) {
             if (call.name == er.response.toolName) {
                 toolResultEvent.toolId = call.id;
@@ -833,7 +890,7 @@ String AgentLoop::executeTool(const ToolCall& call) {
     } else if (permOverride && !*permOverride) {
         // Hook 强制拒绝
         notifyToolEvent(ToolEventPhase::End, call.name, call.arguments, "Hook denied");
-        return "Permission denied by hook";
+        return "Permission denied";
     } else if (permissionEngine_) {
         auto decision = permissionEngine_->evaluate(call.name, input, tool->isReadOnly(), messageHistory_);
 
@@ -848,7 +905,7 @@ String AgentLoop::executeTool(const ToolCall& call) {
 
             if (choice == PermissionChoice::DenyOnce || choice == PermissionChoice::AlwaysDeny) {
                 notifyToolEvent(ToolEventPhase::End, call.name, call.arguments, "User denied");
-                return "Permission denied by user";
+                return "Permission denied";
             }
 
             // 应用选择
@@ -909,7 +966,18 @@ Json AgentLoop::buildApiRequest() {
         switch (msg.role) {
             case MessageRole::System:
                 m["role"] = "system";
-                m["content"] = msg.content;
+                // If we have pre-built system blocks with cache_control,
+                // serialize them as a JSON array so AnthropicClient can
+                // detect and use them directly (instead of the flat string).
+                if (systemBlocks_.has_value() && !systemBlocks_->empty()) {
+                    Json contentArray = Json::array();
+                    for (const auto& block : *systemBlocks_) {
+                        contentArray.push_back(block.toJson());
+                    }
+                    m["content"] = contentArray;
+                } else {
+                    m["content"] = msg.content;
+                }
                 break;
 
             case MessageRole::User:
