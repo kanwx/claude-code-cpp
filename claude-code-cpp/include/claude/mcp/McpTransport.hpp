@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <deque>
 #include <atomic>
+#include <future>
 
 namespace claude {
 
@@ -30,6 +31,15 @@ public:
 
     /// 是否连接
     virtual bool isConnected() const = 0;
+
+    /// Asynchronous call: dispatches send+receive in a background thread.
+    /// Returns a future that resolves with the response message.
+    virtual std::future<String> asyncCall(const String& message) {
+        return std::async(std::launch::async, [this, message]() {
+            send(message);
+            return receive();
+        });
+    }
 };
 
 /// StdIO 传输
