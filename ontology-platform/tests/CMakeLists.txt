@@ -61,3 +61,8 @@ add_test(NAME swrl_forward COMMAND test_swrl_forward)
 add_executable(test_swrl_backward test_swrl_backward.cpp)
 target_link_libraries(test_swrl_backward PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME swrl_backward COMMAND test_swrl_backward)
+
+# SHACL tests
+add_executable(test_shacl test_shacl.cpp)
+target_link_libraries(test_shacl PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME shacl COMMAND test_shacl)
