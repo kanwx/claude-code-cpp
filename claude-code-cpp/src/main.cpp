@@ -22,6 +22,7 @@
 #include <claude/tool/ToolContext.hpp>
 #include <claude/permission/RuleEngine.hpp>
 #include <claude/permission/PermissionSettings.hpp>
+#include <claude/permission/PermissionStore.hpp>
 #include <claude/api/AnthropicClient.hpp>
 #include <claude/api/OpenAIClient.hpp>
 #include <claude/config/AppConfig.hpp>
@@ -84,6 +85,9 @@
 #include <claude/command/impl/SummaryCommand.hpp>
 #include <claude/command/impl/IssueCommand.hpp>
 #include <claude/command/impl/PrCommentsCommand.hpp>
+#include <claude/command/impl/CompactCommand.hpp>
+#include <claude/command/impl/ConfigCommand.hpp>
+#include <claude/command/impl/MemoryCommand.hpp>
 #include <claude/command/impl/ReviewCommand.hpp>
 #include <claude/command/impl/SecurityReviewCommand.hpp>
 #include <claude/command/impl/AutofixPrCommand.hpp>
@@ -501,6 +505,9 @@ private:
         // 初始化权限
         permissionSettings_ = std::make_unique<PermissionSettings>();
         permissionEngine_ = std::make_unique<RuleEngine>(*permissionSettings_);
+
+        // Load persisted permission decisions from ~/.claude/permissions.json
+        PermissionStore::instance().load();
 
         // 应用权限模式
         if (dangerouslySkipPermissions_) {

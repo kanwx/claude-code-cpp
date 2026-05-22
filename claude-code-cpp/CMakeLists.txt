@@ -262,6 +262,7 @@ set(PERMISSION_SOURCES
     src/permission/YoloClassifier.cpp
     src/permission/PolicyLimits.cpp
     src/permission/CommandPrefix.cpp
+    src/permission/PermissionStore.cpp
 )
 
 # 控制台UI源文件
