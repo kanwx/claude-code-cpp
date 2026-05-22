@@ -66,3 +66,8 @@ add_test(NAME swrl_backward COMMAND test_swrl_backward)
 add_executable(test_shacl test_shacl.cpp)
 target_link_libraries(test_shacl PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME shacl COMMAND test_shacl)
+
+# Inference integration test
+add_executable(test_inference_integration2 test_inference_integration.cpp)
+target_link_libraries(test_inference_integration2 PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME inference_integration COMMAND test_inference_integration2)
