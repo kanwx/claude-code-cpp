@@ -3,6 +3,8 @@
 #include <claude/console/MessageResponse.hpp>
 #include <claude/tool/ToolRegistry.hpp>
 
+#include <chrono>
+
 namespace claude {
 
 // ========== Tool Input Parser ==========
@@ -124,6 +126,30 @@ ToolInputInfo parseToolInput(const String& toolName, const String& inputJson) {
 
 ToolStatusRenderer::ToolStatusRenderer(std::ostream& out) : out_(out) {}
 
+String ToolStatusRenderer::toolStateDot(bool isInProgress, bool isError,
+                                         bool isCancelled, bool isRejected,
+                                         bool shouldAnimate) {
+    if (isCancelled) return "\033[2m⊘\033[0m";                    // dim ⊘
+    if (isRejected) return "\033[2m\033[33m⊘\033[0m";             // dim yellow ⊘
+    if (isError) return "\033[31m✗\033[0m";                       // red ✗
+    if (isInProgress && shouldAnimate) {
+        // Blink between filled and hollow dot at 500ms
+        auto now = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count();
+        bool showFilled = (ms / 500) % 2 == 0;
+        return showFilled ? "\033[33m●\033[0m" : "\033[2m○\033[0m";  // yellow ● / dim ○
+    }
+    if (isInProgress) return "\033[33m●\033[0m";                  // yellow ● (no animation)
+    return "\033[32m•\033[0m";                                    // green • (completed)
+}
+
+bool shouldAnimate(bool permissionDialogOpen, bool transcriptMode) {
+    if (transcriptMode) return false;
+    if (permissionDialogOpen) return false;
+    return true;
+}
+
 void ToolStatusRenderer::renderPrefix() {
     out_ << AnsiStyle::Semantic::TOOL_PREFIX << "  " << Figures::TOOL_PREFIX << " " << AnsiStyle::RESET;
 }
@@ -203,21 +229,21 @@ void ToolStatusRenderer::renderEnd(const String& toolName, const String& result,
     renderPrefix();
 
     if (isCancelled) {
-        out_ << AnsiStyle::Semantic::TOOL_CANCELLED << Figures::EMPTY_SET << " Canceled"
-             << AnsiStyle::RESET << "\n";
+        out_ << toolStateDot(false, false, true, false, false)
+             << AnsiStyle::DIM << " Canceled" << AnsiStyle::RESET << "\n";
         return;
     }
     if (isRejected) {
-        out_ << AnsiStyle::Semantic::TOOL_REJECTED << Figures::EMPTY_SET << " Rejected"
-             << AnsiStyle::RESET << "\n";
+        out_ << toolStateDot(false, false, false, true, false)
+             << AnsiStyle::DIM << " Rejected" << AnsiStyle::RESET << "\n";
         return;
     }
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET << " ";
+        out_ << toolStateDot(false, true, false, false, false) << " ";
         String shortResult = truncate(result, 200);
         out_ << AnsiStyle::DIM << shortResult << AnsiStyle::RESET;
     } else {
-        out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET << " ";
+        out_ << toolStateDot(false, false, false, false, false) << " ";
         String shortResult = truncate(result, 200);
         out_ << AnsiStyle::DIM << shortResult << AnsiStyle::RESET;
         if (durationSeconds > 0) {
@@ -236,11 +262,11 @@ void ToolStatusRenderer::renderToolResult(const String& toolName, const String& 
     if (isCancelled || isRejected) {
         renderPrefix();
         if (isCancelled) {
-            out_ << AnsiStyle::Semantic::TOOL_CANCELLED << Figures::EMPTY_SET << " Canceled"
-                 << AnsiStyle::RESET << "\n";
+            out_ << toolStateDot(false, false, true, false, false)
+                 << AnsiStyle::DIM << " Canceled" << AnsiStyle::RESET << "\n";
         } else {
-            out_ << AnsiStyle::Semantic::TOOL_REJECTED << Figures::EMPTY_SET << " Rejected"
-                 << AnsiStyle::RESET << "\n";
+            out_ << toolStateDot(false, false, false, true, false)
+                 << AnsiStyle::DIM << " Rejected" << AnsiStyle::RESET << "\n";
         }
         return;
     }
@@ -302,7 +328,7 @@ void ToolStatusRenderer::renderBashResult(const String& result, bool isError, do
     }
 
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << AnsiStyle::DIM << "Bash" << AnsiStyle::RESET;
         out_ << " " << AnsiStyle::Semantic::TOOL_ERROR << "exit " << exitCode << AnsiStyle::RESET;
         if (durationSeconds > 0) {
@@ -348,7 +374,7 @@ void ToolStatusRenderer::renderBashResult(const String& result, bool isError, do
             }
         }
     } else {
-        out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+        out_ << toolStateDot(false, false, false, false, false);
         out_ << " " << AnsiStyle::DIM << "Bash" << AnsiStyle::RESET;
         if (durationSeconds > 0) {
             out_ << AnsiStyle::DIM << " ran in " << AssistantMessageFormatter::formatDuration(durationSeconds)
@@ -378,13 +404,13 @@ void ToolStatusRenderer::renderBashResult(const String& result, bool isError, do
 
 void ToolStatusRenderer::renderReadResult(const String& result, const ToolInputInfo& info, bool isError) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
 
     int lineCount = countLines(result);
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "Read" << AnsiStyle::RESET;
 
     if (!info.filePath.empty()) {
@@ -396,12 +422,12 @@ void ToolStatusRenderer::renderReadResult(const String& result, const ToolInputI
 
 void ToolStatusRenderer::renderWriteResult(const String& result, const ToolInputInfo& info, bool isError) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "Write" << AnsiStyle::RESET;
 
     if (!info.filePath.empty()) {
@@ -412,12 +438,12 @@ void ToolStatusRenderer::renderWriteResult(const String& result, const ToolInput
 
 void ToolStatusRenderer::renderEditResult(const String& result, const ToolInputInfo& info, bool isError) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "Edit" << AnsiStyle::RESET;
 
     if (!info.filePath.empty()) {
@@ -469,7 +495,7 @@ void ToolStatusRenderer::renderEditResult(const String& result, const ToolInputI
 void ToolStatusRenderer::renderGrepResult(const String& result, const ToolInputInfo& info,
                                            bool isError, double durationSeconds) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
@@ -478,7 +504,7 @@ void ToolStatusRenderer::renderGrepResult(const String& result, const ToolInputI
     int matchCount = countLines(result);
     if (result.empty()) matchCount = 0;
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "Grep" << AnsiStyle::RESET;
 
     if (!info.pattern.empty()) {
@@ -500,7 +526,7 @@ void ToolStatusRenderer::renderGrepResult(const String& result, const ToolInputI
 
 void ToolStatusRenderer::renderGlobResult(const String& result, const ToolInputInfo& info, bool isError) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
@@ -508,7 +534,7 @@ void ToolStatusRenderer::renderGlobResult(const String& result, const ToolInputI
     int fileCount = countLines(result);
     if (result.empty()) fileCount = 0;
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "Glob" << AnsiStyle::RESET;
 
     if (!info.pattern.empty()) {
@@ -526,12 +552,12 @@ void ToolStatusRenderer::renderGlobResult(const String& result, const ToolInputI
 
 void ToolStatusRenderer::renderWebFetchResult(const String& result, bool isError, double durationSeconds) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "WebFetch" << AnsiStyle::RESET;
     if (durationSeconds > 0) {
         out_ << AnsiStyle::DIM << " in " << AssistantMessageFormatter::formatDuration(durationSeconds)
@@ -544,7 +570,7 @@ void ToolStatusRenderer::renderWebFetchResult(const String& result, bool isError
 
 void ToolStatusRenderer::renderWebSearchResult(const String& result, bool isError, double durationSeconds) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
@@ -552,7 +578,7 @@ void ToolStatusRenderer::renderWebSearchResult(const String& result, bool isErro
     // Count result items (search results typically have numbered items)
     int resultCount = countLines(result);
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "WebSearch" << AnsiStyle::RESET;
     if (resultCount > 0) {
         out_ << AnsiStyle::DIM << " (" << resultCount << " result" << (resultCount != 1 ? "s" : "") << ")"
@@ -567,12 +593,12 @@ void ToolStatusRenderer::renderWebSearchResult(const String& result, bool isErro
 
 void ToolStatusRenderer::renderLSPResult(const String& result, const ToolInputInfo& info, bool isError) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "LSP" << AnsiStyle::RESET;
     if (!info.filePath.empty()) {
         out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
@@ -582,13 +608,13 @@ void ToolStatusRenderer::renderLSPResult(const String& result, const ToolInputIn
 
 void ToolStatusRenderer::renderAgentResult(const String& result, bool isError, double durationSeconds) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << AnsiStyle::DIM << "Agent" << AnsiStyle::RESET;
         out_ << " " << truncate(result, 120) << AnsiStyle::RESET << "\n";
         return;
     }
 
-    out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+    out_ << toolStateDot(false, false, false, false, false);
     out_ << " " << AnsiStyle::DIM << "Agent" << AnsiStyle::RESET;
     if (durationSeconds > 0) {
         out_ << AnsiStyle::DIM << " in " << AssistantMessageFormatter::formatDuration(durationSeconds)
@@ -604,10 +630,10 @@ void ToolStatusRenderer::renderAgentResult(const String& result, bool isError, d
 
 void ToolStatusRenderer::renderGenericResult(const String& result, bool isError, double durationSeconds) {
     if (isError) {
-        out_ << AnsiStyle::Semantic::TOOL_ERROR << Figures::CROSS << AnsiStyle::RESET;
+        out_ << toolStateDot(false, true, false, false, false);
         out_ << " " << truncate(result, 200) << AnsiStyle::RESET << "\n";
     } else {
-        out_ << AnsiStyle::Semantic::TOOL_SUCCESS << Figures::CHECK << AnsiStyle::RESET;
+        out_ << toolStateDot(false, false, false, false, false);
         out_ << " " << AnsiStyle::DIM << truncate(result, 200) << AnsiStyle::RESET;
         if (durationSeconds > 0) {
             out_ << AnsiStyle::DIM << " in " << AssistantMessageFormatter::formatDuration(durationSeconds)
@@ -622,17 +648,17 @@ void ToolStatusRenderer::renderGenericResult(const String& result, bool isError,
 String ToolStatusRenderer::renderResult(const String& toolName, const String& result,
                                          bool isError, bool isCancelled, bool isRejected) {
     if (isCancelled) {
-        return String(AnsiStyle::DIM) + Figures::EMPTY_SET + " Canceled" + AnsiStyle::RESET;
+        return toolStateDot(false, false, true, false, false) + String(AnsiStyle::DIM) + " Canceled" + AnsiStyle::RESET;
     }
     if (isRejected) {
-        return String(AnsiStyle::Semantic::TOOL_REJECTED) + Figures::EMPTY_SET + " Rejected" + AnsiStyle::RESET;
+        return toolStateDot(false, false, false, true, false) + String(AnsiStyle::DIM) + " Rejected" + AnsiStyle::RESET;
     }
     if (isError) {
         String truncated = result.size() > 200 ? result.substr(0, 200) + "..." : result;
-        return String(AnsiStyle::RED) + Figures::CROSS + " " + truncated + AnsiStyle::RESET;
+        return toolStateDot(false, true, false, false, false) + " " + truncated + AnsiStyle::RESET;
     }
-    // Success — green check + result
-    return String(AnsiStyle::GREEN) + Figures::CHECK + " " + result + AnsiStyle::RESET;
+    // Success — green dot + result
+    return toolStateDot(false, false, false, false, false) + " " + result + AnsiStyle::RESET;
 }
 
 String ToolStatusRenderer::formatToolSummary(const String& toolName, const String& result,

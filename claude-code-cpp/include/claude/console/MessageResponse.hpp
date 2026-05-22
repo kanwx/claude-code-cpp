@@ -19,6 +19,8 @@ struct Figures {
     static constexpr const char* CHECK = "✓";             // Success
     static constexpr const char* CROSS = "✗";             // Error
     static constexpr const char* EMPTY_SET = "⊘";         // Cancelled/Rejected
+    static constexpr const char* HOLLOW_CIRCLE = "○";     // In-progress (hollow)
+    static constexpr const char* SMALL_BULLET = "•";      // Completed (small)
     static constexpr const char* ARROW_RIGHT = "→";       // Continuation
 };
 

@@ -2,6 +2,7 @@
 
 #include "../core/Types.hpp"
 
+#include <chrono>
 #include <ostream>
 #include <vector>
 #include <map>
@@ -63,6 +64,12 @@ public:
     static String renderResult(const String& toolName, const String& result,
                                bool isError, bool isCancelled, bool isRejected);
 
+    /// Per-tool state dot: ●/○ blinking (in-progress), • (completed),
+    /// ✗ (error), ⊘ (cancelled/rejected)
+    static String toolStateDot(bool isInProgress, bool isError,
+                               bool isCancelled, bool isRejected,
+                               bool shouldAnimate);
+
     /// Set an optional ToolRegistry for dispatching to custom Tool::renderToolResult()
     void setToolRegistry(ToolRegistry* registry) { toolRegistry_ = registry; }
 
@@ -93,5 +100,9 @@ private:
     std::ostream& out_;
     ToolRegistry* toolRegistry_ = nullptr;
 };
+
+/// Determine if animation should be active
+/// Disabled during transcript mode or when a permission dialog is open
+bool shouldAnimate(bool permissionDialogOpen, bool transcriptMode);
 
 } // namespace claude
