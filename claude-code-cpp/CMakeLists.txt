@@ -305,6 +305,7 @@ set(API_SOURCES
     src/api/RetryableClient.cpp
     src/api/RateLimitTracker.cpp
     src/api/MessageRepair.cpp
+    src/api/ApiDebugTracker.cpp
 )
 
 # REPL源文件

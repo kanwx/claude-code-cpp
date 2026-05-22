@@ -214,11 +214,22 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
 
     String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
 
+    // Debug tracking
+    auto callStart = std::chrono::steady_clock::now();
+
     auto res = httpClient_->Post(path.c_str(), headers, body, "application/json");
+
+    auto callEnd = std::chrono::steady_clock::now();
 
     if (!res) {
         circuitBreaker_.recordFailure();
         auto err = httplib::to_string(res.error());
+
+        ApiDebugTracker::instance().recordCall({
+            "call", model_, getProviderName(), callStart, callEnd,
+            0, 0, 0, false, err
+        });
+
         return std::unexpected("HTTP request failed: " + err);
     }
 
@@ -229,7 +240,14 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
 
     if (res->status != 200) {
         circuitBreaker_.recordFailure();
-        return std::unexpected("API error: " + std::to_string(res->status) + " - " + res->body);
+        String errMsg = "API error: " + std::to_string(res->status) + " - " + res->body.substr(0, 200);
+
+        ApiDebugTracker::instance().recordCall({
+            "call", model_, getProviderName(), callStart, callEnd,
+            0, 0, res->status, false, errMsg
+        });
+
+        return std::unexpected(errMsg);
     }
 
     // Success — record in circuit breaker and cache
@@ -239,8 +257,21 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
         apiCache_.cacheResponse(cacheKey, res->body);
     }
 
+    // Parse response and extract token counts for debug tracking
     try {
-        return Json::parse(res->body);
+        auto response = Json::parse(res->body);
+        int inputTokens = 0, outputTokens = 0;
+        if (response.contains("usage")) {
+            inputTokens = response["usage"].value("input_tokens", 0);
+            outputTokens = response["usage"].value("output_tokens", 0);
+        }
+
+        ApiDebugTracker::instance().recordCall({
+            "call", model_, getProviderName(), callStart, callEnd,
+            inputTokens, outputTokens, 200, true, ""
+        });
+
+        return response;
     } catch (const Json::parse_error& e) {
         return std::unexpected("JSON parse error: " + String(e.what()));
     }
