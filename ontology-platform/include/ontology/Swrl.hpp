@@ -290,6 +290,9 @@ public:
     static bool stringEqualIgnoreCase(const String& a, const String& b);
     static bool stringConcat(const String& a, const String& b, String& result);
     static bool stringLength(const String& s, int& length);
+    static bool substring(const String& s, const String& startIndex, const String& len, String& result);
+    static bool upperCase(const String& s, String& result);
+    static bool lowerCase(const String& s, String& result);
     static bool contains(const String& s, const String& substr);
     static bool startsWith(const String& s, const String& prefix);
     static bool endsWith(const String& s, const String& suffix);
@@ -300,8 +303,12 @@ public:
     static bool subtract(const String& a, const String& b, String& result);
     static bool multiply(const String& a, const String& b, String& result);
     static bool divide(const String& a, const String& b, String& result);
+    static bool mod(const String& a, const String& b, String& result);
     static bool abs(const String& a, String& result);
     static bool sqrt(const String& a, String& result);
+    static bool ceiling(const String& a, String& result);
+    static bool floor(const String& a, String& result);
+    static bool round(const String& a, String& result);
 
     /// 日期时间函数
     static bool year(const String& date, String& result);

@@ -1121,6 +1121,32 @@ bool SwrlBuiltIns::matches(const String& s, const String& pattern) {
     }
 }
 
+bool SwrlBuiltIns::substring(const String& s, const String& startIndex, const String& len, String& result) {
+    try {
+        int start = std::stoi(startIndex) - 1; // SPARQL/SWRL is 1-indexed
+        int length = std::stoi(len);
+        if (start < 0) start = 0;
+        if (start >= static_cast<int>(s.size())) return false;
+        if (start + length > static_cast<int>(s.size())) length = static_cast<int>(s.size()) - start;
+        result = s.substr(start, length);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SwrlBuiltIns::upperCase(const String& s, String& result) {
+    result = s;
+    std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+    return true;
+}
+
+bool SwrlBuiltIns::lowerCase(const String& s, String& result) {
+    result = s;
+    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return true;
+}
+
 bool SwrlBuiltIns::add(const String& a, const String& b, String& result) {
     try {
         result = std::to_string(std::stod(a) + std::stod(b));
@@ -1173,6 +1199,44 @@ bool SwrlBuiltIns::sqrt(const String& a, String& result) {
         double val = std::stod(a);
         if (val < 0) return false;
         result = std::to_string(std::sqrt(val));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SwrlBuiltIns::mod(const String& a, const String& b, String& result) {
+    try {
+        double bVal = std::stod(b);
+        if (bVal == 0) return false;
+        result = std::to_string(std::fmod(std::stod(a), bVal));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SwrlBuiltIns::ceiling(const String& a, String& result) {
+    try {
+        result = std::to_string(std::ceil(std::stod(a)));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SwrlBuiltIns::floor(const String& a, String& result) {
+    try {
+        result = std::to_string(std::floor(std::stod(a)));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SwrlBuiltIns::round(const String& a, String& result) {
+    try {
+        result = std::to_string(std::round(std::stod(a)));
         return true;
     } catch (...) {
         return false;
@@ -1312,6 +1376,46 @@ bool SwrlBuiltIns::execute(
     if (localName == "stringEqualIgnoreCase" && args.size() >= 2) {
         return stringEqualIgnoreCase(args[0], args[1]);
     }
+    if (localName == "stringConcat" && args.size() >= 2) {
+        String res;
+        if (stringConcat(args[0], args[1], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "stringLength" && args.size() >= 1) {
+        int len = 0;
+        if (stringLength(args[0], len)) {
+            results.push_back(std::to_string(len));
+            return true;
+        }
+        return false;
+    }
+    if (localName == "substring" && args.size() >= 3) {
+        String res;
+        if (substring(args[0], args[1], args[2], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "upperCase" && args.size() >= 1) {
+        String res;
+        if (upperCase(args[0], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "lowerCase" && args.size() >= 1) {
+        String res;
+        if (lowerCase(args[0], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
 
     // 数值函数
     if (localName == "add" && args.size() >= 2) {
@@ -1357,6 +1461,38 @@ bool SwrlBuiltIns::execute(
     if (localName == "sqrt" && args.size() >= 1) {
         String res;
         if (sqrt(args[0], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "mod" && args.size() >= 2) {
+        String res;
+        if (mod(args[0], args[1], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "ceiling" && args.size() >= 1) {
+        String res;
+        if (ceiling(args[0], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "floor" && args.size() >= 1) {
+        String res;
+        if (floor(args[0], res)) {
+            results.push_back(res);
+            return true;
+        }
+        return false;
+    }
+    if (localName == "round" && args.size() >= 1) {
+        String res;
+        if (round(args[0], res)) {
             results.push_back(res);
             return true;
         }
