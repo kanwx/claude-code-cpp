@@ -39,3 +39,16 @@ add_test(NAME hybrid_reasoner COMMAND test_hybrid_reasoner)
 add_executable(test_config test_config.cpp)
 target_link_libraries(test_config PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME config COMMAND test_config)
+
+# SPARQL tests
+add_executable(test_sparql_lexer test_sparql_lexer.cpp)
+target_link_libraries(test_sparql_lexer PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME sparql_lexer COMMAND test_sparql_lexer)
+
+add_executable(test_sparql_parser test_sparql_parser.cpp)
+target_link_libraries(test_sparql_parser PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME sparql_parser COMMAND test_sparql_parser)
+
+add_executable(test_sparql_executor test_sparql_executor.cpp)
+target_link_libraries(test_sparql_executor PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME sparql_executor COMMAND test_sparql_executor)
