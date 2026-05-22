@@ -219,4 +219,16 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
     return result.str();
 }
 
+String FileEditTool::renderToolResult(const String& result, bool isError,
+                                      bool isCancelled, bool isRejected) const {
+    if (isError || isCancelled || isRejected) return "";
+    auto pos = result.find("Applied edit");
+    if (pos != String::npos) {
+        auto lineEnd = result.find('\n', pos);
+        if (lineEnd == String::npos) lineEnd = result.size();
+        return result.substr(pos, lineEnd - pos);
+    }
+    return "Edit applied";
+}
+
 } // namespace claude

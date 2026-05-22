@@ -42,6 +42,9 @@ public:
     }
 
     bool alwaysLoad() const override { return true; }
+
+    String renderToolResult(const String& result, bool isError,
+                            bool isCancelled, bool isRejected) const override;
 };
 
 } // namespace claude
