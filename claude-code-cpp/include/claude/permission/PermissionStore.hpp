@@ -41,6 +41,15 @@ public:
     /// Get all saved decisions (for debugging / settings display)
     std::map<String, PermissionChoice> getAll() const;
 
+    /// Load built-in default path rules.
+    /// These provide sensible defaults like auto-deny writes to /etc/,
+    /// auto-allow reads of project files, etc.
+    void loadDefaultRules();
+
+    /// Add a default path rule (called during initialization).
+    /// Format: "ToolName:path/pattern" → PermissionChoice
+    void addDefaultRule(const String& toolName, const String& pathPattern, PermissionChoice choice);
+
 private:
     PermissionStore() = default;
 

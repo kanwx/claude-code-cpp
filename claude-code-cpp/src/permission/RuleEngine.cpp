@@ -545,8 +545,15 @@ String RuleEngine::extractCommand(const String& toolName, const Json& input) con
 
     if (toolName == "Bash") {
         return input.value("command", "");
-    } else if (toolName == "Write" || toolName == "Edit") {
+    } else if (toolName == "Write" || toolName == "Edit" || toolName == "NotebookEdit") {
         return input.value("file_path", "");
+    } else if (toolName == "Read" || toolName == "Glob" || toolName == "Grep") {
+        // Extract file path for read-only tools — needed for path-based permission rules
+        if (input.contains("file_path")) return input.value("file_path", "");
+        if (input.contains("path")) return input.value("path", "");
+        if (toolName == "Glob" && input.contains("pattern")) return input.value("pattern", "");
+        if (toolName == "Grep" && input.contains("path")) return input.value("path", "");
+        return "";
     } else if (toolName.starts_with("mcp__")) {
         // MCP tools: extract the tool invocation details
         // The command for MCP tools is derived from the input arguments

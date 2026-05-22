@@ -8,6 +8,29 @@ const std::vector<String> MicroCompact::HIGH_COMPACT_PRIORITY = {
     "Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Edit", "Write"
 };
 
+const std::vector<String> MicroCompact::HIGH_IMPORTANCE_TOOLS = {
+    "Edit", "Write", "NotebookEdit", "Agent"
+};
+
+const std::vector<String> MicroCompact::LOW_IMPORTANCE_TOOLS = {
+    "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "ListFiles"
+};
+
+int MicroCompact::importanceScore(const String& toolName) {
+    // High importance: edits, writes, agents — these are the user's actual work
+    for (const auto& t : HIGH_IMPORTANCE_TOOLS) {
+        if (toolName == t) return 10;
+    }
+    // Medium importance: reads — context needed for current task
+    if (toolName == "Read") return 7;
+    // Low importance: search/list — can be re-derived
+    for (const auto& t : LOW_IMPORTANCE_TOOLS) {
+        if (toolName == t) return 3;
+    }
+    // Unknown tools get medium importance
+    return 5;
+}
+
 int MicroCompact::apply(std::vector<Message>& history) {
     return apply(history, std::chrono::minutes(60), 3);
 }
@@ -162,6 +185,76 @@ bool MicroCompact::shouldCompact(const Message& msg, std::chrono::minutes ageThr
 String MicroCompact::createPlaceholder(const String& toolName, size_t originalSize) {
     return "[Old tool result content cleared — original size: " +
            std::to_string(originalSize) + " chars]";
+}
+
+int MicroCompact::applyByImportance(std::vector<Message>& history, double usageRatio, int keepLast) {
+    if (history.size() <= static_cast<size_t>(keepLast + 1)) return 0;
+    if (usageRatio < 0.70) return 0;
+
+    size_t skipFrom = history.size() - static_cast<size_t>(keepLast);
+
+    // Collect compactable messages with their importance scores
+    struct Candidate {
+        size_t index;
+        int score;
+        size_t contentSize;
+    };
+    std::vector<Candidate> candidates;
+
+    for (size_t i = 1; i < skipFrom; ++i) {
+        auto& msg = history[i];
+        if (msg.role != MessageRole::ToolResult) continue;
+        if (msg.content.find("tool result content cleared") != String::npos) continue;
+        if (msg.content.length() <= 500) continue;
+        if (msg.metadata.count("cache_control") || msg.metadata.count("cache_breakpoint")) continue;
+
+        String toolName;
+        if (!msg.toolResults.empty()) {
+            toolName = msg.toolResults[0].toolName;
+        }
+        candidates.push_back({i, importanceScore(toolName), msg.content.length()});
+    }
+
+    if (candidates.empty()) return 0;
+
+    // Sort by importance score (lowest first = compact first), then by size (largest first)
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        if (a.score != b.score) return a.score < b.score;
+        return a.contentSize > b.contentSize;
+    });
+
+    // Determine how many to compact based on pressure
+    int targetCompactions;
+    if (usageRatio >= 0.90) {
+        targetCompactions = static_cast<int>(candidates.size());
+    } else if (usageRatio >= 0.85) {
+        targetCompactions = static_cast<int>(candidates.size() * 0.75);
+    } else {
+        targetCompactions = static_cast<int>(candidates.size() * 0.5);
+    }
+
+    // Only compact low-importance results at lower pressure
+    if (usageRatio < 0.85) {
+        // Skip high-importance tools at lower pressure
+        auto it = std::remove_if(candidates.begin(), candidates.begin() + targetCompactions,
+            [](const Candidate& c) { return c.score >= 10; });
+        targetCompactions = static_cast<int>(it - candidates.begin());
+    }
+
+    int compacted = 0;
+    for (int i = 0; i < targetCompactions && i < static_cast<int>(candidates.size()); ++i) {
+        auto& msg = history[candidates[i].index];
+        String toolName;
+        if (!msg.toolResults.empty()) toolName = msg.toolResults[0].toolName;
+        msg.content = createPlaceholder(toolName.empty() ? "tool" : toolName, candidates[i].contentSize);
+        compacted++;
+    }
+
+    if (compacted > 0) {
+        spdlog::info("MicroCompact (importance): compacted {} results (pressure={}%, scored by importance)",
+            compacted, static_cast<int>(usageRatio * 100));
+    }
+    return compacted;
 }
 
 } // namespace claude::compact

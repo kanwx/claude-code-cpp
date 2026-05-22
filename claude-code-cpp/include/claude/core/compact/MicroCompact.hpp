@@ -10,6 +10,12 @@ public:
     /// Tool names whose results should be compacted first when under pressure.
     static const std::vector<String> HIGH_COMPACT_PRIORITY;
 
+    /// Tool names whose results are HIGH importance (compact last, preserve longest).
+    static const std::vector<String> HIGH_IMPORTANCE_TOOLS;
+
+    /// Tool names whose results are LOW importance (compact first).
+    static const std::vector<String> LOW_IMPORTANCE_TOOLS;
+
     /// Default: time-based (60 min) + keep last 3
     static int apply(std::vector<Message>& history);
 
@@ -28,6 +34,14 @@ public:
     /// Skips already-compacted results (containing "[Old tool result content cleared").
     /// Skips results smaller than 500 chars. Keeps last 5 messages.
     static int applyByToolName(std::vector<Message>& history, const std::vector<String>& toolNames, int keepLast = 5);
+
+    /// Importance-aware compaction: compact low-importance tools first,
+    /// then medium, then high. Respects cache breakpoints.
+    /// Returns number of messages compacted.
+    static int applyByImportance(std::vector<Message>& history, double usageRatio, int keepLast = 5);
+
+    /// Get importance score for a tool name (0=lowest, 10=highest).
+    static int importanceScore(const String& toolName);
 
     static bool shouldCompact(const Message& msg, std::chrono::minutes ageThreshold);
     static String createPlaceholder(const String& toolName, size_t originalSize);

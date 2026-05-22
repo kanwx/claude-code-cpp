@@ -192,4 +192,33 @@ std::map<String, PermissionChoice> PermissionStore::getAll() const {
     return decisions_;
 }
 
+void PermissionStore::addDefaultRule(const String& toolName, const String& pathPattern, PermissionChoice choice) {
+    String key = makeKey(toolName, pathPattern);
+    std::lock_guard lock(mutex_);
+    // Don't overwrite user decisions
+    if (decisions_.find(key) == decisions_.end()) {
+        decisions_[key] = choice;
+    }
+}
+
+void PermissionStore::loadDefaultRules() {
+    // System-critical paths: auto-deny writes
+    addDefaultRule("Write", "/etc/", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Write", "/usr/", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Write", "/System/", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Write", "~/Library/", PermissionChoice::AlwaysDeny);
+
+    addDefaultRule("Edit", "/etc/", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Edit", "/usr/", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Edit", "/System/", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Edit", "~/Library/", PermissionChoice::AlwaysDeny);
+
+    addDefaultRule("Bash", "rm -rf /", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Bash", "sudo rm -rf", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Bash", "mkfs.", PermissionChoice::AlwaysDeny);
+    addDefaultRule("Bash", "dd if=", PermissionChoice::AlwaysDeny);
+
+    spdlog::debug("PermissionStore: loaded default path rules");
+}
+
 } // namespace claude

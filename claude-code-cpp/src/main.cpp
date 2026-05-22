@@ -508,6 +508,7 @@ private:
 
         // Load persisted permission decisions from ~/.claude/permissions.json
         PermissionStore::instance().load();
+        PermissionStore::instance().loadDefaultRules();
 
         // 应用权限模式
         if (dangerouslySkipPermissions_) {
