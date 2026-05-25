@@ -123,6 +123,8 @@
 #include <claude/command/impl/FinalCommands.hpp>
 #include <claude/command/impl/FinalTwoCommands.hpp>
 #include <claude/utils/I18n.hpp>
+#include <claude/mcp/McpManager.hpp>
+#include <claude/mcp/McpClient.hpp>
 
 // FTXUI support (optional)
 #ifdef HAS_FTXUI
@@ -553,6 +555,9 @@ private:
         // 初始化 AgentLoop
         initAgentLoop();
 
+        // Auto-start MCP servers from config
+        initMcp();
+
         spdlog::debug("Claude Code C++ initialized");
     }
 
@@ -773,6 +778,15 @@ private:
             *tokenTracker_
         );
 
+        // Wire system prompt blocks with cache_control markers for prompt caching.
+        // This preserves the static/dynamic cache boundary and enables the API
+        // client to send the system prompt as content blocks with cache_control,
+        // rather than a flat string that loses all cache breakpoint information.
+        auto systemBlocks = config_->getSystemPromptBlocks();
+        if (!systemBlocks.empty()) {
+            agentLoop_->setSystemBlocks(std::move(systemBlocks));
+        }
+
         // Wire up signal handler global for Ctrl+C cancel
         g_agentLoop = agentLoop_.get();
 
@@ -793,6 +807,48 @@ private:
 
         // 设置回调
         setupCallbacks();
+    }
+
+    void initMcp() {
+        // Read MCP server config from ~/.claude/mcp_settings.json
+        auto homeDir = std::getenv("HOME");
+        if (!homeDir) return;
+
+        auto mcpSettingsPath = std::filesystem::path(homeDir) / ".claude" / "mcp_settings.json";
+        if (!std::filesystem::exists(mcpSettingsPath)) return;
+
+        try {
+            std::ifstream ifs(mcpSettingsPath);
+            if (!ifs) return;
+            auto settings = Json::parse(ifs);
+
+            if (!settings.contains("mcpServers") || !settings["mcpServers"].is_object()) return;
+
+            mcpManager_ = std::make_shared<McpManager>();
+            int started = 0;
+
+            for (auto& [name, serverConfig] : settings["mcpServers"].items()) {
+                if (!serverConfig.is_object()) continue;
+
+                try {
+                    auto client = createMcpClientFromConfig(serverConfig);
+                    if (client) {
+                        mcpManager_->addServer(name, std::move(client));
+                        started++;
+                        spdlog::info("MCP server '{}' started", name);
+                    }
+                } catch (const std::exception& e) {
+                    spdlog::warn("MCP server '{}' failed to start: {}", name, e.what());
+                }
+            }
+
+            if (started > 0) {
+                toolRegistry_->registerMcpTools(mcpManager_);
+                spdlog::info("MCP: {} server(s) started, tools registered", started);
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Failed to load MCP settings: {}", e.what());
+        }
     }
 
     void setupCallbacks() {
@@ -1204,6 +1260,7 @@ private:
 
     ApiClient* apiClient_ = nullptr;
     std::unique_ptr<ApiClient> apiClientHolder_;
+    std::shared_ptr<McpManager> mcpManager_;
 
     static String truncateToolInput(const String& input, size_t maxLen) {
         if (input.size() <= maxLen) return input;
