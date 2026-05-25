@@ -76,3 +76,8 @@ add_test(NAME inference_integration COMMAND test_inference_integration2)
 add_executable(test_class_expression test_class_expression.cpp)
 target_link_libraries(test_class_expression PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME class_expression COMMAND test_class_expression)
+
+# 单元测试: SPARQL named graph operations
+add_executable(test_sparql_named_graphs test_sparql_named_graphs.cpp)
+target_link_libraries(test_sparql_named_graphs PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME sparql_named_graphs COMMAND test_sparql_named_graphs)

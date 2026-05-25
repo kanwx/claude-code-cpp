@@ -2,6 +2,8 @@
 
 #include "SparqlExecutor.hpp"
 #include <ontology/Storage.hpp>
+#include <unordered_map>
+#include <memory>
 
 namespace ontology::sparql {
 
@@ -26,9 +28,16 @@ public:
     /// Get SPARQL service description
     Json getServiceDescription() const;
 
+    /// Named graph management
+    bool hasNamedGraph(const String& graphIri) const;
+    TripleStore* getNamedGraph(const String& graphIri);
+    const TripleStore* getNamedGraph(const String& graphIri) const;
+    std::vector<String> listNamedGraphs() const;
+
 private:
     StoragePtr storage_;
     std::unique_ptr<SparqlExecutor> executor_;
+    std::unordered_map<String, std::unique_ptr<TripleStore>> namedGraphs_;
 
     // SPARQL Update parsing and execution
     struct SparqlUpdate {

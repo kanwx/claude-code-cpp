@@ -229,6 +229,14 @@ std::optional<SparqlEndpoint::SparqlUpdate> SparqlEndpoint::parseUpdate(const St
     skipWs();
     String keyword = toUpper(readWord());
 
+    bool silent = false;
+    if (keyword == "SILENT") {
+        silent = true;
+        update.silent = true;
+        skipWs();
+        keyword = toUpper(readWord());
+    }
+
     if (keyword == "INSERT") {
         skipWs();
         String next = toUpper(readWord());
@@ -300,6 +308,11 @@ std::optional<SparqlEndpoint::SparqlUpdate> SparqlEndpoint::parseUpdate(const St
         update.type = SparqlUpdate::Drop;
         skipWs();
         String g = toUpper(readWord());
+        if (g == "SILENT") {
+            update.silent = true;
+            skipWs();
+            g = toUpper(readWord());
+        }
         if (g == "GRAPH") {
             update.graph = readIri();
         }
@@ -495,13 +508,37 @@ bool SparqlEndpoint::executeUpdate(const SparqlUpdate& update) {
             return true;
         }
 
-        case SparqlUpdate::Drop:
-        case SparqlUpdate::Create:
+        case SparqlUpdate::Create: {
+            if (!update.graph.empty()) {
+                if (namedGraphs_.find(update.graph) == namedGraphs_.end()) {
+                    namedGraphs_[update.graph] = std::make_unique<TripleStore>();
+                }
+            }
+            return true;
+        }
+
+        case SparqlUpdate::Drop: {
+            if (!update.graph.empty()) {
+                auto it = namedGraphs_.find(update.graph);
+                if (it != namedGraphs_.end()) {
+                    namedGraphs_.erase(it);
+                    return true;
+                }
+                return update.silent;
+            }
+            // DROP DEFAULT = clear the default store
+            if (storage_) {
+                storage_->clear();
+                return true;
+            }
+            return update.silent;
+        }
+
         case SparqlUpdate::Load:
         case SparqlUpdate::Copy:
         case SparqlUpdate::Move:
         case SparqlUpdate::Add: {
-            // Named graph operations — not yet supported
+            // Named graph operations — implemented in Task 4
             return true;
         }
     }
@@ -539,6 +576,32 @@ Json SparqlEndpoint::getServiceDescription() const {
             "COPY", "MOVE", "ADD"
         }}
     };
+}
+
+// ============================================================================
+// Named graph accessors
+// ============================================================================
+
+bool SparqlEndpoint::hasNamedGraph(const String& graphIri) const {
+    return namedGraphs_.find(graphIri) != namedGraphs_.end();
+}
+
+TripleStore* SparqlEndpoint::getNamedGraph(const String& graphIri) {
+    auto it = namedGraphs_.find(graphIri);
+    return it != namedGraphs_.end() ? it->second.get() : nullptr;
+}
+
+const TripleStore* SparqlEndpoint::getNamedGraph(const String& graphIri) const {
+    auto it = namedGraphs_.find(graphIri);
+    return it != namedGraphs_.end() ? it->second.get() : nullptr;
+}
+
+std::vector<String> SparqlEndpoint::listNamedGraphs() const {
+    std::vector<String> result;
+    for (const auto& [iri, _] : namedGraphs_) {
+        result.push_back(iri);
+    }
+    return result;
 }
 
 } // namespace ontology::sparql
