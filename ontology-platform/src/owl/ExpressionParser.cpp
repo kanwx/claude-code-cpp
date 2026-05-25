@@ -3,6 +3,7 @@
 #include <sstream>
 #include <cctype>
 #include <stdexcept>
+#include <functional>
 
 namespace ontology {
 
@@ -291,228 +292,199 @@ ClassExpressionPtr ManchesterParser::parseRestriction(
 // OWL 2 Functional Syntax 解析器实现
 // ============================================================================
 
+namespace {
+struct FsToken {
+    enum Type { LPAREN, RPAREN, IRI, KEYWORD, INTEGER, EOF_ };
+    Type type;
+    String value;
+    int intValue = 0;
+};
+
+std::vector<FsToken> fsTokenize(const String& input) {
+    std::vector<FsToken> tokens;
+    size_t pos = 0;
+
+    while (pos < input.size()) {
+        while (pos < input.size() && std::isspace(input[pos])) pos++;
+        if (pos >= input.size()) break;
+
+        if (input[pos] == '(') {
+            tokens.push_back({FsToken::LPAREN, "(", 0});
+            pos++;
+        } else if (input[pos] == ')') {
+            tokens.push_back({FsToken::RPAREN, ")", 0});
+            pos++;
+        } else if (input[pos] == '<') {
+            pos++;
+            String iri;
+            while (pos < input.size() && input[pos] != '>') {
+                iri += input[pos++];
+            }
+            if (pos < input.size()) pos++;
+            tokens.push_back({FsToken::IRI, iri, 0});
+        } else if (std::isdigit(input[pos])) {
+            String num;
+            while (pos < input.size() && std::isdigit(input[pos])) {
+                num += input[pos++];
+            }
+            tokens.push_back({FsToken::INTEGER, num, std::stoi(num)});
+        } else if (std::isalpha(input[pos])) {
+            String kw;
+            while (pos < input.size() && (std::isalnum(input[pos]) || input[pos] == '_')) {
+                kw += input[pos++];
+            }
+            tokens.push_back({FsToken::KEYWORD, kw, 0});
+        } else {
+            pos++;
+        }
+    }
+    tokens.push_back({FsToken::EOF_, "", 0});
+    return tokens;
+}
+} // anonymous namespace
+
 ClassExpressionPtr FunctionalSyntaxParser::parse(const String& input) {
-    // 简化实现：支持基本 OWL 2 Functional Syntax
-    // 完整实现需要完整的词法分析器和递归下降解析器
+    auto tokens = fsTokenize(input);
+    size_t pos = 0;
 
-    String trimmed = input;
-    // 去除前后空格
-    while (!trimmed.empty() && std::isspace(trimmed.front())) trimmed.erase(0, 1);
-    while (!trimmed.empty() && std::isspace(trimmed.back())) trimmed.pop_back();
+    auto peek = [&]() -> const FsToken& { return tokens[pos]; };
+    auto advance = [&]() { pos++; };
 
-    // owl:Thing
-    if (trimmed == "owl:Thing") {
+    std::function<ClassExpressionPtr()> parseExpr = [&]() -> ClassExpressionPtr {
+        auto tok = peek();
+
+        if (tok.type == FsToken::IRI) {
+            advance();
+            return ClassExpression::atomic(tok.value);
+        }
+
+        if (tok.type == FsToken::KEYWORD) {
+            String kw = tok.value;
+            advance();
+
+            if (peek().type == FsToken::LPAREN) advance();
+
+            if (kw == "ObjectIntersectionOf") {
+                std::vector<ClassExpressionPtr> ops;
+                while (peek().type != FsToken::RPAREN && peek().type != FsToken::EOF_) {
+                    ops.push_back(parseExpr());
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::intersection(ops);
+            }
+            else if (kw == "ObjectUnionOf") {
+                std::vector<ClassExpressionPtr> ops;
+                while (peek().type != FsToken::RPAREN && peek().type != FsToken::EOF_) {
+                    ops.push_back(parseExpr());
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::union_(ops);
+            }
+            else if (kw == "ObjectComplementOf") {
+                auto inner = parseExpr();
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::complement(inner);
+            }
+            else if (kw == "ObjectOneOf") {
+                std::vector<String> indivs;
+                while (peek().type != FsToken::RPAREN && peek().type != FsToken::EOF_) {
+                    if (peek().type == FsToken::IRI) {
+                        indivs.push_back(peek().value);
+                    }
+                    advance();
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::oneOf(indivs);
+            }
+            else if (kw == "ObjectSomeValuesFrom") {
+                String prop = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                auto filler = parseExpr();
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::someValuesFrom(prop, filler);
+            }
+            else if (kw == "ObjectAllValuesFrom") {
+                String prop = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                auto filler = parseExpr();
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::allValuesFrom(prop, filler);
+            }
+            else if (kw == "ObjectHasValue") {
+                String prop = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                String val = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::hasValue(prop, val);
+            }
+            else if (kw == "ObjectMinCardinality") {
+                int n = peek().type == FsToken::INTEGER ? peek().intValue : 0;
+                advance();
+                String prop = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                ClassExpressionPtr filler = nullptr;
+                if (peek().type != FsToken::RPAREN && peek().type != FsToken::EOF_) {
+                    filler = parseExpr();
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::minCardinality(prop, n, filler);
+            }
+            else if (kw == "ObjectMaxCardinality") {
+                int n = peek().type == FsToken::INTEGER ? peek().intValue : 0;
+                advance();
+                String prop = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                ClassExpressionPtr filler = nullptr;
+                if (peek().type != FsToken::RPAREN && peek().type != FsToken::EOF_) {
+                    filler = parseExpr();
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::maxCardinality(prop, n, filler);
+            }
+            else if (kw == "ObjectExactCardinality") {
+                int n = peek().type == FsToken::INTEGER ? peek().intValue : 0;
+                advance();
+                String prop = peek().type == FsToken::IRI ? peek().value : String();
+                advance();
+                ClassExpressionPtr filler = nullptr;
+                if (peek().type != FsToken::RPAREN && peek().type != FsToken::EOF_) {
+                    filler = parseExpr();
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::exactCardinality(prop, n, filler);
+            }
+            else if (kw == "owl:Thing" || kw == "Thing") {
+                return ClassExpression::top();
+            }
+            else if (kw == "owl:Nothing" || kw == "Nothing") {
+                return ClassExpression::bottom();
+            }
+            else if (kw == "DataSomeValuesFrom" || kw == "DataAllValuesFrom"
+                     || kw == "DataHasValue" || kw == "DataMinCardinality"
+                     || kw == "DataMaxCardinality" || kw == "DataExactCardinality"
+                     || kw == "DatatypeRestriction") {
+                // Skip data-related expressions — consume until matching RPAREN
+                int depth = 1;
+                while (pos < tokens.size() && depth > 0) {
+                    if (peek().type == FsToken::LPAREN) depth++;
+                    else if (peek().type == FsToken::RPAREN) { depth--; if (depth == 0) break; }
+                    advance();
+                }
+                if (peek().type == FsToken::RPAREN) advance();
+                return ClassExpression::top();
+            }
+
+            // Unknown keyword — treat as atomic class name
+            return ClassExpression::atomic(kw);
+        }
+
+        // Fallback
+        advance();
         return ClassExpression::top();
-    }
+    };
 
-    // owl:Nothing
-    if (trimmed == "owl:Nothing") {
-        return ClassExpression::bottom();
-    }
-
-    // 原子类 (带冒号前缀)
-    if (trimmed.find(":") == 0) {
-        return ClassExpression::atomic(trimmed.substr(1));
-    }
-
-    // ObjectIntersectionOf(...)
-    if (trimmed.find("ObjectIntersectionOf(") == 0) {
-        // 提取参数
-        size_t start = 20; // "ObjectIntersectionOf(" 的长度
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectIntersectionOf");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        // 简化：按空格分割（实际需要处理嵌套括号）
-        std::vector<ClassExpressionPtr> operands;
-        std::istringstream iss(content);
-        String token;
-        while (iss >> token) {
-            operands.push_back(parse(token));
-        }
-
-        return ClassExpression::intersection(operands);
-    }
-
-    // ObjectUnionOf(...)
-    if (trimmed.find("ObjectUnionOf(") == 0) {
-        size_t start = 14;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectUnionOf");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::vector<ClassExpressionPtr> operands;
-        std::istringstream iss(content);
-        String token;
-        while (iss >> token) {
-            operands.push_back(parse(token));
-        }
-
-        return ClassExpression::union_(operands);
-    }
-
-    // ObjectComplementOf(...)
-    if (trimmed.find("ObjectComplementOf(") == 0) {
-        size_t start = 19;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectComplementOf");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        return ClassExpression::complement(parse(content));
-    }
-
-    // ObjectSomeValuesFrom(:property :Class)
-    if (trimmed.find("ObjectSomeValuesFrom(") == 0) {
-        size_t start = 21;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectSomeValuesFrom");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::istringstream iss(content);
-        String propStr, fillerStr;
-        iss >> propStr >> fillerStr;
-
-        // 去除冒号前缀
-        String property = (propStr.find(":") == 0) ? propStr.substr(1) : propStr;
-
-        return ClassExpression::someValuesFrom(property, parse(fillerStr));
-    }
-
-    // ObjectAllValuesFrom(:property :Class)
-    if (trimmed.find("ObjectAllValuesFrom(") == 0) {
-        size_t start = 20;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectAllValuesFrom");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::istringstream iss(content);
-        String propStr, fillerStr;
-        iss >> propStr >> fillerStr;
-
-        String property = (propStr.find(":") == 0) ? propStr.substr(1) : propStr;
-
-        return ClassExpression::allValuesFrom(property, parse(fillerStr));
-    }
-
-    // ObjectHasValue(:property :individual)
-    if (trimmed.find("ObjectHasValue(") == 0) {
-        size_t start = 15;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectHasValue");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::istringstream iss(content);
-        String propStr, valStr;
-        iss >> propStr >> valStr;
-
-        String property = (propStr.find(":") == 0) ? propStr.substr(1) : propStr;
-        String value = (valStr.find(":") == 0) ? valStr.substr(1) : valStr;
-
-        return ClassExpression::hasValue(property, value);
-    }
-
-    // ObjectOneOf(:a :b :c)
-    if (trimmed.find("ObjectOneOf(") == 0) {
-        size_t start = 12;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectOneOf");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::vector<String> individuals;
-        std::istringstream iss(content);
-        String token;
-        while (iss >> token) {
-            individuals.push_back((token.find(":") == 0) ? token.substr(1) : token);
-        }
-
-        return ClassExpression::oneOf(individuals);
-    }
-
-    // ObjectMinCardinality(n :property :Class)
-    if (trimmed.find("ObjectMinCardinality(") == 0) {
-        size_t start = 21;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectMinCardinality");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::istringstream iss(content);
-        int n;
-        String propStr;
-        iss >> n >> propStr;
-
-        String property = (propStr.find(":") == 0) ? propStr.substr(1) : propStr;
-
-        String fillerStr;
-        if (iss >> fillerStr) {
-            return ClassExpression::minCardinality(property, n, parse(fillerStr));
-        }
-        return ClassExpression::minCardinality(property, n);
-    }
-
-    // ObjectMaxCardinality(n :property :Class)
-    if (trimmed.find("ObjectMaxCardinality(") == 0) {
-        size_t start = 21;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectMaxCardinality");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::istringstream iss(content);
-        int n;
-        String propStr;
-        iss >> n >> propStr;
-
-        String property = (propStr.find(":") == 0) ? propStr.substr(1) : propStr;
-
-        String fillerStr;
-        if (iss >> fillerStr) {
-            return ClassExpression::maxCardinality(property, n, parse(fillerStr));
-        }
-        return ClassExpression::maxCardinality(property, n);
-    }
-
-    // ObjectExactCardinality(n :property :Class)
-    if (trimmed.find("ObjectExactCardinality(") == 0) {
-        size_t start = 23;
-        size_t end = trimmed.rfind(")");
-        if (end == String::npos) {
-            throw std::runtime_error("Missing ) in ObjectExactCardinality");
-        }
-
-        String content = trimmed.substr(start, end - start);
-        std::istringstream iss(content);
-        int n;
-        String propStr;
-        iss >> n >> propStr;
-
-        String property = (propStr.find(":") == 0) ? propStr.substr(1) : propStr;
-
-        String fillerStr;
-        if (iss >> fillerStr) {
-            return ClassExpression::exactCardinality(property, n, parse(fillerStr));
-        }
-        return ClassExpression::exactCardinality(property, n);
-    }
-
-    // 默认为原子类
-    return ClassExpression::atomic(trimmed);
+    return parseExpr();
 }
 
 // ============================================================================

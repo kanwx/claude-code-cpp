@@ -119,6 +119,54 @@ void test_backward_compat_json_overload() {
     PASS();
 }
 
+void test_functional_syntax_nested() {
+    TEST("FunctionalSyntax nested expressions parse correctly");
+
+    // ObjectIntersectionOf( ObjectUnionOf( A B ) C )
+    String input = "ObjectIntersectionOf( ObjectUnionOf( <A> <B> ) <C> )";
+    auto result = FunctionalSyntaxParser::parse(input);
+
+    ASSERT_TRUE(result != nullptr);
+    ASSERT_TRUE(result->type == ExpressionType::Intersection);
+    ASSERT_EQ(result->operands.size(), 2u);
+    ASSERT_TRUE(result->operands[0]->type == ExpressionType::Union);
+    ASSERT_EQ(result->operands[0]->operands.size(), 2u);
+    ASSERT_TRUE(result->operands[0]->operands[0]->className == "A");
+    ASSERT_TRUE(result->operands[0]->operands[1]->className == "B");
+    ASSERT_TRUE(result->operands[1]->className == "C");
+
+    PASS();
+}
+
+void test_functional_syntax_complement() {
+    TEST("FunctionalSyntax complement expression");
+
+    String input = "ObjectComplementOf( <Person> )";
+    auto result = FunctionalSyntaxParser::parse(input);
+
+    ASSERT_TRUE(result != nullptr);
+    ASSERT_TRUE(result->type == ExpressionType::Complement);
+    ASSERT_TRUE(result->complementOf != nullptr);
+    ASSERT_TRUE(result->complementOf->className == "Person");
+
+    PASS();
+}
+
+void test_functional_syntax_some_values() {
+    TEST("FunctionalSyntax someValuesFrom expression");
+
+    String input = "ObjectSomeValuesFrom( <hasPart> <Wheel> )";
+    auto result = FunctionalSyntaxParser::parse(input);
+
+    ASSERT_TRUE(result != nullptr);
+    ASSERT_TRUE(result->type == ExpressionType::ObjectSomeValuesFrom);
+    ASSERT_TRUE(result->property == "hasPart");
+    ASSERT_TRUE(result->filler != nullptr);
+    ASSERT_TRUE(result->filler->className == "Wheel");
+
+    PASS();
+}
+
 int main() {
     test_atomic_subsumption_with_tbox();
     test_intersection_subsumption_with_tbox();
@@ -128,6 +176,9 @@ int main() {
     test_isEmpty_with_disjoint();
     test_isUniversal();
     test_backward_compat_json_overload();
+    test_functional_syntax_nested();
+    test_functional_syntax_complement();
+    test_functional_syntax_some_values();
     std::cout << "\nClassExpression tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;
