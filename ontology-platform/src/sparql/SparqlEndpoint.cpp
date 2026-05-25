@@ -243,6 +243,20 @@ std::optional<SparqlEndpoint::SparqlUpdate> SparqlEndpoint::parseUpdate(const St
 
         if (next == "DATA") {
             update.type = SparqlUpdate::InsertData;
+            // Check for GRAPH <iri> wrapper inside the DATA block
+            skipWs();
+            if (pos < s.size() && s[pos] == '{') {
+                size_t savePos = pos;
+                pos++;  // skip {
+                skipWs();
+                String maybeGraph = toUpper(readWord());
+                if (maybeGraph == "GRAPH") {
+                    update.graph = readIri();
+                    skipWs();
+                } else {
+                    pos = savePos;  // not a GRAPH clause, restore position
+                }
+            }
             update.data = parseTriplePatterns();
         } else {
             update.type = SparqlUpdate::InsertDelete;
@@ -262,6 +276,20 @@ std::optional<SparqlEndpoint::SparqlUpdate> SparqlEndpoint::parseUpdate(const St
 
         if (next == "DATA") {
             update.type = SparqlUpdate::DeleteData;
+            // Check for GRAPH <iri> wrapper inside the DATA block
+            skipWs();
+            if (pos < s.size() && s[pos] == '{') {
+                size_t savePos = pos;
+                pos++;  // skip {
+                skipWs();
+                String maybeGraph = toUpper(readWord());
+                if (maybeGraph == "GRAPH") {
+                    update.graph = readIri();
+                    skipWs();
+                } else {
+                    pos = savePos;  // not a GRAPH clause, restore position
+                }
+            }
             update.data = parseTriplePatterns();
         } else if (next == "WHERE") {
             update.type = SparqlUpdate::DeleteWhere;
@@ -412,24 +440,50 @@ bool SparqlEndpoint::executeUpdate(const SparqlUpdate& update) {
 
     switch (update.type) {
         case SparqlUpdate::InsertData: {
+            TripleStore* target = nullptr;
+            if (!update.graph.empty()) {
+                auto it = namedGraphs_.find(update.graph);
+                if (it != namedGraphs_.end()) {
+                    target = it->second.get();
+                } else {
+                    return update.silent;
+                }
+            }
             for (const auto& pattern : update.data) {
                 Triple t;
                 t.subject = resolveIri(pattern.subject.value);
                 t.predicate = resolveIri(pattern.predicate.value);
                 t.object = resolveIri(pattern.object.value);
                 if (pattern.object.isLiteral()) t.isLiteral = true;
-                storage_->addTriple(t);
+                if (target) {
+                    target->add(t);
+                } else {
+                    storage_->addTriple(t);
+                }
             }
             return true;
         }
 
         case SparqlUpdate::DeleteData: {
+            TripleStore* target = nullptr;
+            if (!update.graph.empty()) {
+                auto it = namedGraphs_.find(update.graph);
+                if (it != namedGraphs_.end()) {
+                    target = it->second.get();
+                } else {
+                    return update.silent;
+                }
+            }
             for (const auto& pattern : update.data) {
                 Triple t;
                 t.subject = resolveIri(pattern.subject.value);
                 t.predicate = resolveIri(pattern.predicate.value);
                 t.object = resolveIri(pattern.object.value);
-                storage_->removeTriple(t);
+                if (target) {
+                    target->remove(t);
+                } else {
+                    storage_->removeTriple(t);
+                }
             }
             return true;
         }

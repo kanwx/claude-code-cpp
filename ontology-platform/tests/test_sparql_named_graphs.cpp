@@ -140,6 +140,36 @@ void test_clear_default() {
     PASS();
 }
 
+void test_insert_data_into_named_graph() {
+    TEST("INSERT DATA into named graph");
+    auto storage = makeStorage();
+    SparqlEndpoint endpoint(storage);
+    endpoint.update("CREATE GRAPH <http://example.org/g1>");
+    bool ok = endpoint.update(
+        "INSERT DATA { GRAPH <http://example.org/g1> { <s1> <p1> <o1> } }");
+    ASSERT_TRUE(ok);
+    auto* ng = endpoint.getNamedGraph("http://example.org/g1");
+    ASSERT_TRUE(ng != nullptr);
+    ASSERT_EQ(ng->count(), 1u);
+    ASSERT_EQ(storage->getTripleStore()->count(), 0u);
+    PASS();
+}
+
+void test_delete_data_from_named_graph() {
+    TEST("DELETE DATA from named graph");
+    auto storage = makeStorage();
+    SparqlEndpoint endpoint(storage);
+    endpoint.update("CREATE GRAPH <http://example.org/g1>");
+    auto* ng = endpoint.getNamedGraph("http://example.org/g1");
+    ng->add({"s1", "p1", "o1"});
+    ng->add({"s2", "p2", "o2"});
+    bool ok = endpoint.update(
+        "DELETE DATA { GRAPH <http://example.org/g1> { <s1> <p1> <o1> } }");
+    ASSERT_TRUE(ok);
+    ASSERT_EQ(ng->count(), 1u);
+    PASS();
+}
+
 int main() {
     test_create_graph();
     test_create_graph_idempotent();
@@ -151,6 +181,8 @@ int main() {
     test_move_graph();
     test_add_graph();
     test_clear_default();
+    test_insert_data_into_named_graph();
+    test_delete_data_from_named_graph();
     std::cout << "\nSPARQL named graph tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;
