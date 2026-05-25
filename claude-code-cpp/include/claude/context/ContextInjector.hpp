@@ -2,10 +2,12 @@
 
 #include "../core/Types.hpp"
 #include "../context/GitContext.hpp"
+#include "../context/SkillLoader.hpp"
 #include <string>
 #include <vector>
 #include <optional>
 #include <map>
+#include <filesystem>
 
 namespace claude {
 
@@ -184,6 +186,9 @@ public:
     /// Set git status
     void setGitStatus(const GitStatusAttachment& status);
 
+    /// Load skills from a directory (delegates to SkillLoader)
+    void loadSkills(const std::filesystem::path& skillsDir);
+
     /// Clear all attachments (for new turn)
     void clearAttachments();
 
@@ -202,6 +207,8 @@ private:
     std::optional<GitStatusAttachment> gitStatus_;
     std::vector<MemoryAttachment> memories_;
     std::vector<SystemReminderAttachment> systemReminders_;
+    std::vector<Skill> skills_;
+    SkillLoader skillLoader_;
 
     /// Get current date string
     String getCurrentDate();

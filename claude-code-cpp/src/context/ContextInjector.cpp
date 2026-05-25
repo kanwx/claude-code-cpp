@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <cctype>
+#include <spdlog/spdlog.h>
 
 namespace claude {
 
@@ -30,6 +31,19 @@ InjectedContext ContextInjector::buildContext(const String& userQuery) {
 
     // System reminders
     ctx.systemReminders = systemReminders_;
+
+    // Skills
+    if (!skills_.empty()) {
+        SkillDiscoveryAttachment skillAtt;
+        skillAtt.type = "skill_discovery";
+        std::ostringstream skillOss;
+        skillOss << "Available skills:\n";
+        for (const auto& skill : skills_) {
+            skillOss << "  /" << skill.name << " — " << skill.description << "\n";
+        }
+        skillAtt.content = skillOss.str();
+        ctx.skillDiscovery = skillAtt;
+    }
 
     // Memories
     if (!userQuery.empty()) {
@@ -109,6 +123,13 @@ void ContextInjector::setGitStatus(const GitStatusAttachment& status) {
     gitStatus_ = status;
 }
 
+void ContextInjector::loadSkills(const std::filesystem::path& skillsDir) {
+    skills_ = skillLoader_.load(skillsDir);
+    auto builtins = skillLoader_.getBuiltinSkills();
+    skills_.insert(skills_.end(), builtins.begin(), builtins.end());
+    spdlog::debug("ContextInjector: loaded {} skills", skills_.size());
+}
+
 void ContextInjector::clearAttachments() {
     attachments_.clear();
 }
@@ -155,6 +176,11 @@ String ContextInjector::formatAsMessageContent(const InjectedContext& ctx) {
     // System reminders
     if (!ctx.systemReminders.empty()) {
         oss << formatSystemReminders(ctx);
+    }
+
+    // Skills
+    if (ctx.skillDiscovery.has_value()) {
+        oss << ctx.skillDiscovery->content << "\n";
     }
 
     return oss.str();
