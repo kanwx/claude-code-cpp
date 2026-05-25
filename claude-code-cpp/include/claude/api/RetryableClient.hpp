@@ -6,6 +6,7 @@
 #include "ApiClient.hpp"
 #include "RetryPolicy.hpp"
 #include "../utils/CircuitBreaker.hpp"
+#include "../core/Cache.hpp"
 #include <memory>
 #include <atomic>
 
@@ -172,6 +173,20 @@ public:
         circuitBreaker_ = std::make_unique<CircuitBreaker>(config);
     }
 
+    // ========== Response Cache ==========
+
+    /// Enable or disable response caching for non-streaming calls.
+    /// Cached responses are keyed by model + message hash.
+    /// Cache is NOT used for streaming calls or tool-use responses.
+    void setCacheEnabled(bool enabled) { cacheEnabled_ = enabled; }
+    bool isCacheEnabled() const { return cacheEnabled_; }
+
+    /// Get the API cache instance
+    ApiCache& responseCache() { return *apiCache_; }
+
+    /// Invalidate all cached responses
+    void invalidateCache() { apiCache_ = std::make_unique<ApiCache>(); }
+
     // ========== 直接代理 ==========
 
     std::expected<Json, String> call(const Json& messages, const Json& tools) {
@@ -198,6 +213,8 @@ private:
     std::unique_ptr<ApiClient> client_;
     RetryPolicy policy_;
     std::unique_ptr<CircuitBreaker> circuitBreaker_{std::make_unique<CircuitBreaker>()};
+    std::unique_ptr<ApiCache> apiCache_{std::make_unique<ApiCache>()};
+    bool cacheEnabled_ = false;
 
     // 回退配置
     String fallbackModel_;

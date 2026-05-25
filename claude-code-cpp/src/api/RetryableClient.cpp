@@ -15,6 +15,21 @@ std::expected<Json, String> RetryableClient::callWithRetry(
 ) {
     int attempt = 0;
 
+    // Check response cache (only for non-streaming, non-tool-use calls)
+    if (cacheEnabled_) {
+        String cacheKey = apiCache_->makeKey(
+            client_->getModelName(), messages.dump() + tools.dump());
+        auto cached = apiCache_->getCached(cacheKey);
+        if (cached) {
+            spdlog::debug("RetryableClient: cache hit for {}", cacheKey.substr(0, 32));
+            try {
+                return Json::parse(*cached);
+            } catch (...) {
+                // Corrupted cache entry, ignore
+            }
+        }
+    }
+
     while (true) {
         ++attempt;
 
@@ -30,6 +45,19 @@ std::expected<Json, String> RetryableClient::callWithRetry(
             // 成功 → 重置 529 计数器, notify circuit breaker
             consecutiveOverloadErrors_ = 0;
             circuitBreaker_->recordSuccess();
+
+            // Cache the response (only simple assistant responses, not tool-use)
+            if (cacheEnabled_ && attempt == 1) {
+                try {
+                    auto& resp = *result;
+                    if (resp.contains("content") && !resp.contains("tool_use")) {
+                        String cacheKey = apiCache_->makeKey(
+                            client_->getModelName(), messages.dump() + tools.dump());
+                        apiCache_->cacheResponse(cacheKey, resp.dump());
+                    }
+                } catch (...) {}
+            }
+
             return result;
         }
 
