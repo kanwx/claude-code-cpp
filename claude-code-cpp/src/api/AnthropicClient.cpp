@@ -95,12 +95,21 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
 
     // Anthropic format: system is a top-level param, not in messages
     String systemContent;
+    Json systemBlocks;        // Pre-built system content blocks (from SystemPromptBuilder::buildBlocks)
+    bool hasSystemBlocks = false;
     Json regularMessages = Json::array();
 
     for (const auto& msg : messages) {
         if (msg.contains("role") && msg["role"] == "system") {
             if (msg.contains("content")) {
-                systemContent = msg["content"].get<String>();
+                // Check if content is already an array of content blocks
+                // (pre-built by SystemPromptBuilder::buildBlocks with cache_control)
+                if (msg["content"].is_array()) {
+                    systemBlocks = msg["content"];
+                    hasSystemBlocks = true;
+                } else {
+                    systemContent = msg["content"].get<String>();
+                }
             }
         } else {
             regularMessages.push_back(msg);
@@ -108,8 +117,13 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
     }
 
     // Set system message (with caching blocks)
-    if (!systemContent.empty()) {
-        auto systemBlocks = buildSystemPromptBlocks(
+    if (hasSystemBlocks && !systemBlocks.empty()) {
+        // Use pre-built blocks directly — they already have the correct
+        // cache_control markers (global on static, org on last, etc.)
+        req["system"] = systemBlocks;
+    } else if (!systemContent.empty()) {
+        // Fallback: build blocks from flat string using heuristic splitting
+        auto blocks = buildSystemPromptBlocks(
             systemContent,
             promptCachingEnabled_,
             false,  // skipGlobalCache
@@ -117,7 +131,7 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
         );
 
         Json systemJson = Json::array();
-        for (const auto& block : systemBlocks) {
+        for (const auto& block : blocks) {
             systemJson.push_back(block.toJson());
         }
         req["system"] = systemJson;

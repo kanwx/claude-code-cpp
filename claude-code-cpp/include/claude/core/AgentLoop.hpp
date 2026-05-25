@@ -181,6 +181,19 @@ public:
     long getTaskBudget() const { return tokenTracker_.getTaskBudget(); }
     long getTaskBudgetUsed() const { return tokenTracker_.getTaskBudgetUsed(); }
 
+    /// Set pre-built system prompt blocks with cache_control markers.
+    /// When set, buildApiRequest() serializes these blocks instead of
+    /// the flat systemPrompt_ string, enabling proper prompt caching
+    /// (global cache on static sections, org cache on the last block).
+    void setSystemBlocks(std::vector<TextBlockParam> blocks) {
+        systemBlocks_ = std::move(blocks);
+    }
+
+    /// Check if system prompt blocks are available
+    bool hasSystemBlocks() const {
+        return systemBlocks_.has_value() && !systemBlocks_->empty();
+    }
+
     // ========== 权限引擎 ==========
 
     void setPermissionEngine(RuleEngine* engine) {
@@ -352,6 +365,7 @@ private:
     ApiClient& apiClient_;
     ToolRegistry& tools_;
     String systemPrompt_;
+    std::optional<std::vector<TextBlockParam>> systemBlocks_;  // Pre-built blocks with cache_control
     TokenTracker tokenTracker_;
     ToolContext toolContext_;
     HookManager hookManager_;
