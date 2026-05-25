@@ -71,3 +71,8 @@ add_test(NAME shacl COMMAND test_shacl)
 add_executable(test_inference_integration2 test_inference_integration.cpp)
 target_link_libraries(test_inference_integration2 PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME inference_integration COMMAND test_inference_integration2)
+
+# Unit test: ClassExpression TBox-aware reasoning
+add_executable(test_class_expression test_class_expression.cpp)
+target_link_libraries(test_class_expression PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME class_expression COMMAND test_class_expression)
