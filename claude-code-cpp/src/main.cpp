@@ -11,6 +11,7 @@
 #include <csignal>
 #include <atomic>
 #include <chrono>
+#include <iomanip>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <termios.h>
@@ -184,6 +185,101 @@ static void saveHistory(const String& entry) {
     std::ofstream file(historyPath, std::ios::app);
     if (file) {
         file << entry << "\n";
+    }
+}
+
+// Save full conversation session to JSONL for /resume
+static void saveSession(AgentLoop* loop) {
+    if (!loop) return;
+
+    const char* home = std::getenv("HOME");
+    if (!home) return;
+
+    auto sessionDir = std::filesystem::path(home) / ".claude" / "sessions";
+    std::filesystem::create_directories(sessionDir);
+
+    // Generate session filename from timestamp
+    auto now = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    std::ostringstream nameStream;
+    nameStream << "session_" << std::put_time(std::localtime(&tt), "%Y%m%d_%H%M%S");
+    auto sessionFile = sessionDir / (nameStream.str() + ".json");
+
+    const auto& messages = loop->getMessageHistory();
+    if (messages.empty()) return; // Don't save empty sessions
+
+    // Serialize messages to JSON
+    Json sessionJson = Json::object();
+    sessionJson["version"] = 1;
+    sessionJson["created_at"] = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+
+    Json msgArray = Json::array();
+    for (const auto& msg : messages) {
+        Json jm;
+        switch (msg.role) {
+            case MessageRole::System:     jm["role"] = "system"; break;
+            case MessageRole::Assistant:  jm["role"] = "assistant"; break;
+            case MessageRole::ToolResult: jm["role"] = "tool"; break;
+            default:                      jm["role"] = "user"; break;
+        }
+
+        if (!msg.content.empty()) {
+            jm["content"] = msg.content;
+        }
+
+        if (!msg.toolCalls.empty()) {
+            Json tcs = Json::array();
+            for (const auto& tc : msg.toolCalls) {
+                Json tcj;
+                tcj["id"] = tc.id;
+                tcj["function"] = {{"name", tc.name}, {"arguments", tc.arguments}};
+                tcs.push_back(tcj);
+            }
+            jm["tool_calls"] = tcs;
+        }
+
+        if (!msg.toolResults.empty()) {
+            Json trs = Json::array();
+            for (const auto& tr : msg.toolResults) {
+                trs.push_back({
+                    {"tool_call_id", tr.callId},
+                    {"name", tr.toolName},
+                    {"content", tr.content},
+                    {"is_error", tr.isError}
+                });
+            }
+            jm["tool_results"] = trs;
+        }
+
+        if (msg.thinking) {
+            jm["thinking"] = *msg.thinking;
+        }
+
+        msgArray.push_back(jm);
+    }
+    sessionJson["messages"] = msgArray;
+
+    // Keep only the 50 most recent sessions
+    std::vector<std::filesystem::path> sessions;
+    for (const auto& entry : std::filesystem::directory_iterator(sessionDir)) {
+        if (entry.path().extension() == ".json") {
+            sessions.push_back(entry.path());
+        }
+    }
+    if (sessions.size() >= 50) {
+        std::sort(sessions.begin(), sessions.end(), [](const auto& a, const auto& b) {
+            return std::filesystem::last_write_time(a) < std::filesystem::last_write_time(b);
+        });
+        for (size_t i = 0; i < sessions.size() - 49; i++) {
+            std::filesystem::remove(sessions[i]);
+        }
+    }
+
+    std::ofstream file(sessionFile);
+    if (file) {
+        file << sessionJson.dump(2);
+        spdlog::info("Session saved to {}", sessionFile.string());
     }
 }
 
@@ -1026,6 +1122,7 @@ private:
             char* line = readline("\001\033[1;32m\002❯ \001\033[0m\002");
             if (!line) {
                 // EOF (Ctrl+D)
+                saveSession(agentLoop_.get());
                 std::cout << "\nGoodbye!\n";
                 break;
             }
@@ -1047,6 +1144,7 @@ private:
             std::getline(std::cin, input);
 
             if (std::cin.eof()) {
+                saveSession(agentLoop_.get());
                 std::cout << "\nGoodbye!\n";
                 break;
             }
@@ -1191,6 +1289,7 @@ private:
 
         // 内置命令
         if (cmd == "exit" || cmd == "quit" || cmd == "q") {
+            saveSession(agentLoop_.get());
             std::cout << "Goodbye!\n";
             CleanupRegistry::runCleanupFunctions();
             _Exit(0);
