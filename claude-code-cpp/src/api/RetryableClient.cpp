@@ -18,12 +18,18 @@ std::expected<Json, String> RetryableClient::callWithRetry(
     while (true) {
         ++attempt;
 
+        // Circuit breaker: check before making request
+        if (!circuitBreaker_->allowCall()) {
+            return std::unexpected("Circuit breaker open — failing fast");
+        }
+
         // 尝试调用
         auto result = client_->call(messages, tools);
 
         if (result) {
-            // 成功 → 重置 529 计数器
+            // 成功 → 重置 529 计数器, notify circuit breaker
             consecutiveOverloadErrors_ = 0;
+            circuitBreaker_->recordSuccess();
             return result;
         }
 
@@ -59,6 +65,9 @@ std::expected<Json, String> RetryableClient::callWithRetry(
             errorMsg.find("rate_limit") != String::npos) {
             consecutiveOverloadErrors_++;
 
+            // Notify circuit breaker of retryable failure
+            circuitBreaker_->recordFailure();
+
             if (consecutiveOverloadErrors_ >= OVERLOAD_THRESHOLD && attemptFallback()) {
                 auto stripped = stripThinkingBlocks(messages);
                 throw FallbackTriggered(
@@ -70,6 +79,8 @@ std::expected<Json, String> RetryableClient::callWithRetry(
         } else {
             // 非 overload 错误 → 重置计数器
             consecutiveOverloadErrors_ = 0;
+            // Record failure (CircuitBreaker only tracks in Closed/HalfOpen state)
+            circuitBreaker_->recordFailure();
         }
 
         // ========== 413 Prompt Too Long — surface as structured exception (no retry) ==========
@@ -161,6 +172,11 @@ void RetryableClient::streamWithRetry(
     while (!success) {
         ++attempt;
 
+        // Circuit breaker: check before making request
+        if (!circuitBreaker_->allowCall()) {
+            throw std::runtime_error("Circuit breaker open — failing fast");
+        }
+
         bool hasError = false;
         String errorMsg;
         int statusCode = 0;
@@ -169,6 +185,7 @@ void RetryableClient::streamWithRetry(
             client_->stream(messages, tools, onChunk);
             success = true;
             consecutiveOverloadErrors_ = 0;
+            circuitBreaker_->recordSuccess();
         } catch (const std::exception& e) {
             errorMsg = e.what();
             hasError = true;
@@ -190,6 +207,7 @@ void RetryableClient::streamWithRetry(
             errorMsg.find("overloaded") != String::npos ||
             errorMsg.find("429") != String::npos) {
             consecutiveOverloadErrors_++;
+            circuitBreaker_->recordFailure();
             if (consecutiveOverloadErrors_ >= OVERLOAD_THRESHOLD && attemptFallback()) {
                 auto stripped = stripThinkingBlocks(messages);
                 throw FallbackTriggered(

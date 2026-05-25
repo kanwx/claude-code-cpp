@@ -5,6 +5,7 @@
 
 #include "ApiClient.hpp"
 #include "RetryPolicy.hpp"
+#include "../utils/CircuitBreaker.hpp"
 #include <memory>
 #include <atomic>
 
@@ -160,6 +161,17 @@ public:
         return policy_.config().unattended;
     }
 
+    // ========== Circuit Breaker ==========
+
+    /// Get the circuit breaker instance
+    CircuitBreaker& circuitBreaker() { return *circuitBreaker_; }
+    const CircuitBreaker& circuitBreaker() const { return *circuitBreaker_; }
+
+    /// Set circuit breaker config
+    void setCircuitBreakerConfig(const CircuitBreakerConfig& config) {
+        circuitBreaker_ = std::make_unique<CircuitBreaker>(config);
+    }
+
     // ========== 直接代理 ==========
 
     std::expected<Json, String> call(const Json& messages, const Json& tools) {
@@ -185,6 +197,7 @@ private:
 
     std::unique_ptr<ApiClient> client_;
     RetryPolicy policy_;
+    std::unique_ptr<CircuitBreaker> circuitBreaker_{std::make_unique<CircuitBreaker>()};
 
     // 回退配置
     String fallbackModel_;
