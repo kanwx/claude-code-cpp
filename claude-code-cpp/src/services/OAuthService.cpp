@@ -70,6 +70,11 @@ void OAuthClient::setToken(const OAuthToken& token) {
 void OAuthClient::clearToken() {
     token_ = std::nullopt;
     // 删除保存的令牌文件
+    const char* home = std::getenv("HOME");
+    if (home) {
+        std::filesystem::path path = String(home) + "/.claude/oauth.json";
+        std::filesystem::remove(path);
+    }
 }
 
 bool OAuthClient::isAuthenticated() const {
