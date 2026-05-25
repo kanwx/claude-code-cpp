@@ -87,18 +87,18 @@ ApiError RetryPolicy::classifyError(int statusCode, const String& body,
 
         case 429:
             error.type = ApiErrorType::RateLimit;
-            // 尝试从 body 解析 retry-after
-            // Anthropic: "error": {"type": "error", "message": "..."}
-            // OpenAI: "error": {"message": "...", "type": "rate_limit_exceeded"}
+            // Parse retry-after from body only if header didn't provide it
             {
-                auto pos = body.find("retry_after");
-                if (pos != String::npos) {
-                    try {
-                        auto start = body.find(':', pos);
-                        if (start != String::npos) {
-                            error.retryAfter = std::stoi(body.substr(start + 1));
-                        }
-                    } catch (...) {}
+                if (error.retryAfter == 0) {
+                    auto pos = body.find("retry_after");
+                    if (pos != String::npos) {
+                        try {
+                            auto start = body.find(':', pos);
+                            if (start != String::npos) {
+                                error.retryAfter = std::stoi(body.substr(start + 1));
+                            }
+                        } catch (...) {}
+                    }
                 }
             }
             break;
@@ -108,8 +108,8 @@ ApiError RetryPolicy::classifyError(int statusCode, const String& body,
         case 503:
         case 504:
             error.type = ApiErrorType::ServerError;
-            // 503 可能包含 Retry-After
-            if (statusCode == 503) {
+            // 503 可能包含 Retry-After (only if header didn't provide it)
+            if (statusCode == 503 && error.retryAfter == 0) {
                 auto pos = body.find("retry_after");
                 if (pos != String::npos) {
                     try {

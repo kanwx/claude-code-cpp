@@ -61,7 +61,7 @@ TEST_CASE("MicroCompact applyByToolName skips small results", "[compact][integra
 
     int compacted = MicroCompact::applyByToolName(history, {"Read"});
     REQUIRE(compacted == 0);
-    REQUIRE(history[1].content == "small"); // unchanged
+    REQUIRE(history[1].toolResults[0].content == "small"); // unchanged
 }
 
 TEST_CASE("MicroCompact applyByToolName skips non-matching tool names", "[compact][integration]") {
@@ -246,8 +246,8 @@ TEST_CASE("Full compaction pipeline: MicroCompact + PostCompactCleanup", "[compa
     history.push_back(makeToolResult("Bash", String(8000, 'b')));
     history.push_back(Message::user("follow-up"));
 
-    // Step 1: MicroCompact by tool name
-    int compacted = MicroCompact::applyByToolName(history, {"Read", "Bash"}, 2);
+    // Step 1: MicroCompact by tool name (keepLast=1: only protect the final user message)
+    int compacted = MicroCompact::applyByToolName(history, {"Read", "Bash"}, 1);
     REQUIRE(compacted == 2);
 
     // Step 2: PostCompactCleanup

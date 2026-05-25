@@ -53,9 +53,15 @@ int MicroCompact::apply(std::vector<Message>& history, std::chrono::minutes ageT
         }
 
         auto age = std::chrono::duration_cast<std::chrono::minutes>(now - msg.timestamp);
-        if (age >= ageThreshold && msg.content.length() > 500) {
-            String placeholder = createPlaceholder("tool", msg.content.length());
+        size_t contentLen = 0;
+        for (const auto& tr : msg.toolResults) contentLen += tr.content.length();
+        if (contentLen == 0) contentLen = msg.content.length();
+        if (age >= ageThreshold && contentLen > 500) {
+            String toolName;
+            for (const auto& tr : msg.toolResults) { if (!tr.toolName.empty()) { toolName = tr.toolName; break; } }
+            String placeholder = createPlaceholder(toolName.empty() ? "tool" : toolName, contentLen);
             msg.content = placeholder;
+            for (auto& tr : msg.toolResults) { tr.content = placeholder; }
             compacted++;
         }
     }
@@ -84,7 +90,18 @@ int MicroCompact::applyByPressure(std::vector<Message>& history, double usageRat
     for (size_t i = 1; i < skipFrom; ++i) {
         auto& msg = history[i];
         if (msg.role != MessageRole::ToolResult) continue;
-        if (msg.content.length() <= sizeThreshold) continue;
+
+        // Content lives in msg.toolResults[].content for proper ToolResult messages
+        size_t contentLen = 0;
+        String toolName;
+        for (const auto& tr : msg.toolResults) {
+            contentLen += tr.content.length();
+            if (toolName.empty()) toolName = tr.toolName;
+        }
+        // Fallback: some code paths may put content in msg.content directly
+        if (contentLen == 0) contentLen = msg.content.length();
+
+        if (contentLen <= sizeThreshold) continue;
         // Skip compacting messages that carry cache_control breakpoints
         // Compact would invalidate the cache and increase cost
         if (msg.metadata.count("cache_control") || msg.metadata.count("cache_breakpoint")) {
@@ -93,9 +110,17 @@ int MicroCompact::applyByPressure(std::vector<Message>& history, double usageRat
 
         // Don't re-compact already compacted messages
         if (msg.content.find("tool result content cleared") != String::npos) continue;
+        bool alreadyCompacted = false;
+        for (const auto& tr : msg.toolResults) {
+            if (tr.content.find("tool result content cleared") != String::npos) {
+                alreadyCompacted = true; break;
+            }
+        }
+        if (alreadyCompacted) continue;
 
-        String placeholder = createPlaceholder("tool", msg.content.length());
+        String placeholder = createPlaceholder(toolName.empty() ? "tool" : toolName, contentLen);
         msg.content = placeholder;
+        for (auto& tr : msg.toolResults) { tr.content = placeholder; }
         compacted++;
     }
 
@@ -120,25 +145,27 @@ int MicroCompact::applyByToolName(std::vector<Message>& history, const std::vect
         auto& msg = history[i];
         if (msg.role != MessageRole::ToolResult) continue;
 
-        // Skip already-compacted messages
+        // Skip already-compacted messages (check both msg.content and toolResults content)
         if (msg.content.find("tool result content cleared") != String::npos) continue;
-
-        // Skip results smaller than 500 chars
-        if (msg.content.length() <= 500) continue;
-
-        // Skip messages with cache_control breakpoints
-        if (msg.metadata.count("cache_control") || msg.metadata.count("cache_breakpoint")) {
-            continue;
+        bool alreadyCompacted = false;
+        for (const auto& tr : msg.toolResults) {
+            if (tr.content.find("tool result content cleared") != String::npos) {
+                alreadyCompacted = true; break;
+            }
         }
+        if (alreadyCompacted) continue;
 
-        // Determine the tool name for this message
-        // Prefer toolResults[].toolName; fall back to heuristic from content
+        // Content lives in msg.toolResults[].content for proper ToolResult messages
+        size_t contentLen = 0;
         String detectedTool;
-        if (!msg.toolResults.empty()) {
-            detectedTool = msg.toolResults[0].toolName;
-        } else {
+        for (const auto& tr : msg.toolResults) {
+            contentLen += tr.content.length();
+            if (detectedTool.empty()) detectedTool = tr.toolName;
+        }
+        // Fallback: some code paths may put content in msg.content directly
+        if (contentLen == 0) {
+            contentLen = msg.content.length();
             // Heuristic: look for common tool output patterns in content
-            // e.g. "<tool_name>Read</tool_name>" or leading tool identifier
             auto gtPos = msg.content.find("<tool_name>");
             if (gtPos != String::npos) {
                 auto start = gtPos + 11;
@@ -147,6 +174,14 @@ int MicroCompact::applyByToolName(std::vector<Message>& history, const std::vect
                     detectedTool = msg.content.substr(start, end - start);
                 }
             }
+        }
+
+        // Skip results smaller than 500 chars
+        if (contentLen <= 500) continue;
+
+        // Skip messages with cache_control breakpoints
+        if (msg.metadata.count("cache_control") || msg.metadata.count("cache_breakpoint")) {
+            continue;
         }
 
         // If filtering by tool name, check if this tool matches
@@ -158,8 +193,9 @@ int MicroCompact::applyByToolName(std::vector<Message>& history, const std::vect
             if (!matches) continue;
         }
 
-        String placeholder = createPlaceholder(detectedTool.empty() ? "tool" : detectedTool, msg.content.length());
+        String placeholder = createPlaceholder(detectedTool.empty() ? "tool" : detectedTool, contentLen);
         msg.content = placeholder;
+        for (auto& tr : msg.toolResults) { tr.content = placeholder; }
         compacted++;
     }
 
@@ -179,7 +215,10 @@ bool MicroCompact::shouldCompact(const Message& msg, std::chrono::minutes ageThr
     if (msg.role != MessageRole::ToolResult) return false;
     auto now = std::chrono::steady_clock::now();
     auto age = std::chrono::duration_cast<std::chrono::minutes>(now - msg.timestamp);
-    return age >= ageThreshold && msg.content.length() > 500;
+    size_t contentLen = 0;
+    for (const auto& tr : msg.toolResults) contentLen += tr.content.length();
+    if (contentLen == 0) contentLen = msg.content.length();
+    return age >= ageThreshold && contentLen > 500;
 }
 
 String MicroCompact::createPlaceholder(const String& toolName, size_t originalSize) {
@@ -205,14 +244,25 @@ int MicroCompact::applyByImportance(std::vector<Message>& history, double usageR
         auto& msg = history[i];
         if (msg.role != MessageRole::ToolResult) continue;
         if (msg.content.find("tool result content cleared") != String::npos) continue;
-        if (msg.content.length() <= 500) continue;
+        bool alreadyCompacted = false;
+        for (const auto& tr : msg.toolResults) {
+            if (tr.content.find("tool result content cleared") != String::npos) {
+                alreadyCompacted = true; break;
+            }
+        }
+        if (alreadyCompacted) continue;
         if (msg.metadata.count("cache_control") || msg.metadata.count("cache_breakpoint")) continue;
 
+        size_t contentLen = 0;
         String toolName;
-        if (!msg.toolResults.empty()) {
-            toolName = msg.toolResults[0].toolName;
+        for (const auto& tr : msg.toolResults) {
+            contentLen += tr.content.length();
+            if (toolName.empty()) toolName = tr.toolName;
         }
-        candidates.push_back({i, importanceScore(toolName), msg.content.length()});
+        if (contentLen == 0) contentLen = msg.content.length();
+        if (contentLen <= 500) continue;
+
+        candidates.push_back({i, importanceScore(toolName), contentLen});
     }
 
     if (candidates.empty()) return 0;
@@ -246,7 +296,9 @@ int MicroCompact::applyByImportance(std::vector<Message>& history, double usageR
         auto& msg = history[candidates[i].index];
         String toolName;
         if (!msg.toolResults.empty()) toolName = msg.toolResults[0].toolName;
-        msg.content = createPlaceholder(toolName.empty() ? "tool" : toolName, candidates[i].contentSize);
+        String placeholder = createPlaceholder(toolName.empty() ? "tool" : toolName, candidates[i].contentSize);
+        msg.content = placeholder;
+        for (auto& tr : msg.toolResults) { tr.content = placeholder; }
         compacted++;
     }
 
