@@ -32,9 +32,10 @@ std::unordered_map<String, ModelPricing>& CostTracker::pricingTable() {
         // Opus
         {"claude-opus-4", {15.00, 75.00, 18.75, 1.50, 0.01}},
         {"claude-opus-4-1", {15.00, 75.00, 18.75, 1.50, 0.01}},
-        {"claude-opus-4-5", {5.00, 25.00, 6.25, 0.50, 0.01}},
-        {"claude-opus-4-6", {5.00, 25.00, 6.25, 0.50, 0.01}},
-        {"opus", {5.00, 25.00, 6.25, 0.50, 0.01}},
+        {"claude-opus-4-5", {15.00, 75.00, 18.75, 1.50, 0.01}},
+        {"claude-opus-4-6", {15.00, 75.00, 18.75, 1.50, 0.01}},
+        {"claude-opus-4-7", {15.00, 75.00, 18.75, 1.50, 0.01}},
+        {"opus", {15.00, 75.00, 18.75, 1.50, 0.01}},
         {"opus[1m]", {15.00, 75.00, 18.75, 1.50, 0.01}},
 
         // Opus fast mode
@@ -61,6 +62,7 @@ String CostTracker::canonicalizeModelName(const String& model) {
     if (model.find("claude-sonnet-4-5") != String::npos) return "claude-sonnet-4-5";
     if (model.find("claude-sonnet-4-6") != String::npos) return "claude-sonnet-4-6";
     if (model.find("claude-sonnet-4") != String::npos) return "claude-sonnet-4";
+    if (model.find("claude-opus-4-7") != String::npos) return "claude-opus-4-7";
     if (model.find("claude-opus-4-6") != String::npos) return "claude-opus-4-6";
     if (model.find("claude-opus-4-5") != String::npos) return "claude-opus-4-5";
     if (model.find("claude-opus-4-1") != String::npos) return "claude-opus-4-1";
