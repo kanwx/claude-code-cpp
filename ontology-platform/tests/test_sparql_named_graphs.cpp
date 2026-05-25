@@ -77,6 +77,69 @@ void test_get_named_graph() {
     PASS();
 }
 
+void test_copy_graph() {
+    TEST("COPY GRAPH TO GRAPH");
+    auto storage = makeStorage();
+    SparqlEndpoint endpoint(storage);
+    endpoint.update("CREATE GRAPH <http://example.org/src>");
+    auto* src = endpoint.getNamedGraph("http://example.org/src");
+    src->add({"s1", "p1", "o1"});
+    src->add({"s2", "p2", "o2"});
+    endpoint.update("CREATE GRAPH <http://example.org/dst>");
+    auto* dst = endpoint.getNamedGraph("http://example.org/dst");
+    dst->add({"s3", "p3", "o3"});
+    bool ok = endpoint.update("COPY GRAPH <http://example.org/src> TO GRAPH <http://example.org/dst>");
+    ASSERT_TRUE(ok);
+    auto* newDst = endpoint.getNamedGraph("http://example.org/dst");
+    ASSERT_EQ(newDst->count(), 2u);
+    PASS();
+}
+
+void test_move_graph() {
+    TEST("MOVE GRAPH TO GRAPH");
+    auto storage = makeStorage();
+    SparqlEndpoint endpoint(storage);
+    endpoint.update("CREATE GRAPH <http://example.org/src>");
+    auto* src = endpoint.getNamedGraph("http://example.org/src");
+    src->add({"s1", "p1", "o1"});
+    bool ok = endpoint.update("MOVE GRAPH <http://example.org/src> TO GRAPH <http://example.org/dst>");
+    ASSERT_TRUE(ok);
+    ASSERT_TRUE(!endpoint.hasNamedGraph("http://example.org/src"));
+    auto* dst = endpoint.getNamedGraph("http://example.org/dst");
+    ASSERT_TRUE(dst != nullptr);
+    ASSERT_EQ(dst->count(), 1u);
+    PASS();
+}
+
+void test_add_graph() {
+    TEST("ADD GRAPH TO GRAPH (merge)");
+    auto storage = makeStorage();
+    SparqlEndpoint endpoint(storage);
+    endpoint.update("CREATE GRAPH <http://example.org/src>");
+    auto* src = endpoint.getNamedGraph("http://example.org/src");
+    src->add({"s1", "p1", "o1"});
+    endpoint.update("CREATE GRAPH <http://example.org/dst>");
+    auto* dst = endpoint.getNamedGraph("http://example.org/dst");
+    dst->add({"s2", "p2", "o2"});
+    bool ok = endpoint.update("ADD GRAPH <http://example.org/src> TO GRAPH <http://example.org/dst>");
+    ASSERT_TRUE(ok);
+    auto* newDst = endpoint.getNamedGraph("http://example.org/dst");
+    ASSERT_EQ(newDst->count(), 2u);
+    PASS();
+}
+
+void test_clear_default() {
+    TEST("CLEAR default graph");
+    auto storage = makeStorage();
+    SparqlEndpoint endpoint(storage);
+    storage->addTriple({"s1", "p1", "o1"});
+    ASSERT_TRUE(storage->getTripleStore()->count() > 0);
+    bool ok = endpoint.update("CLEAR DEFAULT");
+    ASSERT_TRUE(ok);
+    ASSERT_EQ(storage->getTripleStore()->count(), 0u);
+    PASS();
+}
+
 int main() {
     test_create_graph();
     test_create_graph_idempotent();
@@ -84,6 +147,10 @@ int main() {
     test_drop_silent_missing();
     test_list_named_graphs();
     test_get_named_graph();
+    test_copy_graph();
+    test_move_graph();
+    test_add_graph();
+    test_clear_default();
     std::cout << "\nSPARQL named graph tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;

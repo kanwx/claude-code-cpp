@@ -303,6 +303,15 @@ std::optional<SparqlEndpoint::SparqlUpdate> SparqlEndpoint::parseUpdate(const St
         String g = toUpper(readWord());
         if (g == "GRAPH") {
             update.graph = readIri();
+        } else if (g == "DEFAULT") {
+            update.graph = "";  // empty graph signals default
+        } else if (g == "SILENT") {
+            update.silent = true;
+            skipWs();
+            String g2 = toUpper(readWord());
+            if (g2 == "GRAPH") {
+                update.graph = readIri();
+            }
         }
     } else if (keyword == "DROP") {
         update.type = SparqlUpdate::Drop;
@@ -504,8 +513,20 @@ bool SparqlEndpoint::executeUpdate(const SparqlUpdate& update) {
         }
 
         case SparqlUpdate::Clear: {
-            storage_->clear();
-            return true;
+            if (!update.graph.empty()) {
+                auto it = namedGraphs_.find(update.graph);
+                if (it != namedGraphs_.end()) {
+                    it->second->clear();
+                    return true;
+                }
+                return update.silent;
+            }
+            // Clear default graph
+            if (storage_) {
+                storage_->clear();
+                return true;
+            }
+            return update.silent;
         }
 
         case SparqlUpdate::Create: {
@@ -534,11 +555,48 @@ bool SparqlEndpoint::executeUpdate(const SparqlUpdate& update) {
             return update.silent;
         }
 
-        case SparqlUpdate::Load:
-        case SparqlUpdate::Copy:
-        case SparqlUpdate::Move:
+        case SparqlUpdate::Copy: {
+            auto srcIt = namedGraphs_.find(update.sourceGraph);
+            if (srcIt == namedGraphs_.end()) return update.silent;
+            auto copy = std::make_unique<TripleStore>();
+            for (const auto& t : srcIt->second->all()) {
+                copy->add(t);
+            }
+            namedGraphs_[update.graph] = std::move(copy);
+            return true;
+        }
+
+        case SparqlUpdate::Move: {
+            auto srcIt = namedGraphs_.find(update.sourceGraph);
+            if (srcIt == namedGraphs_.end()) return update.silent;
+            auto copy = std::make_unique<TripleStore>();
+            for (const auto& t : srcIt->second->all()) {
+                copy->add(t);
+            }
+            namedGraphs_[update.graph] = std::move(copy);
+            namedGraphs_.erase(srcIt);
+            return true;
+        }
+
         case SparqlUpdate::Add: {
-            // Named graph operations — implemented in Task 4
+            auto srcIt = namedGraphs_.find(update.sourceGraph);
+            if (srcIt == namedGraphs_.end()) return update.silent;
+            if (namedGraphs_.find(update.graph) == namedGraphs_.end()) {
+                namedGraphs_[update.graph] = std::make_unique<TripleStore>();
+            }
+            auto& dst = namedGraphs_[update.graph];
+            for (const auto& t : srcIt->second->all()) {
+                dst->add(t);
+            }
+            return true;
+        }
+
+        case SparqlUpdate::Load: {
+            if (!update.graph.empty()) {
+                if (namedGraphs_.find(update.graph) == namedGraphs_.end()) {
+                    namedGraphs_[update.graph] = std::make_unique<TripleStore>();
+                }
+            }
             return true;
         }
     }
