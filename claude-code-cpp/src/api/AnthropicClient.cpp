@@ -163,7 +163,16 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
     }
 
     if (!tools.empty()) {
-        req["tools"] = tools;
+        // Add cache_control breakpoint on the last tool definition.
+        // Tool definitions are static across turns, so caching them saves
+        // significant input tokens on repeated requests.
+        if (promptCachingEnabled_ && tools.size() > 0) {
+            Json cachedTools = tools;
+            cachedTools[cachedTools.size() - 1]["cache_control"] = {{"type", "ephemeral"}};
+            req["tools"] = cachedTools;
+        } else {
+            req["tools"] = tools;
+        }
     }
 
     if (temperature_ >= 0) {
