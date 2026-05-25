@@ -81,3 +81,8 @@ add_test(NAME class_expression COMMAND test_class_expression)
 add_executable(test_sparql_named_graphs test_sparql_named_graphs.cpp)
 target_link_libraries(test_sparql_named_graphs PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME sparql_named_graphs COMMAND test_sparql_named_graphs)
+
+# 单元测试: AutoModel
+add_executable(test_auto_model test_auto_model.cpp)
+target_link_libraries(test_auto_model PRIVATE ontology_core curl ${APPLE_FRAMEWORKS})
+add_test(NAME auto_model COMMAND test_auto_model)
