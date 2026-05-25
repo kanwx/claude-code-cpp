@@ -36,6 +36,7 @@ public:
     PermissionResult checkPermission(const Json& input, ToolContext& context) override;
 
     bool isReadOnly() const override { return true; }
+    bool isConcurrencySafe(const Json&) const override { return true; }
 
     size_t maxResultSizeChars() const override { return 50000; }
 
