@@ -398,7 +398,15 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     String result;
     bool isError = false;
     try {
-        result = tool->execute(input, context_);
+        if (tool->supportsStreaming() && onToolChunk_) {
+            result = tool->executeStreaming(input, context_,
+                [this](const String& chunk) -> bool {
+                    if (onToolChunk_) onToolChunk_(chunk);
+                    return !cancelled_.load(std::memory_order_relaxed);
+                });
+        } else {
+            result = tool->execute(input, context_);
+        }
     } catch (const std::exception& e) {
         result = "Error: " + String(e.what());
         isError = true;

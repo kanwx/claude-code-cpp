@@ -118,6 +118,65 @@ String BashTool::execute(const Json& input, ToolContext& context) {
     return output;
 }
 
+String BashTool::executeStreaming(const Json& input, ToolContext& context,
+                                  ChunkCallback onChunk) {
+    String command = input["command"];
+    int timeout = input.value("timeout", 120);
+    if (timeout < 1) timeout = 1;
+    if (timeout > 600) timeout = 600;
+
+    if (!lastPreflight_) {
+        try {
+            lastPreflight_ = bash_security::preflightCheck(command, context.workDir);
+        } catch (const std::exception& e) {
+            spdlog::debug("BashTool::executeStreaming: preflightCheck regex error: {}", e.what());
+            lastPreflight_ = bash_security::PreflightResult{};
+            lastPreflight_->allowed = true;
+            lastPreflight_->classification = BashClassification::RequirePermission;
+        }
+    }
+
+    // Deliver security context as first chunk if needed
+    String securityPrefix;
+    if (lastPreflight_->semantics && lastPreflight_->semantics->riskLevel != "low") {
+        securityPrefix = "<security-context>\n" + lastPreflight_->summary + "\n</security-context>\n\n";
+        if (onChunk) onChunk(securityPrefix);
+    }
+
+    // Execute with streaming stdout
+    auto result = Process::executeStreaming(command, context.workDir, timeout,
+        [&onChunk](const String& chunk) -> bool {
+            if (onChunk) {
+                return onChunk(chunk);
+            }
+            return true;
+        });
+
+    // Build the final result string (matches execute() output format)
+    String output = securityPrefix + result.stdout;
+
+    if (!result.stderr.empty()) {
+        if (!output.empty() && output.back() != '\n') output += '\n';
+        String stderrBlock = "<stderr>\n" + result.stderr + "\n</stderr>";
+        output += stderrBlock;
+        if (onChunk) onChunk(stderrBlock);
+    }
+
+    if (result.timedOut) {
+        String timeoutMsg = "\n[ERROR: Command timed out after " + std::to_string(timeout) + " seconds]";
+        output += timeoutMsg;
+        if (onChunk) onChunk(timeoutMsg);
+    }
+
+    if (result.exitCode != 0) {
+        String exitMsg = "\n[Exit code: " + std::to_string(result.exitCode) + "]";
+        output += exitMsg;
+        if (onChunk) onChunk(exitMsg);
+    }
+
+    return output;
+}
+
 bool BashTool::isReadOnly() const {
     return false;
 }

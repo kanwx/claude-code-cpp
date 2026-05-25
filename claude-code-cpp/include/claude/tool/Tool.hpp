@@ -39,6 +39,28 @@ public:
     /// @return 执行结果文本
     virtual String execute(const Json& input, ToolContext& context) = 0;
 
+    /// Chunk callback for streaming execution
+    /// Receives partial output as it's produced. Return false to cancel.
+    using ChunkCallback = std::function<bool(const String& chunk)>;
+
+    /// Streaming execution — override to produce output incrementally.
+    /// Default implementation calls execute() and delivers the full result in one chunk.
+    /// @param input JSON 解析后的输入参数
+    /// @param context 执行上下文
+    /// @param onChunk Called with each output chunk. Return false to cancel.
+    /// @return Final result text (may be empty if all output went through onChunk)
+    virtual String executeStreaming(const Json& input, ToolContext& context,
+                                    ChunkCallback onChunk) {
+        String result = execute(input, context);
+        if (onChunk) {
+            onChunk(result);
+        }
+        return result;
+    }
+
+    /// Whether this tool supports streaming output
+    virtual bool supportsStreaming() const { return false; }
+
     // ========== 可选方法 (安全默认值) ==========
 
     /// 权限前置检查，在 execute 之前调用

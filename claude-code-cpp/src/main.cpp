@@ -928,6 +928,14 @@ private:
             }
         });
 
+        // Tool chunk streaming callback — progressive output for streaming tools (e.g. FileReadTool)
+        agentLoop_->setOnStreamEvent([this](const StreamEvent& event) {
+            if (event.type == StreamEvent::Type::ToolChunkReady && !useFtxui_) {
+                // Progressive output in readline mode — show dots as chunks arrive
+                std::cout << AnsiStyle::DIM << "." << AnsiStyle::RESET << std::flush;
+            }
+        });
+
         // TAOR循环继续回调 — 模型开始新一轮 Think 时触发
         // In FTXUI mode: don't inject into streaming text (that clutters the output).
         // The status bar already shows "Running" with elapsed time and turn counter.

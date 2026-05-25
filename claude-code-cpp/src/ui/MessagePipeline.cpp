@@ -100,6 +100,14 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
             return true;
         }
 
+        case StreamEvent::Type::ToolChunkReady: {
+            // Incremental tool output — append to pending streaming text
+            // The final ToolResultReady will commit the complete output.
+            // For now, accumulate for progressive rendering.
+            streamingChunkText_ += event.text;
+            return true;
+        }
+
         case StreamEvent::Type::StreamEnd: {
             isStreaming_ = false;
             isThinking_ = false;
@@ -184,6 +192,7 @@ bool GroupStage::processEvent(const StreamEvent& event,
     switch (event.type) {
         case StreamEvent::Type::ToolResultReady:
         case StreamEvent::Type::StreamEnd:
+        case StreamEvent::Type::ToolChunkReady:
             needsRegroup_ = true;
             break;
         default:

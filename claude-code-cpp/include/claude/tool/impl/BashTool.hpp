@@ -27,6 +27,10 @@ public:
 
     String execute(const Json& input, ToolContext& context) override;
 
+    String executeStreaming(const Json& input, ToolContext& context,
+                           ChunkCallback onChunk) override;
+    bool supportsStreaming() const override { return true; }
+
     PermissionResult checkPermission(const Json& input, ToolContext& context) override;
 
     bool isReadOnly() const override;

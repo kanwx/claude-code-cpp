@@ -166,6 +166,117 @@ String FileReadTool::execute(const Json& input, ToolContext& context) {
     return output.str();
 }
 
+String FileReadTool::executeStreaming(const Json& input, ToolContext& context,
+                                      ChunkCallback onChunk) {
+    String filePath = input["file_path"];
+    int offset = input.value("offset", 0);
+    int limit = input.value("limit", 2000);
+
+    std::filesystem::path path(filePath);
+    if (!path.is_absolute()) {
+        path = context.workDir / path;
+    }
+
+    if (!std::filesystem::exists(path)) {
+        String err = "Error: File does not exist: " + path.string();
+        if (onChunk) onChunk(err);
+        return err;
+    }
+
+    // Images and PDFs don't benefit from chunked streaming
+    if (MultimodalProcessor::isImageFile(path)) {
+        String result = execute(input, context);
+        if (onChunk) onChunk(result);
+        return result;
+    }
+    if (isPdfFile(path.string())) {
+        String result = readPdfFile(path, 20);
+        if (onChunk) onChunk(result);
+        return result;
+    }
+
+    // ========== Text file: chunked streaming ==========
+    constexpr int CHUNK_LINES = 100;
+    constexpr size_t MAX_LINE_LEN = 2000;
+
+    std::ifstream file(path);
+    if (!file) {
+        String err = "Error: Cannot open file: " + path.string();
+        if (onChunk) onChunk(err);
+        return err;
+    }
+
+    String fullResult;
+    String chunk;
+    chunk.reserve(CHUNK_LINES * 120); // rough estimate per line
+
+    // Header
+    String header = "Contents of " + path.string() + ":\n\n";
+    if (onChunk) {
+        if (!onChunk(header)) return header;
+    }
+    fullResult += header;
+
+    String line;
+    int lineNum = 0;
+    int count = 0;
+    int chunkLineCount = 0;
+
+    // Skip to offset
+    while (lineNum < offset && std::getline(file, line)) {
+        lineNum++;
+    }
+    if (lineNum < offset) {
+        String err = "Error: File has only " + std::to_string(lineNum) +
+                     " lines, offset " + std::to_string(offset) + " is out of range";
+        if (onChunk) onChunk(err);
+        return err;
+    }
+
+    // Read lines, flushing chunks periodically
+    while (std::getline(file, line)) {
+        lineNum++;
+        if (count >= limit) {
+            String trailer = "\n... (truncated at line " + std::to_string(lineNum) +
+                             ", use offset/limit to read more)";
+            chunk += trailer;
+            fullResult += trailer;
+            break;
+        }
+
+        if (line.size() > MAX_LINE_LEN) {
+            std::ostringstream lined;
+            lined << std::setw(6) << lineNum << "\t"
+                  << line.substr(0, MAX_LINE_LEN) << " ... (line truncated)\n";
+            chunk += lined.str();
+        } else {
+            std::ostringstream lined;
+            lined << std::setw(6) << lineNum << "\t" << line << "\n";
+            chunk += lined.str();
+        }
+
+        count++;
+        chunkLineCount++;
+
+        if (chunkLineCount >= CHUNK_LINES) {
+            fullResult += chunk;
+            if (onChunk) {
+                if (!onChunk(chunk)) return fullResult;
+            }
+            chunk.clear();
+            chunkLineCount = 0;
+        }
+    }
+
+    // Flush remaining
+    if (!chunk.empty()) {
+        fullResult += chunk;
+        if (onChunk) onChunk(chunk);
+    }
+
+    return fullResult;
+}
+
 String FileReadTool::renderToolResult(const String& result, bool isError,
                                       bool isCancelled, bool isRejected) const {
     if (isError || isCancelled || isRejected) return "";  // use default rendering

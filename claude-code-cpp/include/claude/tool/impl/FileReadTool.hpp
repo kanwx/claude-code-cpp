@@ -37,6 +37,10 @@ public:
 
     String execute(const Json& input, ToolContext& context) override;
 
+    String executeStreaming(const Json& input, ToolContext& context,
+                           ChunkCallback onChunk) override;
+    bool supportsStreaming() const override { return true; }
+
     bool isReadOnly() const override { return true; }
     bool isConcurrencySafe(const Json&) const override { return true; }
 

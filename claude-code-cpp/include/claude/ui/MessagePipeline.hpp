@@ -17,6 +17,7 @@ struct StreamEvent {
         ToolUseStart,       // Tool invocation begins (tool_use block started)
         ToolUseComplete,    // Tool invocation input complete (tool_use block stopped)
         ToolResultReady,    // Tool execution finished, result available
+        ToolChunkReady,     // Partial tool output available (streaming)
         StreamStart,        // New API request begins
         StreamEnd,          // API response complete
         StreamError,        // Error during streaming
@@ -85,6 +86,7 @@ private:
     bool isThinking_ = false;
     String streamingText_;
     String thinkingSummary_;
+    String streamingChunkText_;
 
     // Pending tool_use blocks waiting for results (keyed by toolId)
     std::unordered_map<String, size_t> pendingToolUseIndex_;

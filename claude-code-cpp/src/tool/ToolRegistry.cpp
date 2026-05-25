@@ -21,6 +21,7 @@
 #include <claude/tool/impl/SkillTool.hpp>
 #include <claude/tool/impl/SleepTool.hpp>
 #include <claude/tool/impl/ScheduleCronTool.hpp>
+#include <claude/tool/impl/REPLSessionTool.hpp>
 #include <claude/tool/impl/ConfigTool.hpp>
 #include <claude/tool/impl/SendMessageTool.hpp>
 #include <claude/tool/impl/ToolSearchTool.hpp>
@@ -98,6 +99,7 @@ void ToolRegistry::registerBuiltinTools() {
     registerTool(std::make_unique<SkillTool>());
     registerTool(std::make_unique<SleepTool>());
     registerTool(std::make_unique<ScheduleCronTool>());
+    registerTool(std::make_unique<REPLSessionTool>());
     registerTool(std::make_unique<ScheduleWakeupTool>());
     registerTool(std::make_unique<CronCreateTool>());
     registerTool(std::make_unique<CronDeleteTool>());

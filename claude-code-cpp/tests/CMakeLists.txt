@@ -135,3 +135,7 @@ catch_discover_tests(test_tool_render)
 add_executable(test_cost_tracker test_cost_tracker.cpp)
 target_link_libraries(test_cost_tracker PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_cost_tracker)
+
+add_executable(test_file_read_streaming test_file_read_streaming.cpp)
+target_link_libraries(test_file_read_streaming PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_file_read_streaming)

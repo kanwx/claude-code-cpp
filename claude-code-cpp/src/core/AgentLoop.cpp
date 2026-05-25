@@ -818,6 +818,13 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
         }
     });
 
+    executor.setOnToolChunk([this](const String& chunk) {
+        StreamEvent chunkEvent;
+        chunkEvent.type = StreamEvent::Type::ToolChunkReady;
+        chunkEvent.text = chunk;
+        emitStreamEvent(std::move(chunkEvent));
+    });
+
     // Execute with ParallelReadOnly ordering (read-only tools concurrent, write tools sequential)
     auto execResults = executor.execute(calls);
 
@@ -1377,6 +1384,7 @@ void AgentLoop::emitStreamEvent(StreamEvent event) {
         case StreamEvent::Type::TurnDuration:
         case StreamEvent::Type::CompactBoundary:
         case StreamEvent::Type::HookSummary:
+        case StreamEvent::Type::ToolChunkReady:
             // These have no individual callback equivalents — only via onStreamEvent_
             break;
     }

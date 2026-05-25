@@ -160,6 +160,7 @@ set(TOOL_SOURCES
     src/tool/impl/MCPTool.cpp
     src/tool/impl/TaskOutputTool.cpp
     src/tool/impl/MissingTools.cpp
+    src/tool/impl/REPLSessionTool.cpp
     src/tool/impl/RagTool.cpp
     src/tool/impl/OntologyTools.cpp
     src/tool/impl/CognitiveTools.cpp
