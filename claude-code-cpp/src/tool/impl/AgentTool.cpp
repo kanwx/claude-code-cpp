@@ -6,8 +6,11 @@
 #include <claude/core/UnifiedTaskStore.hpp>
 #include <claude/tool/ToolRegistry.hpp>
 #include <claude/api/ApiClient.hpp>
+#include <claude/worktree/WorktreeManager.hpp>
 #include <sstream>
 #include <memory>
+#include <filesystem>
+#include <future>
 
 namespace claude {
 
@@ -172,6 +175,28 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
     }
     isolatedAgent->getToolContext().set("agentDepth", currentDepth + 1);
 
+    // Handle worktree isolation
+    String isolation = input.value("isolation", "");
+    std::optional<WorktreeCreateResult> worktreeResult;
+    if (isolation == "worktree") {
+        WorktreeManager wm;
+        String slug = "agent-" + subagentType + "-" + std::to_string(std::hash<String>{}(prompt) % 10000);
+        auto gitRoot = std::filesystem::path(context.workDir);
+        // Walk up to find .git
+        while (!gitRoot.empty() && !std::filesystem::exists(gitRoot / ".git")) {
+            gitRoot = gitRoot.parent_path();
+        }
+        if (!gitRoot.empty()) {
+            worktreeResult = wm.createWorktree(slug, gitRoot);
+            if (worktreeResult) {
+                isolatedAgent->getToolContext().workDir = worktreeResult->path.string();
+                spdlog::info("AgentTool: created worktree at {}", worktreeResult->path.string());
+            } else {
+                spdlog::warn("AgentTool: failed to create worktree, running in current directory");
+            }
+        }
+    }
+
     // Set permission engine
     auto permEngine = context.get<RuleEngine*>("permissionEngine");
     if (permEngine) {
@@ -199,8 +224,33 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
         });
     }
 
-    // Execute task
-    auto result = isolatedAgent->run(prompt);
+    // Execute task on a separate thread so the parent loop stays responsive
+    // (cancellation, streaming callbacks, etc.)
+    auto agentPtr = isolatedAgent.get();
+    auto trackerPtr = isolatedTracker.get();
+
+    auto futureResult = std::async(std::launch::async,
+        [agentPtr, prompt]() -> std::expected<String, String> {
+            return agentPtr->run(prompt);
+        });
+
+    // Wait for completion (with cancellation awareness)
+    while (futureResult.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+        // If the parent agent loop is cancelled, cancel the sub-agent too
+        if (context.getOr<bool>("cancelled", false)) {
+            agentPtr->cancel();
+            break;
+        }
+    }
+
+    auto result = futureResult.get();
+
+    // Clean up worktree after execution
+    if (worktreeResult) {
+        WorktreeManager wm;
+        wm.exitWorktree(false);
+        spdlog::info("AgentTool: cleaned up worktree");
+    }
 
     if (result) {
         oss << *result;
@@ -210,7 +260,7 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
 
     // Stats
     oss << "\n\n---\n[" << typeDef->displayName << " completed — "
-        << isolatedTracker->getTotalTokens() << " tokens]";
+        << trackerPtr->getTotalTokens() << " tokens]";
 
     return oss.str();
 }
