@@ -1173,8 +1173,8 @@ int AutoModelEngine::importAndLearn(const std::vector<Triple>& triples) {
     int imported = 0;
 
     for (const auto& t : triples) {
-        // 检查是否已存在
-        auto existing = storage_->queryTriples(TripleStore::TriplePattern{t.subject, t.predicate, t.object});
+        auto existing = storage_->queryTriples(
+            TripleStore::TriplePattern{t.subject, t.predicate, t.object});
         if (existing.empty()) {
             storage_->addTriple(t);
             imported++;
@@ -1185,11 +1185,16 @@ int AutoModelEngine::importAndLearn(const std::vector<Triple>& triples) {
         }
     }
 
-    // 发现新模式
+    // Discover and add new rules
     if (imported > 0) {
         auto newRules = ruleGenerator_->discoverRules(5, 0.7f);
+        auto* ts = storage_->getTripleStore();
         for (const auto& rule : newRules) {
-            // 添加自动发现的规则
+            if (ruleGenerator_->validateRule(rule)) {
+                ts->add({rule.id, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                         "http://www.w3.org/2003/11/swrl#Imp"});
+                ts->add({rule.id, "http://www.w3.org/2000/01/rdf-schema#label", rule.name});
+            }
         }
     }
 
@@ -1328,21 +1333,90 @@ std::vector<String> AutoModelEngine::optimize() {
     return optimizations;
 }
 
-void AutoModelEngine::resolveConflict(const String& conflictId) {
-    // 解析冲突 ID，获取相关三元组
-    // 可以使用 LLM 辅助决策
-
+void AutoModelEngine::resolveConflict(const String& conflictId, bool dryRun) {
     if (!llmInitialized_) return;
 
     String prompt = R"(
-检测到冲突: )" + conflictId + R"(
+Detected conflict: )" + conflictId + R"(
 
-请分析这个冲突并提供解决方案建议。
+Analyze this conflict and suggest resolution actions.
+Use the following format for each action:
+REMOVE_TRIPLE(subject predicate object)
+ADD_TRIPLE(subject predicate object)
+MODIFY_CLASS(className property value)
+
+List each action on a separate line.
 )";
 
     String suggestion = llm_->chat(prompt);
+    auto actions = parseConflictActions(suggestion);
 
-    // 根据建议执行操作（简化：记录建议）
+    if (dryRun) return;
+
+    auto* ts = storage_->getTripleStore();
+    for (const auto& action : actions) {
+        switch (action.type) {
+            case ConflictAction::RemoveTriple:
+                ts->remove({action.subject, action.predicate, action.object});
+                break;
+            case ConflictAction::AddTriple:
+                ts->add({action.subject, action.predicate, action.object});
+                break;
+            case ConflictAction::ModifyClass:
+                ts->remove({action.subject, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", ""});
+                ts->add({action.subject, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", action.object});
+                break;
+        }
+    }
+}
+
+std::vector<ConflictAction> AutoModelEngine::parseConflictActions(const String& llmResponse) {
+    std::vector<ConflictAction> actions;
+    std::istringstream stream(llmResponse);
+    String line;
+
+    while (std::getline(stream, line)) {
+        size_t start = line.find_first_not_of(" \t\r\n");
+        size_t end = line.find_last_not_of(" \t\r\n");
+        if (start == String::npos) continue;
+        line = line.substr(start, end - start + 1);
+
+        if (line.find("REMOVE_TRIPLE(") == 0) {
+            size_t parenStart = line.find('(');
+            size_t parenEnd = line.find(')');
+            if (parenStart != String::npos && parenEnd != String::npos) {
+                String args = line.substr(parenStart + 1, parenEnd - parenStart - 1);
+                std::istringstream argStream(args);
+                String s, p, o;
+                argStream >> s >> p >> o;
+                actions.push_back({ConflictAction::RemoveTriple, s, p, o, line});
+            }
+        }
+        else if (line.find("ADD_TRIPLE(") == 0) {
+            size_t parenStart = line.find('(');
+            size_t parenEnd = line.find(')');
+            if (parenStart != String::npos && parenEnd != String::npos) {
+                String args = line.substr(parenStart + 1, parenEnd - parenStart - 1);
+                std::istringstream argStream(args);
+                String s, p, o;
+                argStream >> s >> p >> o;
+                actions.push_back({ConflictAction::AddTriple, s, p, o, line});
+            }
+        }
+        else if (line.find("MODIFY_CLASS(") == 0) {
+            size_t parenStart = line.find('(');
+            size_t parenEnd = line.find(')');
+            if (parenStart != String::npos && parenEnd != String::npos) {
+                String args = line.substr(parenStart + 1, parenEnd - parenStart - 1);
+                std::istringstream argStream(args);
+                String cls, prop, val;
+                argStream >> cls >> prop >> val;
+                actions.push_back({ConflictAction::ModifyClass, cls, prop, val, line});
+            }
+        }
+    }
+
+    return actions;
 }
 
 void AutoModelEngine::mergeOntologies(const std::vector<Triple>& externalTriples) {

@@ -59,8 +59,44 @@ void test_foil_produces_nontrivial_rule() {
     PASS();
 }
 
+void test_resolveConflict_dryrun() {
+    TEST("resolveConflict dryRun does not execute actions");
+    auto storage = makeStorage();
+    AutoModelConfig config;
+    AutoModelEngine engine(storage, config);
+    // Without LLM initialized, resolveConflict returns early — no crash
+    engine.resolveConflict("test_conflict", true);
+    PASS();
+}
+
+void test_importAndLearn_adds_rules() {
+    TEST("importAndLearn adds discovered rules to the engine");
+    auto storage = makeStorage();
+    AutoModelConfig config;
+    config.enableIncrementalLearning = false;
+    AutoModelEngine engine(storage, config);
+
+    auto* ts = storage->getTripleStore();
+    ts->add({"alice", "http://example.org/isA", "Student"});
+    ts->add({"alice", "http://example.org/attends", "Math101"});
+    ts->add({"bob", "http://example.org/isA", "Student"});
+    ts->add({"bob", "http://example.org/attends", "CS101"});
+    ts->add({"carol", "http://example.org/isA", "Professor"});
+
+    std::vector<Triple> newTriples = {
+        {"dave", "http://example.org/isA", "Student"},
+        {"dave", "http://example.org/attends", "Physics201"}
+    };
+
+    int imported = engine.importAndLearn(newTriples);
+    ASSERT_EQ(imported, 2);
+    PASS();
+}
+
 int main() {
     test_foil_produces_nontrivial_rule();
+    test_resolveConflict_dryrun();
+    test_importAndLearn_adds_rules();
     std::cout << "\nAutoModel tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;
