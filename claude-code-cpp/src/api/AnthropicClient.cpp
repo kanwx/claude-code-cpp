@@ -139,6 +139,154 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
 
     req["messages"] = regularMessages;
 
+    // ========== Convert from internal format to Anthropic content-block format ==========
+    // The internal buildApiRequest() produces OpenAI-compatible messages:
+    //   assistant: {role:"assistant", content:"...", tool_calls:[{type:"function",function:{name,args}}]}
+    //   tool:      {role:"tool", tool_call_id:"...", content:"..."}
+    // Anthropic requires content-block format:
+    //   assistant: {role:"assistant", content:[{type:"text"},{type:"tool_use",id,name,input},{type:"thinking"},...]}
+    //   tool:      {role:"user", content:[{type:"tool_result",tool_use_id,content}]}
+    // We must convert before sending.
+
+    Json convertedMessages = Json::array();
+    Json pendingToolResults;  // Accumulate consecutive tool results into one user message
+
+    for (size_t i = 0; i < req["messages"].size(); i++) {
+        auto& msg = req["messages"][i];
+        String role = msg.value("role", "");
+
+        // Flush accumulated tool results as a single user message
+        auto flushToolResults = [&]() {
+            if (!pendingToolResults.empty()) {
+                Json userMsg;
+                userMsg["role"] = "user";
+                userMsg["content"] = pendingToolResults;
+                convertedMessages.push_back(userMsg);
+                pendingToolResults = Json::array();
+            }
+        };
+
+        if (role == "user") {
+            flushToolResults();
+            // Ensure user content is in content-block format if not already
+            if (msg.contains("content") && msg["content"].is_string()) {
+                String text = msg["content"].get<String>();
+                Json contentBlocks = Json::array();
+                contentBlocks.push_back({{"type", "text"}, {"text", text}});
+                msg["content"] = contentBlocks;
+            }
+            convertedMessages.push_back(msg);
+        }
+        else if (role == "assistant") {
+            flushToolResults();
+
+            // Build content blocks for assistant message
+            Json contentBlocks = Json::array();
+
+            // Text content
+            String textContent = msg.value("content", "");
+            if (!textContent.empty()) {
+                contentBlocks.push_back({{"type", "text"}, {"text", textContent}});
+            }
+
+            // Thinking blocks (if present in the message)
+            if (msg.contains("thinking") && msg["thinking"].is_string()) {
+                String thinkingContent = msg["thinking"].get<String>();
+                if (!thinkingContent.empty()) {
+                    Json thinkingBlock;
+                    thinkingBlock["type"] = "thinking";
+                    thinkingBlock["thinking"] = thinkingContent;
+                    if (msg.contains("signature") && msg["signature"].is_string()) {
+                        thinkingBlock["signature"] = msg["signature"].get<String>();
+                    }
+                    contentBlocks.push_back(thinkingBlock);
+                }
+            }
+
+            // Redacted thinking blocks (if present)
+            if (msg.contains("redacted_thinking") && msg["redacted_thinking"].is_array()) {
+                for (const auto& rt : msg["redacted_thinking"]) {
+                    contentBlocks.push_back(rt);
+                }
+            }
+
+            // Tool use blocks — convert from OpenAI format
+            if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+                for (const auto& tc : msg["tool_calls"]) {
+                    Json toolUseBlock;
+                    toolUseBlock["type"] = "tool_use";
+                    toolUseBlock["id"] = tc.value("id", "call_0");
+
+                    if (tc.contains("function")) {
+                        toolUseBlock["name"] = tc["function"].value("name", "unknown");
+                        String args = tc["function"].value("arguments", "{}");
+                        // Parse arguments string to JSON object
+                        try {
+                            toolUseBlock["input"] = Json::parse(args);
+                        } catch (...) {
+                            toolUseBlock["input"] = Json::object();
+                        }
+                    } else {
+                        toolUseBlock["name"] = "unknown";
+                        toolUseBlock["input"] = Json::object();
+                    }
+
+                    contentBlocks.push_back(toolUseBlock);
+                }
+            }
+
+            // If no content blocks at all, add empty text
+            if (contentBlocks.empty()) {
+                contentBlocks.push_back({{"type", "text"}, {"text", ""}});
+            }
+
+            Json assistantMsg;
+            assistantMsg["role"] = "assistant";
+            assistantMsg["content"] = contentBlocks;
+            convertedMessages.push_back(assistantMsg);
+        }
+        else if (role == "tool") {
+            // Convert OpenAI tool result to Anthropic tool_result content block
+            // Accumulate consecutive tool results into a single user message
+            Json toolResultBlock;
+            toolResultBlock["type"] = "tool_result";
+            toolResultBlock["tool_use_id"] = msg.value("tool_call_id", "call_0");
+
+            // Content can be string or array
+            if (msg.contains("content")) {
+                if (msg["content"].is_string()) {
+                    toolResultBlock["content"] = msg["content"].get<String>();
+                } else {
+                    toolResultBlock["content"] = msg["content"];
+                }
+            } else {
+                toolResultBlock["content"] = "";
+            }
+
+            // Propagate error flag
+            if (msg.value("is_error", false)) {
+                toolResultBlock["is_error"] = true;
+            }
+
+            pendingToolResults.push_back(toolResultBlock);
+        }
+        else {
+            // Unknown role — pass through
+            flushToolResults();
+            convertedMessages.push_back(msg);
+        }
+    }
+
+    // Flush any remaining tool results
+    if (!pendingToolResults.empty()) {
+        Json userMsg;
+        userMsg["role"] = "user";
+        userMsg["content"] = pendingToolResults;
+        convertedMessages.push_back(userMsg);
+    }
+
+    req["messages"] = convertedMessages;
+
     // Add message-level cache breakpoint for Anthropic prompt caching
     // Rule: one cache_control marker per request, on the second-to-last message
     // This enables cache hits on the prefix while the latest user message changes

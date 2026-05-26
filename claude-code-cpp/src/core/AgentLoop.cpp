@@ -479,6 +479,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     String thinkingBuffer;
     String signatureBuffer;
     std::map<int, std::pair<String, String>> thinkingBlocks;
+    std::vector<Json> redactedThinkingBlocks;  // Preserve for re-emission in API requests
 
     apiClient_.stream(request["messages"], request["tools"], [&](const Json& chunk) {
         // 处理使用量 (包括缓存 tokens)
@@ -525,9 +526,19 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 thinkingBlocks[index] = {"", ""};
             } else if (blockType == "redacted_thinking") {
                 // Redacted thinking blocks contain encrypted content from extended thinking.
-                // Track them so content_block_stop can skip UI dispatch while preserving
-                // them in the assembled response for API conversation continuity.
+                // They MUST be preserved verbatim for subsequent API requests.
+                // The data field is in the content_block_start event.
                 thinkingBlocks[index] = {"[redacted]", ""};
+                Json rtBlock;
+                rtBlock["type"] = "redacted_thinking";
+                // Capture the data field from the block if present
+                if (chunk.contains("content_block") && chunk["content_block"].is_object()) {
+                    auto& cb = chunk["content_block"];
+                    if (cb.contains("data")) {
+                        rtBlock["data"] = cb["data"];
+                    }
+                }
+                redactedThinkingBlocks.push_back(rtBlock);
             }
         }
 
@@ -607,12 +618,11 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 blockType = "text";
             }
 
-            // Redacted thinking blocks are preserved in the assembled response for
+            // Redacted thinking blocks are preserved in redactedThinkingBlocks for
             // API conversation continuity but must NOT be displayed to the user.
             // Skip UI callbacks for redacted_thinking entirely.
             if (blockType == "redacted_thinking") {
-                // Erase from thinkingBlocks so it doesn't interfere with subsequent logic
-                thinkingBlocks.erase(index);
+                // Already captured in redactedThinkingBlocks at content_block_start
             } else if (onContentBlockStop_) {
                 String content;
                 if (blockType == "thinking" && thinkingBlocks.contains(index)) {
@@ -753,22 +763,33 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         }
     }
 
-    // Validate tool calls: filter out any with invalid JSON arguments.
+    // Validate tool calls: handle any with invalid JSON arguments.
     // When the stream is aborted mid-tool-call, the arguments buffer
-    // may contain truncated JSON. Using such args would cause a
-    // parse error in StreamingToolExecutor::executeSingle().
-    toolCalls.erase(
-        std::remove_if(toolCalls.begin(), toolCalls.end(),
-            [](const ToolCall& tc) {
-                try {
-                    auto parsed = Json::parse(tc.arguments);
-                    (void)parsed;
-                    return false;
-                } catch (...) {
-                    return true;
-                }
-            }),
-        toolCalls.end());
+    // may contain truncated JSON. We keep the tool call in the message
+    // (so the API sees the tool_use block) and generate a synthetic
+    // error tool_result so the model can recover.
+    std::vector<ToolCall> validToolCalls;
+    std::vector<ToolResponse> syntheticErrorResults;
+    for (auto& tc : toolCalls) {
+        try {
+            auto parsed = Json::parse(tc.arguments);
+            (void)parsed;
+            validToolCalls.push_back(std::move(tc));
+        } catch (...) {
+            // Truncated JSON — generate synthetic error result
+            spdlog::warn("Tool call {} has truncated JSON arguments, generating error result", tc.name);
+            syntheticErrorResults.emplace_back(
+                tc.id.empty() ? "call_0" : tc.id,
+                tc.name.empty() ? "unknown" : tc.name,
+                "Error: Tool call had truncated/malformed JSON arguments. The stream was interrupted.",
+                true  // isError
+            );
+            // Keep the tool call with empty arguments so it appears in the assistant message
+            tc.arguments = "{}";
+            validToolCalls.push_back(std::move(tc));
+        }
+    }
+    toolCalls = std::move(validToolCalls);
 
     // If cancelled during streaming and no valid tool calls remain,
     // treat as end of turn rather than tool_use
@@ -784,9 +805,19 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     if (!signatureBuffer.empty()) {
         msg.signature = signatureBuffer;
     }
+    if (!redactedThinkingBlocks.empty()) {
+        msg.redactedThinking = std::move(redactedThinkingBlocks);
+    }
 
-    spdlog::debug("streamingIteration done: text={} bytes, toolCalls={}, stopReason={}, interleaved={}",
-        textBuffer.size(), msg.toolCalls.size(), stopReason, interleavedToolResponses.size());
+    spdlog::debug("streamingIteration done: text={} bytes, toolCalls={}, stopReason={}, interleaved={}, syntheticErrors={}",
+        textBuffer.size(), msg.toolCalls.size(), stopReason, interleavedToolResponses.size(), syntheticErrorResults.size());
+
+    // Append synthetic error results for truncated tool calls
+    if (!syntheticErrorResults.empty()) {
+        interleavedToolResponses.insert(interleavedToolResponses.end(),
+            std::make_move_iterator(syntheticErrorResults.begin()),
+            std::make_move_iterator(syntheticErrorResults.end()));
+    }
 
     return {msg, usage, stopReason, std::move(interleavedToolResponses)};
 }
@@ -995,6 +1026,16 @@ Json AgentLoop::buildApiRequest() {
             case MessageRole::Assistant:
                 m["role"] = "assistant";
                 m["content"] = msg.content.empty() ? "" : msg.content;
+                // Preserve thinking/signature for Anthropic format conversion
+                if (msg.thinking) {
+                    m["thinking"] = *msg.thinking;
+                }
+                if (msg.signature) {
+                    m["signature"] = *msg.signature;
+                }
+                if (!msg.redactedThinking.empty()) {
+                    m["redacted_thinking"] = msg.redactedThinking;
+                }
                 if (!msg.toolCalls.empty()) {
                     m["tool_calls"] = Json::array();
                     for (const auto& tc : msg.toolCalls) {

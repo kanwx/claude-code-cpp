@@ -136,6 +136,9 @@ struct Message {
     // Extended Thinking (Anthropic)
     std::optional<String> thinking;    // 思考内容
     std::optional<String> signature;   // 签名 (用于验证)
+    // Redacted thinking blocks — must be included verbatim in subsequent API requests.
+    // Each entry is a JSON object: {"type":"redacted_thinking","data":"..."}
+    std::vector<Json> redactedThinking;
 
     // 元数据
     std::map<String, String> metadata;
