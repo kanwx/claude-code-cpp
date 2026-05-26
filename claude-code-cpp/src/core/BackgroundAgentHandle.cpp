@@ -70,6 +70,13 @@ std::shared_ptr<BackgroundAgentHandle> BackgroundAgentHandle::launch(
             }
             isolatedApi->setModel(model);
 
+            // Apply model override if specified
+            if (!handle->snapshot_.modelOverride.empty()) {
+                isolatedApi->setModel(handle->snapshot_.modelOverride);
+                spdlog::debug("BackgroundAgentHandle: model override {} -> {}",
+                              model, handle->snapshot_.modelOverride);
+            }
+
             // Store in handle for runOnThread to use
             handle->runOnThreadWithApi(*isolatedApi);
         });

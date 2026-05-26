@@ -177,6 +177,15 @@ public:
     /// Add system reminder
     void addSystemReminder(const String& content);
 
+    /// Add PDF reference attachment
+    void addPdfAttachment(const String& filename, int pageCount, size_t fileSize);
+
+    /// Add todo reminder
+    void addTodoReminder(const String& content, int itemCount);
+
+    /// Add task reminder
+    void addTaskReminder(const String& content, int itemCount);
+
     /// Add memory
     void addMemory(const String& path, const String& content);
 
@@ -188,6 +197,9 @@ public:
 
     /// Load skills from a directory (delegates to SkillLoader)
     void loadSkills(const std::filesystem::path& skillsDir);
+
+    /// Set plan mode context
+    void setPlanMode(const PlanModeAttachment& plan);
 
     /// Clear all attachments (for new turn)
     void clearAttachments();
@@ -209,6 +221,7 @@ private:
     std::vector<SystemReminderAttachment> systemReminders_;
     std::vector<Skill> skills_;
     SkillLoader skillLoader_;
+    std::optional<PlanModeAttachment> planMode_;
 
     /// Get current date string
     String getCurrentDate();

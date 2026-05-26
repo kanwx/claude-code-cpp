@@ -44,17 +44,45 @@ AgentLoop::AgentLoop(
 }
 
 std::expected<String, String> AgentLoop::run(const String& userInput) {
-    messageHistory_.push_back(Message::user(userInput));
+    injectContext(userInput);
     currentUserInput_ = userInput;
     resetCancel();
     return executeLoop(false, nullptr);
 }
 
 std::expected<String, String> AgentLoop::runStreaming(const String& userInput, OnToken onToken) {
-    messageHistory_.push_back(Message::user(userInput));
+    injectContext(userInput);
     currentUserInput_ = userInput;
     resetCancel();
     return executeLoop(true, onToken);
+}
+
+void AgentLoop::injectContext(const String& userInput) {
+    if (!contextInjector_) {
+        messageHistory_.push_back(Message::user(userInput));
+        return;
+    }
+
+    auto ctx = contextInjector_->buildContext(userInput);
+    String contextPrefix = contextInjector_->formatAsMessageContent(ctx);
+
+    if (contextPrefix.empty()) {
+        messageHistory_.push_back(Message::user(userInput));
+    } else {
+        // Inject context as a system-reminder user message prefix, matching TS behavior
+        String fullContent = contextPrefix + userInput;
+        messageHistory_.push_back(Message::user(fullContent));
+    }
+
+    // Clear per-turn attachments (not system-level context like git/claudeMd)
+    contextInjector_->clearAttachments();
+}
+
+void AgentLoop::refreshContext() {
+    // This is called between turns to allow the ContextInjector to
+    // update dynamic state. The ContextInjector itself manages its
+    // internal state (git status, CLAUDE.md) — this is just a hook
+    // for the main loop to signal "a new turn is about to begin."
 }
 
 void AgentLoop::cancel() {

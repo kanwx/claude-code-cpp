@@ -13,6 +13,7 @@
 #include "../api/ApiClient.hpp"
 #include "../mcp/McpClient.hpp"
 #include "../ui/MessagePipeline.hpp"
+#include "../context/ContextInjector.hpp"
 #include <functional>
 #include <vector>
 #include <memory>
@@ -194,6 +195,17 @@ public:
         return systemBlocks_.has_value() && !systemBlocks_->empty();
     }
 
+    /// Set context injector for per-turn context injection.
+    /// When set, buildContext() is called before each user turn to inject
+    /// git status, CLAUDE.md, system reminders, skills, memories, and attachments.
+    void setContextInjector(ContextInjector* injector) {
+        contextInjector_ = injector;
+    }
+
+    /// Refresh dynamic context (git status, etc.) before a new turn.
+    /// Called by the main loop between turns.
+    void refreshContext();
+
     // ========== 权限引擎 ==========
 
     void setPermissionEngine(RuleEngine* engine) {
@@ -353,6 +365,9 @@ private:
     /// 构建 API 请求
     Json buildApiRequest();
 
+    /// Inject context into the user message via ContextInjector
+    void injectContext(const String& userInput);
+
     /// 提取思考内容
     void extractThinkingContent(const Json& response);
 
@@ -415,6 +430,9 @@ private:
 
     // Reactive compact state
     int reactiveCompactAttempts_ = 0;
+
+    // Context injection
+    ContextInjector* contextInjector_ = nullptr;
 
     // Interleaved tool execution
     bool interleaveToolExecution_ = false;

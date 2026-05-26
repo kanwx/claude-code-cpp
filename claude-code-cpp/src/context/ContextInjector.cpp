@@ -52,6 +52,11 @@ InjectedContext ContextInjector::buildContext(const String& userQuery) {
         ctx.relevantMemories = memories_;
     }
 
+    // Plan mode
+    if (planMode_.has_value()) {
+        ctx.planContext = planMode_;
+    }
+
     return ctx;
 }
 
@@ -106,6 +111,35 @@ void ContextInjector::addSystemReminder(const String& content) {
     systemReminders_.push_back(reminder);
 }
 
+void ContextInjector::addPdfAttachment(const String& filename, int pageCount, size_t fileSize) {
+    Attachment att;
+    att.type = "pdf_reference";
+    att.pdf.type = "pdf_reference";
+    att.pdf.filename = filename;
+    att.pdf.pageCount = pageCount;
+    att.pdf.fileSize = fileSize;
+    att.pdf.displayPath = filename;
+    attachments_.push_back(att);
+}
+
+void ContextInjector::addTodoReminder(const String& content, int itemCount) {
+    Attachment att;
+    att.type = "todo_reminder";
+    att.todo.type = "todo_reminder";
+    att.todo.content = content;
+    att.todo.itemCount = itemCount;
+    attachments_.push_back(att);
+}
+
+void ContextInjector::addTaskReminder(const String& content, int itemCount) {
+    Attachment att;
+    att.type = "task_reminder";
+    att.task.type = "task_reminder";
+    att.task.content = content;
+    att.task.itemCount = itemCount;
+    attachments_.push_back(att);
+}
+
 void ContextInjector::addMemory(const String& path, const String& content) {
     MemoryAttachment mem;
     mem.type = "memory";
@@ -128,6 +162,10 @@ void ContextInjector::loadSkills(const std::filesystem::path& skillsDir) {
     auto builtins = skillLoader_.getBuiltinSkills();
     skills_.insert(skills_.end(), builtins.begin(), builtins.end());
     spdlog::debug("ContextInjector: loaded {} skills", skills_.size());
+}
+
+void ContextInjector::setPlanMode(const PlanModeAttachment& plan) {
+    planMode_ = plan;
 }
 
 void ContextInjector::clearAttachments() {
@@ -181,6 +219,15 @@ String ContextInjector::formatAsMessageContent(const InjectedContext& ctx) {
     // Skills
     if (ctx.skillDiscovery.has_value()) {
         oss << ctx.skillDiscovery->content << "\n";
+    }
+
+    // Plan mode
+    if (ctx.planContext.has_value()) {
+        oss << "# Current Plan\n";
+        if (ctx.planContext->needsApproval) {
+            oss << "(This plan needs your approval before implementation)\n";
+        }
+        oss << ctx.planContext->content << "\n\n";
     }
 
     return oss.str();
@@ -318,6 +365,28 @@ String formatAttachment(const Attachment& attachment) {
         oss << "<system-reminder>\n";
         oss << attachment.reminder.content << "\n";
         oss << "</system-reminder>";
+    } else if (attachment.type == "pdf_reference") {
+        oss << "PDF: " << attachment.pdf.displayPath
+            << " (" << attachment.pdf.pageCount << " pages, "
+            << attachment.pdf.fileSize << " bytes)";
+    } else if (attachment.type == "todo_reminder") {
+        oss << "Todo List (" << attachment.todo.itemCount << " items):\n";
+        oss << attachment.todo.content;
+    } else if (attachment.type == "task_reminder") {
+        oss << "Task List (" << attachment.task.itemCount << " items):\n";
+        oss << attachment.task.content;
+    } else if (attachment.type == "memory") {
+        oss << formatMemory(attachment.memory);
+    } else if (attachment.type == "skill_discovery") {
+        oss << attachment.skill.content;
+    } else if (attachment.type == "plan_mode") {
+        oss << "Plan: " << attachment.plan.planPath << "\n";
+        if (attachment.plan.needsApproval) {
+            oss << "(Needs approval)\n";
+        }
+        oss << attachment.plan.content;
+    } else if (attachment.type == "git_status") {
+        oss << formatGitStatus(attachment.git);
     }
 
     return oss.str();

@@ -14,6 +14,24 @@
 
 namespace claude {
 
+namespace {
+
+/// Map the enum-style model name from the tool input to an actual model ID.
+/// If the current model is an Anthropic model, use Anthropic model IDs.
+/// If the current model is an OpenAI model, keep the override as-is (custom).
+String mapModelName(const String& modelEnum, const String& currentModel) {
+    if (modelEnum == "sonnet") {
+        return "claude-sonnet-4-20250514";
+    } else if (modelEnum == "opus") {
+        return "claude-opus-4-20250514";
+    } else if (modelEnum == "haiku") {
+        return "claude-haiku-4-5-20251001";
+    }
+    return modelEnum;
+}
+
+} // anonymous namespace
+
 String AgentTool::description() const {
     return "Launch a new agent to handle complex, multi-step tasks. Each agent type has "
            "specific capabilities and tools available to it.\n\n"
@@ -68,6 +86,7 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
     String subagentType = input.value("subagent_type", "general-purpose");
     String description = input.value("description", "");
     bool runInBackground = input.value("run_in_background", false);
+    String modelOverride = input.value("model", "");
 
     // Get agent type definition from registry
     auto typeDef = AgentTypeRegistry::instance().getType(subagentType);
@@ -107,6 +126,7 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
         snapshot.agentDepth = context.getOr<int>("agentDepth", 0);
         snapshot.permissionEngine = context.get<RuleEngine*>("permissionEngine").value_or(nullptr);
         snapshot.permissionCallback = parentCb.value_or(std::function<PermissionChoice(const PermissionRequest&)>());
+        snapshot.modelOverride = !modelOverride.empty() ? mapModelName(modelOverride, (*apiClient)->getModelName()) : "";
 
         auto handle = BackgroundAgentHandle::launch(
             prompt, subagentType, *typeDef,
@@ -166,6 +186,17 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
     isolatedAgent->setMaxIterations(typeDef->maxIterations);
     isolatedAgent->setTemperature(typeDef->temperature);
     isolatedAgent->setMaxTokensOverride(typeDef->maxTokens);
+
+    // Apply model override if specified
+    String originalModel;
+    if (!modelOverride.empty() && apiClient) {
+        originalModel = (*apiClient)->getModelName();
+        String targetModel = mapModelName(modelOverride, originalModel);
+        if (targetModel != originalModel) {
+            (*apiClient)->setModel(targetModel);
+            spdlog::debug("AgentTool: model override {} -> {}", originalModel, targetModel);
+        }
+    }
 
     // Enforce agent nesting depth limit
     int currentDepth = context.getOr<int>("agentDepth", 0);
@@ -244,6 +275,11 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
     }
 
     auto result = futureResult.get();
+
+    // Restore original model if we overrode it
+    if (!modelOverride.empty() && apiClient && !originalModel.empty()) {
+        (*apiClient)->setModel(originalModel);
+    }
 
     // Clean up worktree after execution
     if (worktreeResult) {

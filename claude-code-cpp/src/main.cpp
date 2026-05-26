@@ -126,6 +126,12 @@
 #include <claude/utils/I18n.hpp>
 #include <claude/mcp/McpManager.hpp>
 #include <claude/mcp/McpClient.hpp>
+#include <claude/context/ContextInjector.hpp>
+#include <claude/context/GitContext.hpp>
+#include <claude/context/ClaudeMdLoader.hpp>
+#include <claude/context/SystemPromptBuilder.hpp>
+#include <claude/constants/Prompts.hpp>
+#include <claude/services/OAuthService.hpp>
 
 // FTXUI support (optional)
 #ifdef HAS_FTXUI
@@ -807,7 +813,7 @@ private:
             model = model_;
         }
 
-        // 从环境变量获取 API Key (优先级: 参数 > 环境变量 > 配置)
+        // 从环境变量获取 API Key (优先级: 参数 > 环境变量 > OAuth > 配置)
         if (apiKey.empty()) {
             if (provider == "anthropic") {
                 const char* key = std::getenv("ANTHROPIC_API_KEY");
@@ -816,6 +822,27 @@ private:
             } else {
                 const char* key = std::getenv("OPENAI_API_KEY");
                 if (key) apiKey = key;
+            }
+        }
+
+        // Fallback to OAuth tokens when no env-var key is available
+        if (apiKey.empty()) {
+            auto& oauthMgr = oauth::OAuthManager::instance();
+            String oauthProvider = (provider == "anthropic") ? "anthropic" : "openai";
+            if (oauthMgr.isAuthenticated(oauthProvider)) {
+                auto& client = oauthMgr.getClient(oauthProvider);
+                auto token = client.getCurrentToken();
+                if (token && !token->isExpired()) {
+                    apiKey = token->accessToken;
+                    spdlog::info("Using OAuth token from /login for {}", oauthProvider);
+                } else if (token && token->isExpired() && !token->refreshToken.empty()) {
+                    // Attempt refresh
+                    auto refreshed = client.refreshToken(token->refreshToken);
+                    if (refreshed) {
+                        apiKey = refreshed->accessToken;
+                        spdlog::info("Refreshed and using OAuth token for {}", oauthProvider);
+                    }
+                }
             }
         }
 
@@ -864,7 +891,57 @@ private:
     }
 
     void initAgentLoop() {
-        String systemPrompt = config_->getSystemPrompt();
+        // --- Collect environment context ---
+        auto workDir = std::filesystem::current_path();
+        GitContext gitCtx = GitContext::collect(workDir);
+
+        // Load CLAUDE.md hierarchy (all tiers: managed, user, project, local)
+        claudeMdLoader_ = std::make_unique<ClaudeMdLoader>();
+        claudeMdLoader_->setCwd(workDir);
+        auto claudeMdFiles = claudeMdLoader_->loadAll();
+        String claudeMdContent = claudeMdLoader_->formatAsInstructions(claudeMdFiles);
+
+        // Build system prompt using SystemPromptBuilder with full context
+        EnvironmentInfo envInfo;
+        envInfo.cwd = workDir.string();
+        envInfo.isGit = gitCtx.isGitRepo;
+        envInfo.platform =
+#ifdef __APPLE__
+            "macOS"
+#elif defined(__linux__)
+            "Linux"
+#else
+            "Unknown"
+#endif
+        ;
+        envInfo.shell = std::getenv("SHELL") ? std::getenv("SHELL") : "/bin/bash";
+#ifdef __APPLE__
+        envInfo.osVersion = "macOS Darwin";
+#elif defined(__linux__)
+        envInfo.osVersion = "Linux";
+#endif
+        if (apiClient_) {
+            envInfo.modelId = apiClient_->getModelName();
+        }
+
+        // Collect enabled tools info
+        std::vector<ToolInfo> enabledTools;
+        for (const auto* tool : toolRegistry_->getTools()) {
+            enabledTools.push_back({tool->name(), tool->description()});
+        }
+
+        // Build system prompt via builder (includes CLAUDE.md, git context, environment, tools)
+        SystemPromptBuilder builder;
+        builder.withClaudeMd(claudeMdContent)
+               .withGitContext(gitCtx)
+               .withWorkDir(workDir.string())
+               .withEnvironment(envInfo)
+               .withEnabledTools(enabledTools)
+               .withReplMode(interactive_);
+
+        auto systemBlocks = builder.buildBlocks();
+        String systemPrompt = builder.build();
+
         tokenTracker_ = std::make_unique<TokenTracker>();
 
         agentLoop_ = std::make_unique<AgentLoop>(
@@ -874,14 +951,58 @@ private:
             *tokenTracker_
         );
 
-        // Wire system prompt blocks with cache_control markers for prompt caching.
-        // This preserves the static/dynamic cache boundary and enables the API
-        // client to send the system prompt as content blocks with cache_control,
-        // rather than a flat string that loses all cache breakpoint information.
-        auto systemBlocks = config_->getSystemPromptBlocks();
+        // Use block-based system prompt for proper prompt caching
         if (!systemBlocks.empty()) {
             agentLoop_->setSystemBlocks(std::move(systemBlocks));
         }
+
+        // --- Setup ContextInjector for per-turn context injection ---
+        contextInjector_ = std::make_unique<ContextInjector>();
+
+        // Set git status
+        GitStatusAttachment gitStatusAtt;
+        gitStatusAtt.branch = gitCtx.branch;
+        gitStatusAtt.mainBranch = "main";
+        gitStatusAtt.status = gitCtx.status;
+        gitStatusAtt.recentCommits = gitCtx.recentCommits;
+        contextInjector_->setGitStatus(gitStatusAtt);
+
+        // Set CLAUDE.md content
+        if (!claudeMdContent.empty()) {
+            contextInjector_->setClaudeMd(claudeMdContent);
+        }
+
+        // Load skills
+        auto homeDir = std::getenv("HOME");
+        if (homeDir) {
+            auto skillsDir = std::filesystem::path(homeDir) / ".claude" / "skills";
+            if (std::filesystem::exists(skillsDir)) {
+                contextInjector_->loadSkills(skillsDir);
+            }
+        }
+
+        // Load memory files from project .claude/memory/
+        auto memDir = workDir / ".claude" / "memory";
+        if (std::filesystem::exists(memDir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(memDir)) {
+                if (entry.path().extension() == ".md") {
+                    std::ifstream ifs(entry.path());
+                    if (ifs) {
+                        String content((std::istreambuf_iterator<char>(ifs)),
+                                       std::istreambuf_iterator<char>());
+                        contextInjector_->addMemory(entry.path().string(), content);
+                    }
+                }
+            }
+        }
+
+        // Add system reminders (current session info)
+        contextInjector_->addSystemReminder(
+            "This is a C++ implementation of Claude Code. The agent has access to "
+            "file operations, bash commands, and other tools through the ToolRegistry.");
+
+        // Wire ContextInjector into AgentLoop
+        agentLoop_->setContextInjector(contextInjector_.get());
 
         // Wire up signal handler global for Ctrl+C cancel
         g_agentLoop = agentLoop_.get();
@@ -903,6 +1024,12 @@ private:
 
         // 设置回调
         setupCallbacks();
+
+        spdlog::debug("AgentLoop initialized with context injection (git={}, CLAUDE.md={} chars, {} memories, {} tools)",
+                      gitCtx.isGitRepo ? "yes" : "no",
+                      claudeMdContent.size(),
+                      std::filesystem::exists(memDir) ? "loaded" : "none",
+                      enabledTools.size());
     }
 
     void initMcp() {
@@ -1355,6 +1482,8 @@ private:
     std::unique_ptr<CommandRegistry> commandRegistry_;
     std::unique_ptr<TokenTracker> tokenTracker_;
     std::unique_ptr<AgentLoop> agentLoop_;
+    std::unique_ptr<ContextInjector> contextInjector_;
+    std::unique_ptr<ClaudeMdLoader> claudeMdLoader_;
     std::unique_ptr<Spinner> spinner_;
     std::chrono::steady_clock::time_point spinnerStart_;
     std::thread agentThread_;
