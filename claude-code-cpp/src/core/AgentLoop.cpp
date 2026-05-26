@@ -437,10 +437,17 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
 
     // 解析使用量
     Usage usage;
-    if (res.contains("usage")) {
-        usage.promptTokens = res["usage"].value("prompt_tokens", 0L);
-        usage.completionTokens = res["usage"].value("completion_tokens", 0L);
-        usage.totalTokens = res["usage"].value("total_tokens", 0L);
+    if (res.contains("usage") && res["usage"].is_object()) {
+        const auto& u = res["usage"];
+        if (u.contains("prompt_tokens") && u["prompt_tokens"].is_number()) {
+            usage.promptTokens = u["prompt_tokens"].get<long>();
+        }
+        if (u.contains("completion_tokens") && u["completion_tokens"].is_number()) {
+            usage.completionTokens = u["completion_tokens"].get<long>();
+        }
+        if (u.contains("total_tokens") && u["total_tokens"].is_number()) {
+            usage.totalTokens = u["total_tokens"].get<long>();
+        }
     }
 
     // 解析 stop_reason
@@ -452,13 +459,14 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
     if (res.contains("content")) {
         if (res["content"].is_array()) {
             for (const auto& block : res["content"]) {
+                if (!block.is_object()) continue;
                 if (block.value("type", "") == "text") {
                     msg.content += block.value("text", "");
                 } else if (block.value("type", "") == "tool_use") {
                     msg.toolCalls.push_back({
                         block.value("id", ""),
                         block.value("name", ""),
-                        block.value("input", Json{}).dump()
+                        block.contains("input") ? block["input"].dump() : "{}"
                     });
                 }
             }

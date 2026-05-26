@@ -264,7 +264,7 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
             }
 
             // Propagate error flag
-            if (msg.value("is_error", false)) {
+            if (msg.contains("is_error") && msg["is_error"].is_boolean() && msg["is_error"].get<bool>()) {
                 toolResultBlock["is_error"] = true;
             }
 
@@ -432,9 +432,12 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
     try {
         auto response = Json::parse(res->body);
         int inputTokens = 0, outputTokens = 0;
-        if (response.contains("usage")) {
-            inputTokens = response["usage"].value("input_tokens", 0);
-            outputTokens = response["usage"].value("output_tokens", 0);
+        if (response.contains("usage") && response["usage"].is_object()) {
+            const auto& u = response["usage"];
+            if (u.contains("input_tokens") && u["input_tokens"].is_number())
+                inputTokens = u["input_tokens"].get<int>();
+            if (u.contains("output_tokens") && u["output_tokens"].is_number())
+                outputTokens = u["output_tokens"].get<int>();
         }
 
         ApiDebugTracker::instance().recordCall({
@@ -462,14 +465,18 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
             state.model = msg.value("model", "");
 
             // Extract usage from message_start
-            if (msg.contains("usage")) {
+            if (msg.contains("usage") && msg["usage"].is_object()) {
                 const auto& u = msg["usage"];
                 // Only set if non-zero; message_start has the authoritative initial values
-                long cacheRead = u.value("cache_read_input_tokens", 0);
-                long cacheCreation = u.value("cache_creation_input_tokens", 0);
-                long cacheDeleted = u.value("cache_deleted_input_tokens", 0);
+                long cacheRead = u.contains("cache_read_input_tokens") && u["cache_read_input_tokens"].is_number()
+                    ? u["cache_read_input_tokens"].get<long>() : 0;
+                long cacheCreation = u.contains("cache_creation_input_tokens") && u["cache_creation_input_tokens"].is_number()
+                    ? u["cache_creation_input_tokens"].get<long>() : 0;
+                long cacheDeleted = u.contains("cache_deleted_input_tokens") && u["cache_deleted_input_tokens"].is_number()
+                    ? u["cache_deleted_input_tokens"].get<long>() : 0;
 
-                state.usage.promptTokens = u.value("input_tokens", 0);
+                state.usage.promptTokens = u.contains("input_tokens") && u["input_tokens"].is_number()
+                    ? u["input_tokens"].get<long>() : 0;
                 state.usage.completionTokens = 0; // will be filled by message_delta
                 state.usage.cacheReadTokens = cacheRead;
                 state.usage.cacheCreationTokens = cacheCreation;
@@ -478,8 +485,10 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
                 // Cache breakdown from cache_creation sub-object
                 if (u.contains("cache_creation") && u["cache_creation"].is_object()) {
                     const auto& cc = u["cache_creation"];
-                    state.usage.cacheEphemeral5m = cc.value("ephemeral_5m_input_tokens", 0);
-                    state.usage.cacheEphemeral1h = cc.value("ephemeral_1h_input_tokens", 0);
+                    state.usage.cacheEphemeral5m = cc.contains("ephemeral_5m_input_tokens") && cc["ephemeral_5m_input_tokens"].is_number()
+                        ? cc["ephemeral_5m_input_tokens"].get<long>() : 0;
+                    state.usage.cacheEphemeral1h = cc.contains("ephemeral_1h_input_tokens") && cc["ephemeral_1h_input_tokens"].is_number()
+                        ? cc["ephemeral_1h_input_tokens"].get<long>() : 0;
                 }
             }
         }
@@ -487,9 +496,10 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
 
     // ------ content_block_start ------
     else if (type == "content_block_start") {
-        if (event.contains("content_block")) {
+        if (event.contains("content_block") && event["content_block"].is_object()) {
             const auto& block = event["content_block"];
-            int index = event.value("index", -1);
+            int index = event.contains("index") && event["index"].is_number()
+                ? event["index"].get<int>() : -1;
             String blockType = block.value("type", "");
 
             state.currentBlockIndex = index;
@@ -533,7 +543,7 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
 
     // ------ content_block_delta ------
     else if (type == "content_block_delta") {
-        if (!event.contains("delta")) return;
+        if (!event.contains("delta") || !event["delta"].is_object()) return;
 
         const auto& delta = event["delta"];
         String deltaType = delta.value("type", "");
@@ -647,20 +657,22 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
         // IMPORTANT: guard against overwriting real values with 0.
         // message_delta only contains output_token_count; the input/cache
         // tokens from message_start are authoritative.
-        if (event.contains("usage")) {
+        if (event.contains("usage") && event["usage"].is_object()) {
             const auto& u = event["usage"];
 
             // completionTokens in message_delta is authoritative
-            long outputTokens = u.value("output_tokens", 0);
+            long outputTokens = u.contains("output_tokens") && u["output_tokens"].is_number()
+                ? u["output_tokens"].get<long>() : 0;
             state.usage.completionTokens = outputTokens;
             state.usage.totalTokens = state.usage.promptTokens + outputTokens;
 
             // Cache tokens: only overwrite if the value is non-zero.
-            // The API may send 0 in message_delta for fields already set
-            // in message_start, and we must not clobber the real values.
-            long cacheRead = u.value("cache_read_input_tokens", 0);
-            long cacheCreation = u.value("cache_creation_input_tokens", 0);
-            long cacheDeleted = u.value("cache_deleted_input_tokens", 0);
+            long cacheRead = u.contains("cache_read_input_tokens") && u["cache_read_input_tokens"].is_number()
+                ? u["cache_read_input_tokens"].get<long>() : 0;
+            long cacheCreation = u.contains("cache_creation_input_tokens") && u["cache_creation_input_tokens"].is_number()
+                ? u["cache_creation_input_tokens"].get<long>() : 0;
+            long cacheDeleted = u.contains("cache_deleted_input_tokens") && u["cache_deleted_input_tokens"].is_number()
+                ? u["cache_deleted_input_tokens"].get<long>() : 0;
 
             if (cacheRead > 0) {
                 state.usage.cacheReadTokens = cacheRead;
@@ -695,7 +707,14 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
 
     // ------ error ------
     else if (type == "error") {
-        String errMsg = event.value("error", Json::object()).value("message", "unknown streaming error");
+        String errMsg = "unknown streaming error";
+        if (event.contains("error")) {
+            if (event["error"].is_object() && event["error"].contains("message")) {
+                errMsg = event["error"]["message"].get<String>();
+            } else if (event["error"].is_string()) {
+                errMsg = event["error"].get<String>();
+            }
+        }
         spdlog::error("Streaming error event: {}", errMsg);
     }
 
@@ -802,19 +821,25 @@ Result<StreamingState> AnthropicClient::fallbackToNonStreaming(
     state.stopReason = response.value("stop_reason", "");
 
     // Extract usage
-    if (response.contains("usage")) {
+    if (response.contains("usage") && response["usage"].is_object()) {
         const auto& u = response["usage"];
-        state.usage.promptTokens = u.value("input_tokens", 0);
-        state.usage.completionTokens = u.value("output_tokens", 0);
+        auto getLong = [&](const char* key) -> long {
+            return u.contains(key) && u[key].is_number() ? u[key].get<long>() : 0;
+        };
+        state.usage.promptTokens = getLong("input_tokens");
+        state.usage.completionTokens = getLong("output_tokens");
         state.usage.totalTokens = state.usage.promptTokens + state.usage.completionTokens;
-        state.usage.cacheReadTokens = u.value("cache_read_input_tokens", 0);
-        state.usage.cacheCreationTokens = u.value("cache_creation_input_tokens", 0);
-        state.usage.cacheDeletedInputTokens = u.value("cache_deleted_input_tokens", 0);
+        state.usage.cacheReadTokens = getLong("cache_read_input_tokens");
+        state.usage.cacheCreationTokens = getLong("cache_creation_input_tokens");
+        state.usage.cacheDeletedInputTokens = getLong("cache_deleted_input_tokens");
 
         if (u.contains("cache_creation") && u["cache_creation"].is_object()) {
             const auto& cc = u["cache_creation"];
-            state.usage.cacheEphemeral5m = cc.value("ephemeral_5m_input_tokens", 0);
-            state.usage.cacheEphemeral1h = cc.value("ephemeral_1h_input_tokens", 0);
+            auto getCcLong = [&](const char* key) -> long {
+                return cc.contains(key) && cc[key].is_number() ? cc[key].get<long>() : 0;
+            };
+            state.usage.cacheEphemeral5m = getCcLong("ephemeral_5m_input_tokens");
+            state.usage.cacheEphemeral1h = getCcLong("ephemeral_1h_input_tokens");
         }
     }
 
