@@ -303,7 +303,7 @@ struct ConflictAction {
 // 冲突检测结果
 // ============================================================================
 
-struct Conflict {
+struct OntologyConflict {
     enum Type {
         DisjointClassAssertion,       // individual typed as both C and D where C ⊓ D ⊑ ⊥
         FunctionalPropertyViolation,  // subject has multiple values for functional property
@@ -414,7 +414,7 @@ private:
     std::vector<String> optimize();
 
     /// 检测冲突 (TBox-aware)
-    std::vector<Conflict> detectConflicts();
+    std::vector<OntologyConflict> detectConflicts();
 
     // ===== 知识融合 =====
 
