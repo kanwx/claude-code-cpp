@@ -47,7 +47,7 @@ struct TableauxNode {
     bool isBlocked = false;
     String blockedBy;                               // name of blocking node
 
-    bool hasConcept(const ClassExpression& expr) const;
+    bool hasConcept(const ClassExpressionPtr& expr) const;
     bool hasClash() const;
 };
 

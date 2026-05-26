@@ -86,3 +86,8 @@ add_test(NAME sparql_named_graphs COMMAND test_sparql_named_graphs)
 add_executable(test_auto_model test_auto_model.cpp)
 target_link_libraries(test_auto_model PRIVATE ontology_core curl ${APPLE_FRAMEWORKS})
 add_test(NAME auto_model COMMAND test_auto_model)
+
+# Unit test: ALC Description Logic Reasoner
+add_executable(test_alc_reasoner test_alc_reasoner.cpp)
+target_link_libraries(test_alc_reasoner PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME alc_reasoner COMMAND test_alc_reasoner)

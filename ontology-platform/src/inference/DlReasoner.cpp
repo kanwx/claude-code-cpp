@@ -9,11 +9,12 @@ namespace ontology {
 // TableauxNode helpers
 // ============================================================================
 
-bool TableauxNode::hasConcept(const ClassExpression& expr) const {
+bool TableauxNode::hasConcept(const ClassExpressionPtr& expr) const {
+    // Use pointer identity for shared_ptr — same expression object means already present.
+    // This is correct because the tableaux algorithm works on shared_ptr references
+    // and different expression objects (even structurally equal) are distinct labels.
     for (const auto& c : concepts) {
-        if (c->type == expr.type && c->className == expr.className
-            && c->property == expr.property
-            && c->cardinality == expr.cardinality) {
+        if (c.get() == expr.get()) {
             return true;
         }
     }
@@ -177,15 +178,22 @@ bool DlReasoner::isBlocked(const std::vector<TableauxNode>& nodes, const Tableau
 bool DlReasoner::applyConjunctionRule(std::vector<TableauxNode>& nodes,
                                        TableauxNode& node, size_t conceptIdx)
 {
-    auto& expr = node.concepts[conceptIdx];
+    auto expr = node.concepts[conceptIdx];  // copy shared_ptr
     if (expr->type != ExpressionType::Intersection) return false;
 
     bool changed = false;
     for (const auto& op : expr->operands) {
-        if (!node.hasConcept(*op)) {
+        if (!node.hasConcept(op)) {
             node.concepts.push_back(op);
             changed = true;
         }
+    }
+
+    if (changed) {
+        // Remove the intersection itself — its operands have been expanded.
+        // This prevents re-expansion and avoids dangling Union references
+        // from parent intersection nodes that held Union operands.
+        node.concepts.erase(node.concepts.begin() + conceptIdx);
     }
     return changed;
 }
@@ -209,7 +217,7 @@ bool DlReasoner::applyExistentialRule(std::vector<TableauxNode>& nodes,
     for (const auto& [prop, target] : node.successors) {
         if (prop == expr->property) {
             auto* targetNode = findNode(nodes, target);
-            if (targetNode && targetNode->hasConcept(*expr->filler)) {
+            if (targetNode && targetNode->hasConcept(expr->filler)) {
                 return false;  // already exists
             }
         }
@@ -247,7 +255,7 @@ bool DlReasoner::applyUniversalRule(std::vector<TableauxNode>& nodes,
     for (const auto& [prop, target] : node.successors) {
         if (prop == expr->property) {
             auto* targetNode = findNode(nodes, target);
-            if (targetNode && !targetNode->hasConcept(*expr->filler)) {
+            if (targetNode && !targetNode->hasConcept(expr->filler)) {
                 targetNode->concepts.push_back(expr->filler);
                 changed = true;
             }
@@ -303,12 +311,14 @@ bool DlReasoner::isSatisfiableHelper(std::vector<TableauxNode> nodes) {
         if (node.isBlocked) continue;
         for (size_t i = 0; i < node.concepts.size(); ++i) {
             if (node.concepts[i]->type == ExpressionType::Union) {
-                auto& disj = node.concepts[i];
+                auto disj = node.concepts[i];  // copy shared_ptr before mutation
                 for (const auto& disjunct : disj->operands) {
                     auto branchNodes = nodes;
                     auto* branchNode = findNode(branchNodes, node.name);
                     if (branchNode) {
-                        branchNode->concepts.push_back(disjunct);
+                        // Replace the union with the chosen disjunct (not append)
+                        // to avoid re-discovering the same union on recursion
+                        branchNode->concepts[i] = disjunct;
                         if (isSatisfiableHelper(std::move(branchNodes))) {
                             return true;
                         }
