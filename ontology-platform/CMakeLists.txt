@@ -74,6 +74,7 @@ set(INFERENCE_SOURCES
     src/inference/NeuroSymbolicLearning.cpp
     src/inference/Explainability.cpp
     src/inference/SwrlBackwardChainer.cpp
+    src/inference/DlReasoner.cpp
 )
 
 set(MCP_SOURCES

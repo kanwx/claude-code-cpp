@@ -25,7 +25,7 @@ struct TBoxAxiom {
 // ABox concept assertion: a : C
 struct ConceptAssertion {
     String individual;
-    ClassExpressionPtr concept;
+    ClassExpressionPtr conceptExpr;
 };
 
 // ABox role assertion: (a, R, b)
@@ -47,7 +47,7 @@ struct TableauxNode {
     bool isBlocked = false;
     String blockedBy;                               // name of blocking node
 
-    bool hasConcept(const ClassExpression& concept) const;
+    bool hasConcept(const ClassExpression& expr) const;
     bool hasClash() const;
 };
 
@@ -68,13 +68,13 @@ public:
     void loadFromTripleStore(TripleStore* store);
 
     // ---- ABox management ----
-    void addConceptAssertion(const String& individual, ClassExpressionPtr concept);
+    void addConceptAssertion(const String& individual, ClassExpressionPtr conceptExpr);
     void addRoleAssertion(const String& subject, const String& property, const String& object);
 
     // ---- Reasoning services ----
 
     // Core: is concept C satisfiable w.r.t. TBox?
-    bool isSatisfiable(ClassExpressionPtr concept);
+    bool isSatisfiable(ClassExpressionPtr conceptExpr);
 
     // Subsumption: A ⊑ B iff A ⊓ ¬B is unsatisfiable
     bool isSubsumedBy(ClassExpressionPtr sub, ClassExpressionPtr sup);
