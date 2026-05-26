@@ -182,6 +182,19 @@ public:
     long getTaskBudget() const { return tokenTracker_.getTaskBudget(); }
     long getTaskBudgetUsed() const { return tokenTracker_.getTaskBudgetUsed(); }
 
+    /// Set allowed tools filter — only these tools will be sent in API requests.
+    /// Empty means all registered tools are available (default).
+    void setAllowedTools(std::vector<String> tools) {
+        allowedTools_ = std::move(tools);
+    }
+    const std::vector<String>& getAllowedTools() const { return allowedTools_; }
+
+    /// Set disallowed tools — these tools will be excluded from API requests.
+    void setDisallowedTools(std::vector<String> tools) {
+        disallowedTools_ = std::move(tools);
+    }
+    const std::vector<String>& getDisallowedTools() const { return disallowedTools_; }
+
     /// Set pre-built system prompt blocks with cache_control markers.
     /// When set, buildApiRequest() serializes these blocks instead of
     /// the flat systemPrompt_ string, enabling proper prompt caching
@@ -433,6 +446,12 @@ private:
 
     // Context injection
     ContextInjector* contextInjector_ = nullptr;
+
+    // Tool filtering
+    std::vector<String> allowedTools_;     // If non-empty, only these tools are sent to API
+    std::vector<String> disallowedTools_;  // These tools are excluded from API requests
+    std::vector<String> pendingSkillTools_; // Tools restricted by skill (per-turn, cleared after use)
+    String pendingSkillModel_;              // Model override from skill (per-turn, cleared after use)
 
     // Interleaved tool execution
     bool interleaveToolExecution_ = false;

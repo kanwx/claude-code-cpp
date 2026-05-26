@@ -133,6 +133,13 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         // Emit StreamStart at beginning of each iteration
         emitStreamEvent(StreamEvent{StreamEvent::Type::StreamStart});
 
+        // Apply skill model override for this iteration (save/restore pattern)
+        String savedModelForSkill;
+        if (!pendingSkillModel_.empty()) {
+            savedModelForSkill = apiClient_.getModelName();
+            apiClient_.setModel(pendingSkillModel_);
+        }
+
         // 构建请求
         Json request = buildApiRequest();
 
@@ -191,6 +198,16 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         if (result.usage.promptTokens > 0 || result.usage.completionTokens > 0) {
             tokenTracker_.recordUsage(result.usage.promptTokens, result.usage.completionTokens);
             tokenTracker_.recordTaskUsage(result.usage.promptTokens, result.usage.completionTokens);
+        }
+
+        // Restore model after skill override (if applied for this iteration)
+        if (!savedModelForSkill.empty()) {
+            apiClient_.setModel(savedModelForSkill);
+            pendingSkillModel_.clear();
+        }
+        // Clear skill tool restriction after use (applied in buildApiRequest)
+        if (!pendingSkillTools_.empty()) {
+            pendingSkillTools_.clear();
         }
 
         // Check task budget
@@ -369,8 +386,19 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         // Inject skill prompt as a new user message
         if (!pendingSkillPrompt.empty()) {
             messageHistory_.push_back(Message::user(pendingSkillPrompt));
-            // TODO: If pendingSkillModel is non-empty, switch model for this turn
-            // TODO: If pendingSkillTools is non-empty, restrict tools for this turn
+
+            // Store skill model override — will be applied in the next executeLoop iteration
+            if (!pendingSkillModel.empty()) {
+                pendingSkillModel_ = std::move(pendingSkillModel);
+                spdlog::info("Skill model override: {}", pendingSkillModel_);
+            }
+
+            // Store skill tool restriction — will be applied in buildApiRequest()
+            if (!pendingSkillTools.empty()) {
+                pendingSkillTools_ = std::move(pendingSkillTools);
+                spdlog::info("Skill tool restriction: {} tools", pendingSkillTools_.size());
+            }
+
             spdlog::debug("Skill prompt injected as user message");
         }
 
@@ -1101,7 +1129,39 @@ Json AgentLoop::buildApiRequest() {
     String provider = apiClient_.getProviderName();
     Json toolsJson = Json::array();
     for (const auto& def : tools_.toToolDefinitions()) {
-        toolsJson.push_back(def.toJson(provider));
+        String toolName = def.name;
+
+        // Apply tool filtering: allowedTools, disallowedTools, and skill-restricted tools
+        bool excluded = false;
+
+        // Skill tool restriction takes precedence: only these tools are available this turn
+        if (!pendingSkillTools_.empty()) {
+            bool found = false;
+            for (const auto& allowed : pendingSkillTools_) {
+                if (allowed == toolName) { found = true; break; }
+            }
+            if (!found) excluded = true;
+        }
+
+        // Static allowedTools filter (from --allowedTools or agent config)
+        if (!excluded && !allowedTools_.empty()) {
+            bool found = false;
+            for (const auto& allowed : allowedTools_) {
+                if (allowed == toolName) { found = true; break; }
+            }
+            if (!found) excluded = true;
+        }
+
+        // Disallowed tools filter (from --disallowedTools)
+        if (!excluded) {
+            for (const auto& disallowed : disallowedTools_) {
+                if (disallowed == toolName) { excluded = true; break; }
+            }
+        }
+
+        if (!excluded) {
+            toolsJson.push_back(def.toJson(provider));
+        }
     }
     req["tools"] = toolsJson;
 

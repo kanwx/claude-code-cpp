@@ -543,6 +543,20 @@ private:
                      "Enable auto mode (AI classifier decides permissions)");
         app.add_option("--permission-mode", permissionModeStr_,
                        "Permission mode: default|acceptEdits|bypassPermissions|dontAsk|plan|auto");
+        app.add_option("--allowedTools", allowedToolsStr_,
+                       "Comma-separated list of allowed tools (restricts available tools)")
+            ->expected(1)->delimiter(',');
+        app.add_option("--disallowedTools", disallowedToolsStr_,
+                       "Comma-separated list of disallowed tools")
+            ->expected(1)->delimiter(',');
+        app.add_option("--max-turns", maxTurns_,
+                       "Maximum agent loop iterations (prevents runaway costs)");
+        app.add_flag("--continue", continueSession_,
+                     "Resume the most recent conversation session");
+        app.add_option("--system-prompt", systemPromptOverride_,
+                       "Override the default system prompt (replaces everything)");
+        app.add_option("--append-system-prompt", appendSystemPrompt_,
+                       "Append to the default system prompt");
 #ifdef HAS_FTXUI
         app.add_flag("--ftxui", useFtxui_, "Use FTXUI component-based terminal UI");
 #endif
@@ -939,8 +953,27 @@ private:
                .withEnabledTools(enabledTools)
                .withReplMode(interactive_);
 
-        auto systemBlocks = builder.buildBlocks();
-        String systemPrompt = builder.build();
+        // Apply CLI system prompt overrides via 5-tier resolution
+        String systemPrompt;
+        std::vector<TextBlockParam> systemBlocks;
+
+        if (!systemPromptOverride_.empty()) {
+            // Tier 0: complete replacement
+            systemPrompt = systemPromptOverride_;
+        } else {
+            systemBlocks = builder.buildBlocks();
+            systemPrompt = builder.build();
+
+            // Append additional system prompt if specified
+            if (!appendSystemPrompt_.empty()) {
+                systemPrompt += "\n\n" + appendSystemPrompt_;
+                // Also append to blocks
+                TextBlockParam appendBlock;
+                appendBlock.type = "text";
+                appendBlock.text = appendSystemPrompt_;
+                systemBlocks.push_back(appendBlock);
+            }
+        }
 
         tokenTracker_ = std::make_unique<TokenTracker>();
 
@@ -1022,6 +1055,25 @@ private:
         }
         agentLoop_->initAutoCompact(contextWindow);
 
+        // Apply CLI flags to AgentLoop
+        if (!allowedToolsStr_.empty()) {
+            agentLoop_->setAllowedTools(allowedToolsStr_);
+            spdlog::info("Tool allowlist: {} tools", allowedToolsStr_.size());
+        }
+        if (!disallowedToolsStr_.empty()) {
+            agentLoop_->setDisallowedTools(disallowedToolsStr_);
+            spdlog::info("Tool denylist: {} tools", disallowedToolsStr_.size());
+        }
+        if (maxTurns_ > 0) {
+            agentLoop_->setMaxIterations(maxTurns_);
+            spdlog::info("Max turns: {}", maxTurns_);
+        }
+
+        // Resume session if --continue flag is set
+        if (continueSession_) {
+            resumeLastSession();
+        }
+
         // 设置回调
         setupCallbacks();
 
@@ -1030,6 +1082,110 @@ private:
                       claudeMdContent.size(),
                       std::filesystem::exists(memDir) ? "loaded" : "none",
                       enabledTools.size());
+    }
+
+    /// Resume the most recent session from ~/.claude/sessions/
+    void resumeLastSession() {
+        if (!agentLoop_) return;
+
+        const char* home = std::getenv("HOME");
+        if (!home) return;
+
+        auto sessionDir = std::filesystem::path(home) / ".claude" / "sessions";
+        if (!std::filesystem::exists(sessionDir)) return;
+
+        // Find the most recent session file
+        std::vector<std::filesystem::path> sessions;
+        for (const auto& entry : std::filesystem::directory_iterator(sessionDir)) {
+            if (entry.path().extension() == ".json") {
+                sessions.push_back(entry.path());
+            }
+        }
+        if (sessions.empty()) {
+            spdlog::info("No saved sessions found for --continue");
+            return;
+        }
+
+        std::sort(sessions.begin(), sessions.end(), [](const auto& a, const auto& b) {
+            return std::filesystem::last_write_time(a) > std::filesystem::last_write_time(b);
+        });
+
+        const auto& latestSession = sessions[0];
+        try {
+            std::ifstream ifs(latestSession);
+            if (!ifs) return;
+            auto sessionJson = Json::parse(ifs);
+
+            if (!sessionJson.contains("messages") || !sessionJson["messages"].is_array()) return;
+
+            std::vector<Message> loadedMessages;
+            for (const auto& jm : sessionJson["messages"]) {
+                String roleStr = jm.value("role", "user");
+                MessageRole role = MessageRole::User;
+                if (roleStr == "system") role = MessageRole::System;
+                else if (roleStr == "assistant") role = MessageRole::Assistant;
+                else if (roleStr == "tool") role = MessageRole::ToolResult;
+
+                Message msg;
+                msg.role = role;
+                msg.content = jm.value("content", "");
+
+                if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
+                    for (const auto& tcj : jm["tool_calls"]) {
+                        ToolCall tc;
+                        tc.id = tcj.value("id", "");
+                        if (tcj.contains("function")) {
+                            tc.name = tcj["function"].value("name", "");
+                            tc.arguments = tcj["function"].value("arguments", "");
+                        }
+                        msg.toolCalls.push_back(tc);
+                    }
+                }
+
+                if (jm.contains("tool_results") && jm["tool_results"].is_array()) {
+                    for (const auto& trj : jm["tool_results"]) {
+                        ToolResponse tr;
+                        tr.callId = trj.value("tool_call_id", "");
+                        tr.toolName = trj.value("name", "");
+                        tr.content = trj.value("content", "");
+                        tr.isError = trj.value("is_error", false);
+                        msg.toolResults.push_back(tr);
+                    }
+                }
+
+                if (jm.contains("thinking")) {
+                    msg.thinking = jm["thinking"].get<String>();
+                }
+
+                loadedMessages.push_back(std::move(msg));
+            }
+
+            if (!loadedMessages.empty()) {
+                // Replace history, preserving the system prompt
+                auto& currentHistory = agentLoop_->getMessageHistory();
+                String currentSystemPrompt;
+                for (const auto& m : currentHistory) {
+                    if (m.role == MessageRole::System) {
+                        currentSystemPrompt = m.content;
+                        break;
+                    }
+                }
+
+                loadedMessages.erase(
+                    std::remove_if(loadedMessages.begin(), loadedMessages.end(),
+                        [](const Message& m) { return m.role == MessageRole::System; }),
+                    loadedMessages.end());
+
+                // Prepend system prompt
+                loadedMessages.insert(loadedMessages.begin(),
+                    Message::system(currentSystemPrompt));
+
+                agentLoop_->replaceHistory(std::move(loadedMessages));
+                spdlog::info("Resumed session from {}", latestSession.filename().string());
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Failed to resume session: {}", e.what());
+        }
     }
 
     void initMcp() {
@@ -1473,6 +1629,12 @@ private:
     String model_;
     String provider_;
     String permissionModeStr_;
+    std::vector<String> allowedToolsStr_;
+    std::vector<String> disallowedToolsStr_;
+    int maxTurns_ = 0;
+    bool continueSession_ = false;
+    String systemPromptOverride_;
+    String appendSystemPrompt_;
 
     // 组件
     std::unique_ptr<AppConfig> config_;
