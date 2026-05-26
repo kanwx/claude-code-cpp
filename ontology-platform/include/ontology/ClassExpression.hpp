@@ -275,6 +275,9 @@ public:
     // 计算两个类表达式的并集
     static ClassExpressionPtr union_(const ClassExpression& expr1, const ClassExpression& expr2);
 
+    // Negation Normal Form conversion (pushes negations inward)
+    static ClassExpressionPtr toNNF(const ClassExpression& expr);
+
     // TBox-aware overloads (TripleStore provides rdfs:subClassOf, owl:disjointWith, owl:equivalentClass)
     static bool isSubsumedBy(
         const ClassExpression& expr1,

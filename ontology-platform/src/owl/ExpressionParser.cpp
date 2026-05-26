@@ -1211,4 +1211,81 @@ bool ClassExpressionEvaluator::isUniversal(const ClassExpression& expr, TripleSt
     }
 }
 
+ClassExpressionPtr ClassExpressionEvaluator::toNNF(const ClassExpression& expr) {
+    switch (expr.type) {
+        case ExpressionType::Atomic:
+        case ExpressionType::Top:
+        case ExpressionType::Bottom:
+            return std::make_shared<ClassExpression>(expr);
+
+        case ExpressionType::Complement: {
+            if (!expr.complementOf) return ClassExpression::top();
+            auto& inner = *expr.complementOf;
+            if (inner.type == ExpressionType::Complement && inner.complementOf) {
+                return toNNF(*inner.complementOf);
+            }
+            if (inner.type == ExpressionType::Intersection) {
+                std::vector<ClassExpressionPtr> negOps;
+                for (const auto& op : inner.operands) {
+                    negOps.push_back(toNNF(*ClassExpression::complement(op)));
+                }
+                return ClassExpression::union_(negOps);
+            }
+            if (inner.type == ExpressionType::Union) {
+                std::vector<ClassExpressionPtr> negOps;
+                for (const auto& op : inner.operands) {
+                    negOps.push_back(toNNF(*ClassExpression::complement(op)));
+                }
+                return ClassExpression::intersection(negOps);
+            }
+            if (inner.type == ExpressionType::ObjectSomeValuesFrom) {
+                auto negFiller = toNNF(*ClassExpression::complement(inner.filler));
+                return ClassExpression::allValuesFrom(inner.property, negFiller);
+            }
+            if (inner.type == ExpressionType::ObjectAllValuesFrom) {
+                auto negFiller = toNNF(*ClassExpression::complement(inner.filler));
+                return ClassExpression::someValuesFrom(inner.property, negFiller);
+            }
+            if (inner.type == ExpressionType::Top) {
+                return ClassExpression::bottom();
+            }
+            if (inner.type == ExpressionType::Bottom) {
+                return ClassExpression::top();
+            }
+            auto result = std::make_shared<ClassExpression>(expr);
+            result->complementOf = toNNF(inner);
+            return result;
+        }
+
+        case ExpressionType::Intersection: {
+            std::vector<ClassExpressionPtr> ops;
+            for (const auto& op : expr.operands) {
+                ops.push_back(toNNF(*op));
+            }
+            return ClassExpression::intersection(ops);
+        }
+
+        case ExpressionType::Union: {
+            std::vector<ClassExpressionPtr> ops;
+            for (const auto& op : expr.operands) {
+                ops.push_back(toNNF(*op));
+            }
+            return ClassExpression::union_(ops);
+        }
+
+        case ExpressionType::ObjectSomeValuesFrom: {
+            auto filler = toNNF(*expr.filler);
+            return ClassExpression::someValuesFrom(expr.property, filler);
+        }
+
+        case ExpressionType::ObjectAllValuesFrom: {
+            auto filler = toNNF(*expr.filler);
+            return ClassExpression::allValuesFrom(expr.property, filler);
+        }
+
+        default:
+            return std::make_shared<ClassExpression>(expr);
+    }
+}
+
 } // namespace ontology

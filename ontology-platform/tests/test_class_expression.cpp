@@ -167,6 +167,57 @@ void test_functional_syntax_some_values() {
     PASS();
 }
 
+void test_nnf_double_negation() {
+    TEST("NNF converts double negation");
+    auto expr = ClassExpression::complement(
+        ClassExpression::complement(ClassExpression::atomic("A")));
+    auto nnf = ClassExpressionEvaluator::toNNF(*expr);
+    ASSERT_TRUE(nnf->type == ExpressionType::Atomic);
+    ASSERT_TRUE(nnf->className == "A");
+    PASS();
+}
+
+void test_nnf_conjunction_de_morgan() {
+    TEST("NNF pushes negation through intersection (De Morgan)");
+    auto expr = ClassExpression::complement(
+        ClassExpression::intersection({
+            ClassExpression::atomic("A"),
+            ClassExpression::atomic("B")
+        }));
+    auto nnf = ClassExpressionEvaluator::toNNF(*expr);
+    ASSERT_TRUE(nnf->type == ExpressionType::Union);
+    ASSERT_EQ(nnf->operands.size(), 2u);
+    ASSERT_TRUE(nnf->operands[0]->type == ExpressionType::Complement);
+    ASSERT_TRUE(nnf->operands[1]->type == ExpressionType::Complement);
+    PASS();
+}
+
+void test_nnf_quantifier_negation() {
+    TEST("NNF pushes negation through quantifiers");
+    auto expr = ClassExpression::complement(
+        ClassExpression::someValuesFrom("R", ClassExpression::atomic("A")));
+    auto nnf = ClassExpressionEvaluator::toNNF(*expr);
+    ASSERT_TRUE(nnf->type == ExpressionType::ObjectAllValuesFrom);
+    ASSERT_TRUE(nnf->property == "R");
+    ASSERT_TRUE(nnf->filler->type == ExpressionType::Complement);
+    PASS();
+}
+
+void test_nnf_disjunction_de_morgan() {
+    TEST("NNF pushes negation through union (De Morgan)");
+    auto expr = ClassExpression::complement(
+        ClassExpression::union_({
+            ClassExpression::atomic("A"),
+            ClassExpression::atomic("B")
+        }));
+    auto nnf = ClassExpressionEvaluator::toNNF(*expr);
+    ASSERT_TRUE(nnf->type == ExpressionType::Intersection);
+    ASSERT_EQ(nnf->operands.size(), 2u);
+    ASSERT_TRUE(nnf->operands[0]->type == ExpressionType::Complement);
+    ASSERT_TRUE(nnf->operands[1]->type == ExpressionType::Complement);
+    PASS();
+}
+
 int main() {
     test_atomic_subsumption_with_tbox();
     test_intersection_subsumption_with_tbox();
@@ -179,6 +230,10 @@ int main() {
     test_functional_syntax_nested();
     test_functional_syntax_complement();
     test_functional_syntax_some_values();
+    test_nnf_double_negation();
+    test_nnf_conjunction_de_morgan();
+    test_nnf_quantifier_negation();
+    test_nnf_disjunction_de_morgan();
     std::cout << "\nClassExpression tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;
