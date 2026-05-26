@@ -2175,12 +2175,234 @@ String OwlXmlParser::getLiteralValue(const XmlNode& node) {
 
 OwlXmlWriter::OwlXmlWriter() {}
 
+namespace {
+
+// Resolve a prefixed name (e.g. "ex:Dog") to a full IRI using the prefix map.
+String resolvePrefixedName(const String& value, const PrefixMap& prefixes) {
+    if (value.size() > 1 && value.front() == '<' && value.back() == '>') {
+        return value.substr(1, value.size() - 2);
+    }
+    if (value.find("://") != String::npos) {
+        return value;
+    }
+    if (value.substr(0, 2) == "_:") {
+        return value;
+    }
+    auto colonPos = value.find(':');
+    if (colonPos != String::npos) {
+        String prefix = value.substr(0, colonPos);
+        String local = value.substr(colonPos + 1);
+        auto it = prefixes.find(prefix);
+        if (it != prefixes.end()) {
+            return it->second + local;
+        }
+    }
+    return value;
+}
+
+String owlEscapeXml(const String& text) {
+    String result;
+    for (char c : text) {
+        switch (c) {
+            case '&': result += "&amp;"; break;
+            case '<': result += "&lt;"; break;
+            case '>': result += "&gt;"; break;
+            case '"': result += "&quot;"; break;
+            case '\'': result += "&apos;"; break;
+            default: result += c;
+        }
+    }
+    return result;
+}
+
+// Well-known IRI constants
+static const String OWL_CLASS_IRI  = "http://www.w3.org/2002/07/owl#Class";
+static const String OWL_OBJPROP_IRI = "http://www.w3.org/2002/07/owl#ObjectProperty";
+static const String OWL_DATAPROP_IRI = "http://www.w3.org/2002/07/owl#DatatypeProperty";
+static const String OWL_FUNC_PROP_IRI = "http://www.w3.org/2002/07/owl#FunctionalProperty";
+static const String OWL_DISJOINT_IRI = "http://www.w3.org/2002/07/owl#disjointWith";
+static const String RDF_TYPE_IRI   = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+static const String RDFS_SUBCLASS_IRI = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+static const String RDFS_DOMAIN_IRI = "http://www.w3.org/2000/01/rdf-schema#domain";
+static const String RDFS_RANGE_IRI  = "http://www.w3.org/2000/01/rdf-schema#range";
+
+} // anonymous namespace
+
 String OwlXmlWriter::write(const Ontology& ontology) {
-    return RdfXmlWriter().write(ontology);
+    // Build an RdfGraph from the ontology, then serialize as OWL/XML
+    String base = ontology.baseIRI.empty() ? "http://example.org/ontology#" : ontology.baseIRI;
+
+    RdfGraph graph;
+    graph.addPrefix("ex", base);
+    graph.addPrefix("owl", "http://www.w3.org/2002/07/owl#");
+    graph.addPrefix("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#");
+    graph.addPrefix("rdfs", "http://www.w3.org/2000/01/rdf-schema#");
+
+    // Emit classes
+    for (const auto& [id, cls] : ontology.classes) {
+        graph.addTriple({"ex:" + id, "rdf:type", "owl:Class", false, "", ""});
+        for (const auto& super : cls.superClasses) {
+            graph.addTriple({"ex:" + id, "rdfs:subClassOf", "ex:" + super, false, "", ""});
+        }
+        for (const auto& disj : cls.disjointClasses) {
+            graph.addTriple({"ex:" + id, "owl:disjointWith", "ex:" + disj, false, "", ""});
+        }
+    }
+    // Emit relations as object properties
+    for (const auto& [id, rel] : ontology.relations) {
+        graph.addTriple({"ex:" + id, "rdf:type", "owl:ObjectProperty", false, "", ""});
+        if (!rel.domain.empty()) {
+            graph.addTriple({"ex:" + id, "rdfs:domain", "ex:" + rel.domain, false, "", ""});
+        }
+        if (!rel.range.empty()) {
+            graph.addTriple({"ex:" + id, "rdfs:range", "ex:" + rel.range, false, "", ""});
+        }
+    }
+    // Emit individuals
+    for (const auto& [id, ind] : ontology.individuals) {
+        if (!ind.classId.empty()) {
+            graph.addTriple({"ex:" + id, "rdf:type", "ex:" + ind.classId, false, "", ""});
+        }
+        for (const auto& [relId, targets] : ind.relations) {
+            for (const auto& target : targets) {
+                graph.addTriple({"ex:" + id, "ex:" + relId, "ex:" + target, false, "", ""});
+            }
+        }
+    }
+
+    return writeRdf(graph);
 }
 
 String OwlXmlWriter::writeRdf(const RdfGraph& graph) {
-    return RdfXmlWriter().writeRdf(graph);
+    std::ostringstream oss;
+
+    // Categorise triples by resolved predicate
+    std::vector<std::pair<String, String>> classDecls;        // class IRI
+    std::vector<std::pair<String, String>> objPropDecls;      // object property IRI
+    std::vector<std::pair<String, String>> dataPropDecls;     // datatype property IRI
+    std::vector<std::pair<String, String>> funcPropDecls;     // functional property IRI
+    std::vector<std::pair<String, String>> subClassOf;        // (sub, super)
+    std::vector<std::pair<String, String>> disjointWith;      // (c1, c2)
+    std::vector<std::pair<String, String>> propDomain;        // (prop, class)
+    std::vector<std::pair<String, String>> propRange;         // (prop, class)
+    std::vector<std::pair<String, String>> classAssertions;   // (individual, class)
+    std::vector<std::tuple<String, String, String>> objPropAssertions; // (prop, subject, object)
+    std::vector<const RdfTriple*> otherTriples;
+
+    for (const auto& t : graph.triples) {
+        String predIri = resolvePrefixedName(t.predicate, graph.prefixes);
+        String subjIri = resolvePrefixedName(t.subject, graph.prefixes);
+        String objIri  = resolvePrefixedName(t.object, graph.prefixes);
+
+        if (predIri == RDF_TYPE_IRI) {
+            if (objIri == OWL_CLASS_IRI) {
+                classDecls.emplace_back(subjIri, objIri);
+            } else if (objIri == OWL_OBJPROP_IRI) {
+                objPropDecls.emplace_back(subjIri, objIri);
+            } else if (objIri == OWL_DATAPROP_IRI) {
+                dataPropDecls.emplace_back(subjIri, objIri);
+            } else if (objIri == OWL_FUNC_PROP_IRI) {
+                funcPropDecls.emplace_back(subjIri, objIri);
+            } else {
+                // Individual type assertion (not a built-in OWL metaclass)
+                classAssertions.emplace_back(subjIri, objIri);
+            }
+        } else if (predIri == RDFS_SUBCLASS_IRI) {
+            subClassOf.emplace_back(subjIri, objIri);
+        } else if (predIri == OWL_DISJOINT_IRI) {
+            disjointWith.emplace_back(subjIri, objIri);
+        } else if (predIri == RDFS_DOMAIN_IRI) {
+            propDomain.emplace_back(subjIri, objIri);
+        } else if (predIri == RDFS_RANGE_IRI) {
+            propRange.emplace_back(subjIri, objIri);
+        } else {
+            // Check if it's an object property assertion (subject and object are not literals)
+            if (!t.isLiteral) {
+                objPropAssertions.emplace_back(predIri, subjIri, objIri);
+            } else {
+                otherTriples.push_back(&t);
+            }
+        }
+    }
+
+    // Emit OWL/XML
+    oss << "<?xml version=\"1.0\"?>\n";
+    oss << "<Ontology xml:base=\"http://example.org/ontology\"\n";
+    oss << "  xmlns=\"http://www.w3.org/2002/07/owl#\"\n";
+    oss << "  xmlns:owl=\"http://www.w3.org/2002/07/owl#\"\n";
+    oss << "  xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n";
+    oss << "  xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"\n";
+    oss << "  xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\">\n";
+
+    // Declarations
+    for (const auto& [iri, _] : classDecls) {
+        oss << "  <Declaration><Class IRI=\"" << owlEscapeXml(iri) << "\"/></Declaration>\n";
+    }
+    for (const auto& [iri, _] : objPropDecls) {
+        oss << "  <Declaration><ObjectProperty IRI=\"" << owlEscapeXml(iri) << "\"/></Declaration>\n";
+    }
+    for (const auto& [iri, _] : dataPropDecls) {
+        oss << "  <Declaration><DataProperty IRI=\"" << owlEscapeXml(iri) << "\"/></Declaration>\n";
+    }
+    // Functional properties also need a Declaration + FunctionalObjectProperty axiom
+    for (const auto& [iri, _] : funcPropDecls) {
+        oss << "  <Declaration><ObjectProperty IRI=\"" << owlEscapeXml(iri) << "\"/></Declaration>\n";
+        oss << "  <FunctionalObjectProperty><ObjectProperty IRI=\"" << owlEscapeXml(iri)
+            << "\"/></FunctionalObjectProperty>\n";
+    }
+
+    // SubClassOf axioms
+    for (const auto& [sub, sup] : subClassOf) {
+        oss << "  <SubClassOf><Class IRI=\"" << owlEscapeXml(sub) << "\"/>"
+            << "<Class IRI=\"" << owlEscapeXml(sup) << "\"/></SubClassOf>\n";
+    }
+
+    // DisjointClasses axioms
+    for (const auto& [c1, c2] : disjointWith) {
+        oss << "  <DisjointClasses><Class IRI=\"" << owlEscapeXml(c1) << "\"/>"
+            << "<Class IRI=\"" << owlEscapeXml(c2) << "\"/></DisjointClasses>\n";
+    }
+
+    // ObjectPropertyDomain / ObjectPropertyRange
+    for (const auto& [prop, cls] : propDomain) {
+        oss << "  <ObjectPropertyDomain><ObjectProperty IRI=\"" << owlEscapeXml(prop) << "\"/>"
+            << "<Class IRI=\"" << owlEscapeXml(cls) << "\"/></ObjectPropertyDomain>\n";
+    }
+    for (const auto& [prop, cls] : propRange) {
+        oss << "  <ObjectPropertyRange><ObjectProperty IRI=\"" << owlEscapeXml(prop) << "\"/>"
+            << "<Class IRI=\"" << owlEscapeXml(cls) << "\"/></ObjectPropertyRange>\n";
+    }
+
+    // ClassAssertion (individual rdf:type NonOwlClass)
+    for (const auto& [individual, cls] : classAssertions) {
+        oss << "  <ClassAssertion><Class IRI=\"" << owlEscapeXml(cls) << "\"/>"
+            << "<NamedIndividual IRI=\"" << owlEscapeXml(individual) << "\"/></ClassAssertion>\n";
+    }
+
+    // ObjectPropertyAssertion
+    for (const auto& [prop, subj, obj] : objPropAssertions) {
+        oss << "  <ObjectPropertyAssertion>"
+            << "<ObjectProperty IRI=\"" << owlEscapeXml(prop) << "\"/>"
+            << "<NamedIndividual IRI=\"" << owlEscapeXml(subj) << "\"/>"
+            << "<NamedIndividual IRI=\"" << owlEscapeXml(obj) << "\"/>"
+            << "</ObjectPropertyAssertion>\n";
+    }
+
+    // Other triples as AnnotationAssertion (simplified)
+    for (const auto* t : otherTriples) {
+        String predIri = resolvePrefixedName(t->predicate, graph.prefixes);
+        String subjIri = resolvePrefixedName(t->subject, graph.prefixes);
+        if (t->isLiteral) {
+            oss << "  <AnnotationAssertion>"
+                << "<AnnotationProperty abbreviatedIRI=\"" << owlEscapeXml(t->predicate) << "\"/>"
+                << "<IRI>" << owlEscapeXml(subjIri) << "</IRI>"
+                << "<Literal>" << owlEscapeXml(t->object) << "</Literal>"
+                << "</AnnotationAssertion>\n";
+        }
+    }
+
+    oss << "</Ontology>\n";
+    return oss.str();
 }
 
 } // namespace ontology
