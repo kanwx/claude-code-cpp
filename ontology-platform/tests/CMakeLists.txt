@@ -91,3 +91,8 @@ add_test(NAME auto_model COMMAND test_auto_model)
 add_executable(test_alc_reasoner test_alc_reasoner.cpp)
 target_link_libraries(test_alc_reasoner PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME alc_reasoner COMMAND test_alc_reasoner)
+
+# Unit test: IO (JSON-LD + OWL/XML writers)
+add_executable(test_io test_io.cpp)
+target_link_libraries(test_io PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME io COMMAND test_io)
