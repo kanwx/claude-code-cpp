@@ -152,6 +152,34 @@ static std::atomic<bool> g_interruptRequested{false};  // Set by SIGINT, checked
 static std::atomic<int> g_ctrlCCount{0};
 static std::chrono::steady_clock::time_point g_lastCtrlCTime{};
 
+/// Restore terminal to sane state — disables mouse tracking, restores cursor, resets attributes.
+/// MUST be called before _Exit() on every exit path to avoid leaving the terminal in
+/// a broken state (mouse tracking captures clicks, making copy impossible; raw mode
+/// echoes escape sequences as garbage characters).
+static void restoreTerminal() {
+    // Disable all mouse tracking modes (DECSET 1000/1002/1003/1006)
+    // These are the sequences FTXUI's TrackMouse() enables. Writing them
+    // directly ensures cleanup even when FTXUI's Uninstall() is bypassed.
+    write(STDOUT_FILENO, "\x1b[?1000l", 8);  // Disable basic mouse tracking
+    write(STDOUT_FILENO, "\x1b[?1002l", 8);  // Disable button-event tracking
+    write(STDOUT_FILENO, "\x1b[?1003l", 8);  // Disable any-event tracking
+    write(STDOUT_FILENO, "\x1b[?1006l", 8);  // Disable SGR mouse mode
+
+    // Restore cursor visibility and reset text attributes
+    write(STDOUT_FILENO, "\x1b[?25h", 6);    // Show cursor
+    write(STDOUT_FILENO, "\x1b[0m", 4);      // Reset all attributes
+
+    // Restore terminal from raw mode (tcsetattr with original settings)
+    // FTXUI's Install() sets raw mode; if we bypass Uninstall(), we need
+    // to restore canonical mode so the shell works normally after exit.
+    struct termios t;
+    if (tcgetattr(STDIN_FILENO, &t) == 0) {
+        t.c_lflag |= (ICANON | ECHO | ISIG);
+        t.c_lflag &= ~(VMIN | VTIME);
+        tcsetattr(STDIN_FILENO, TCSANOW, &t);
+    }
+}
+
 #ifdef USE_READLINE
 // readline 命令补全
 static CommandRegistry* g_commandRegistry = nullptr;
@@ -576,6 +604,12 @@ private:
     }
 
     void init() {
+        // Register terminal restore as FIRST cleanup (runs LAST due to reverse-order execution)
+        // This ensures mouse tracking is disabled and terminal mode is restored
+        // on every exit path, even when _Exit() bypasses FTXUI's Uninstall().
+        CleanupRegistry::registerCleanup("restore-terminal", CleanupRegistry::Category::UI,
+            []() { restoreTerminal(); });
+
         // 注册清理函数
         CleanupRegistry::registerCleanup("save-permissions", CleanupRegistry::Category::Persistence,
             [this]() {
@@ -1574,7 +1608,7 @@ private:
         if (cmd == "exit" || cmd == "quit" || cmd == "q") {
             saveSession(agentLoop_.get());
             std::cout << "Goodbye!\n";
-            CleanupRegistry::runCleanupFunctions();
+            CleanupRegistry::runCleanupFunctions();  // includes restoreTerminal()
             _Exit(0);
         }
 
@@ -1684,7 +1718,8 @@ private:
 /// No spdlog, no mutex, no heap allocation, no non-atomic writes.
 static void signalHandler(int signal) {
     if (signal == SIGTERM) {
-        _Exit(143);  // Skip cleanup — not safe in signal handler
+        restoreTerminal();
+        _Exit(143);
     }
 
     if (signal == SIGINT) {
@@ -1711,6 +1746,7 @@ static void signalHandler(int signal) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - g_lastCtrlCTime).count();
             if (elapsed < 800) {
+                restoreTerminal();
                 _Exit(0);
             }
             // Too slow — reset and treat as first press

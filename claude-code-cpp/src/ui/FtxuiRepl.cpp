@@ -12,10 +12,21 @@
 #include <execinfo.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <termios.h>
 
 namespace {
 
 void crashHandler(int sig) {
+    // Restore terminal before anything else — mouse tracking must be
+    // disabled so the shell works after the crash dump.
+    // write() and tcsetattr() are async-signal-safe.
+    write(STDOUT_FILENO, "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[0m", 38);
+    struct termios t;
+    if (tcgetattr(STDIN_FILENO, &t) == 0) {
+        t.c_lflag |= (ICANON | ECHO | ISIG);
+        tcsetattr(STDIN_FILENO, TCSANOW, &t);
+    }
+
     void* array[20];
     int size = backtrace(array, 20);
     fprintf(stderr, "\n=== FTXUI CRASH (signal %d) ===\n", sig);
