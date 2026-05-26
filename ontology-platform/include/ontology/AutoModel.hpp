@@ -300,6 +300,46 @@ struct ConflictAction {
 };
 
 // ============================================================================
+// 冲突检测结果
+// ============================================================================
+
+struct Conflict {
+    enum Type {
+        DisjointClassAssertion,       // individual typed as both C and D where C ⊓ D ⊑ ⊥
+        FunctionalPropertyViolation,  // subject has multiple values for functional property
+        Inconsistency                 // DlReasoner detected inconsistency
+    };
+    Type type;
+    String description;
+    std::vector<Triple> conflictingTriples;
+    float severity = 1.0f;  // 0.0-1.0
+};
+
+// ============================================================================
+// 数据来源追踪
+// ============================================================================
+
+struct Provenance {
+    String sourceId;       // ontology/document ID
+    String sourceName;     // human-readable name
+    float confidence = 1.0f;
+    String timestamp;      // ISO 8601 when this triple was added
+};
+
+// ============================================================================
+// 实体对齐结果
+// ============================================================================
+
+struct AlignmentResult {
+    String entity1;
+    String entity2;
+    float embeddingScore;   // cosine similarity
+    float structuralScore;  // Jaccard of shared properties
+    float labelScore;       // normalized Levenshtein
+    float combinedScore;    // weighted combination
+};
+
+// ============================================================================
 // 自动建模引擎
 // ============================================================================
 
@@ -373,18 +413,20 @@ private:
     /// 优化本体
     std::vector<String> optimize();
 
-    /// 检测冲突
-    std::vector<String> detectConflicts();
+    /// 检测冲突 (TBox-aware)
+    std::vector<Conflict> detectConflicts();
 
     // ===== 知识融合 =====
 
-    /// 实体对齐
-    std::vector<std::pair<String, String>> alignEntities(
+    /// 实体对齐 (multi-signal)
+    std::vector<AlignmentResult> alignEntities(
         const std::vector<String>& entities1,
         const std::vector<String>& entities2);
 
-    /// 本体融合
-    void mergeOntologies(const std::vector<Triple>& externalTriples);
+    /// 本体融合 (provenance-aware)
+    void mergeOntologies(const std::vector<Triple>& externalTriples,
+                         const String& sourceId = "external",
+                         const String& sourceName = "External Ontology");
 
     // ===== 导出与解释 =====
 
@@ -423,6 +465,23 @@ private:
     bool llmInitialized_ = false;
     bool embeddingsTrained_ = false;
     std::queue<Triple> pendingLearning_;  // 待学习的三元组
+
+    // Provenance tracking: triple hash -> provenance
+    std::unordered_map<size_t, Provenance> provenanceIndex_;
+
+    // Alignment weights
+    float alignWeightEmbedding_ = 0.5f;
+    float alignWeightStructural_ = 0.3f;
+    float alignWeightLabel_ = 0.2f;
+
+    // Helper: compute triple hash
+    static size_t tripleHash(const Triple& t);
+
+    // Helper: compute Levenshtein distance
+    static int levenshteinDistance(const String& s1, const String& s2);
+
+    // Helper: compute Jaccard coefficient
+    float jaccardCoefficient(const String& entity1, const String& entity2) const;
 };
 
 // ============================================================================
