@@ -7,6 +7,7 @@
 #include <fstream>
 #include <cmath>
 #include <unordered_set>
+#include <ontology/Temporal.hpp>
 
 namespace ontology {
 
@@ -1549,6 +1550,28 @@ bool SwrlBuiltIns::execute(
         return false;
     }
 
+    // Temporal functions (Allen algebra)
+    if (localName == "temporalBefore" || localName == "temporal:before") {
+        if (args.size() >= 2) return temporalBefore(args[0], args[1]);
+        return false;
+    }
+    if (localName == "temporalAfter" || localName == "temporal:after") {
+        if (args.size() >= 2) return temporalAfter(args[0], args[1]);
+        return false;
+    }
+    if (localName == "temporalOverlaps" || localName == "temporal:overlaps") {
+        if (args.size() >= 4) return temporalOverlaps(args[0], args[1], args[2], args[3]);
+        return false;
+    }
+    if (localName == "temporalDuring" || localName == "temporal:during") {
+        if (args.size() >= 4) return temporalDuring(args[0], args[1], args[2], args[3]);
+        return false;
+    }
+    if (localName == "temporalContains" || localName == "temporal:contains") {
+        if (args.size() >= 4) return temporalContains(args[0], args[1], args[2], args[3]);
+        return false;
+    }
+
     return false;
 }
 
@@ -1621,6 +1644,44 @@ String SwrlExplainer::generateProof(
 
     oss << "✗ 无法证明\n";
     return oss.str();
+}
+
+// ============================================================================
+// Temporal built-ins
+// ============================================================================
+
+bool SwrlBuiltIns::temporalBefore(const String& t1, const String& t2) {
+    int64_t e1 = isoToEpochMs(t1);
+    int64_t s2 = isoToEpochMs(t2);
+    return e1 < s2;
+}
+
+bool SwrlBuiltIns::temporalAfter(const String& t1, const String& t2) {
+    int64_t s1 = isoToEpochMs(t1);
+    int64_t e2 = isoToEpochMs(t2);
+    return s1 > e2;
+}
+
+bool SwrlBuiltIns::temporalOverlaps(const String& t1_start, const String& t1_end,
+                                     const String& t2_start, const String& t2_end) {
+    TemporalInterval i1{t1_start, t1_end};
+    TemporalInterval i2{t2_start, t2_end};
+    auto r = i1.relationTo(i2);
+    return r == AllenRelation::Overlaps || r == AllenRelation::OverlappedBy;
+}
+
+bool SwrlBuiltIns::temporalDuring(const String& t1_start, const String& t1_end,
+                                   const String& t2_start, const String& t2_end) {
+    TemporalInterval i1{t1_start, t1_end};
+    TemporalInterval i2{t2_start, t2_end};
+    return i1.relationTo(i2) == AllenRelation::During;
+}
+
+bool SwrlBuiltIns::temporalContains(const String& t1_start, const String& t1_end,
+                                     const String& t2_start, const String& t2_end) {
+    TemporalInterval i1{t1_start, t1_end};
+    TemporalInterval i2{t2_start, t2_end};
+    return i1.relationTo(i2) == AllenRelation::Contains;
 }
 
 } // namespace ontology

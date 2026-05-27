@@ -329,6 +329,16 @@ public:
         const std::vector<String>& args,
         std::vector<String>& results
     );
+
+    /// Temporal functions (Allen algebra)
+    static bool temporalBefore(const String& t1, const String& t2);
+    static bool temporalAfter(const String& t1, const String& t2);
+    static bool temporalOverlaps(const String& t1_start, const String& t1_end,
+                                  const String& t2_start, const String& t2_end);
+    static bool temporalDuring(const String& t1_start, const String& t1_end,
+                                const String& t2_start, const String& t2_end);
+    static bool temporalContains(const String& t1_start, const String& t1_end,
+                                  const String& t2_start, const String& t2_end);
 };
 
 // ============================================================================
