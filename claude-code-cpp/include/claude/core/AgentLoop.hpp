@@ -20,6 +20,7 @@
 #include <optional>
 #include <expected>
 #include <atomic>
+#include <mutex>
 
 namespace claude {
 
@@ -95,6 +96,7 @@ public:
 
     /// 设置工具事件回调
     void setOnToolEvent(OnToolEvent callback) {
+        std::lock_guard lock(callbackMutex_);
         onToolEvent_ = std::move(callback);
     }
 
@@ -102,21 +104,25 @@ public:
     void setOnPermissionRequest(
         std::function<PermissionChoice(const PermissionRequest&)> callback
     ) {
+        std::lock_guard lock(callbackMutex_);
         onPermissionRequest_ = std::move(callback);
     }
 
     /// 设置流式开始回调
     void setOnStreamStart(OnStreamStart callback) {
+        std::lock_guard lock(callbackMutex_);
         onStreamStart_ = std::move(callback);
     }
 
     /// 设置思考内容回调
     void setOnThinking(OnThinking callback) {
+        std::lock_guard lock(callbackMutex_);
         onThinking_ = std::move(callback);
     }
 
     /// 设置助手消息回调
     void setOnAssistantMessage(std::function<void(const String&)> callback) {
+        std::lock_guard lock(callbackMutex_);
         onAssistantMessage_ = std::move(callback);
     }
 
@@ -124,23 +130,27 @@ public:
     /// 这是流畅输出的关键：每个文本块/工具块完成时立即通知UI，
     /// 而不是等待整个 response 完成
     void setOnContentBlockStop(std::function<void(const String& type, int index, const String& content)> callback) {
+        std::lock_guard lock(callbackMutex_);
         onContentBlockStop_ = std::move(callback);
     }
 
     /// 设置工具结果流式回调 — 每个工具完成时立即触发
     /// 允许UI在工具执行过程中逐步显示结果，而非等待所有工具完成
     void setOnToolResult(std::function<void(const String& toolName, const String& result, bool isError)> callback) {
+        std::lock_guard lock(callbackMutex_);
         onToolResult_ = std::move(callback);
     }
 
     /// 初始化 AutoCompact (需要 ApiClient 和上下文窗口大小)
     void initAutoCompact(int contextWindow) {
+        std::lock_guard lock(callbackMutex_);
         autoCompact_.emplace(apiClient_, contextWindow);
     }
 
     /// 设置循环继续回调 — 当TAOR循环继续下一轮时触发
     /// 让UI知道模型正在继续思考/行动
     void setOnLoopContinue(std::function<void(int iteration, int totalIterations)> callback) {
+        std::lock_guard lock(callbackMutex_);
         onLoopContinue_ = std::move(callback);
     }
 
@@ -148,18 +158,21 @@ public:
     /// 当设置后，AgentLoop 通过此回调发送 StreamEvent 事件
     /// 向后兼容：现有独立回调仍然生效（作为回退）
     void setOnStreamEvent(std::function<void(const StreamEvent&)> callback) {
+        std::lock_guard lock(callbackMutex_);
         onStreamEvent_ = std::move(callback);
     }
 
     /// Set the stop hook callback.
     /// When the model stops (end_turn), this hook runs and can force continuation.
     void setOnStopHook(OnStopHook callback) {
+        std::lock_guard lock(callbackMutex_);
         onStopHook_ = std::move(callback);
     }
 
     /// 设置上下文压缩预警回调 — 当 token 使用量接近上下文窗口上限时触发
     /// level 1: 80% (warning), level 2: 93% (critical)
     void setOnCompactWarning(std::function<void(int level, long currentTokens, long maxTokens)> callback) {
+        std::lock_guard lock(callbackMutex_);
         compactWarningHook_.setCallback(std::move(callback));
     }
 
@@ -185,15 +198,23 @@ public:
     /// Set allowed tools filter — only these tools will be sent in API requests.
     /// Empty means all registered tools are available (default).
     void setAllowedTools(std::vector<String> tools) {
+        std::lock_guard lock(toolFilterMutex_);
         allowedTools_ = std::move(tools);
     }
-    const std::vector<String>& getAllowedTools() const { return allowedTools_; }
+    const std::vector<String>& getAllowedTools() const {
+        std::lock_guard lock(toolFilterMutex_);
+        return allowedTools_;
+    }
 
     /// Set disallowed tools — these tools will be excluded from API requests.
     void setDisallowedTools(std::vector<String> tools) {
+        std::lock_guard lock(toolFilterMutex_);
         disallowedTools_ = std::move(tools);
     }
-    const std::vector<String>& getDisallowedTools() const { return disallowedTools_; }
+    const std::vector<String>& getDisallowedTools() const {
+        std::lock_guard lock(toolFilterMutex_);
+        return disallowedTools_;
+    }
 
     /// Set pre-built system prompt blocks with cache_control markers.
     /// When set, buildApiRequest() serializes these blocks instead of
@@ -265,7 +286,11 @@ public:
 
     // ========== 状态访问 ==========
 
+    /// Thread-safety: caller must not hold the returned reference across
+    /// mutation points (push_back, clear, replaceHistory). If concurrent
+    /// access is possible, copy under historyMutex_ or use getMessageCount().
     const std::vector<Message>& getMessageHistory() const {
+        std::lock_guard lock(historyMutex_);
         return messageHistory_;
     }
 
@@ -303,6 +328,7 @@ public:
 
     /// 获取消息数量
     size_t getMessageCount() const {
+        std::lock_guard lock(historyMutex_);
         return messageHistory_.size();
     }
 
@@ -319,9 +345,11 @@ private:
     /// When enabled, tool calls are dispatched at content_block_stop time
     /// instead of waiting for the entire stream to complete.
     void setInterleaveToolExecution(bool enable) {
+        std::lock_guard lock(stateMutex_);
         interleaveToolExecution_ = enable;
     }
     bool isInterleaveToolExecution() const {
+        std::lock_guard lock(stateMutex_);
         return interleaveToolExecution_;
     }
 
@@ -435,6 +463,12 @@ private:
 
     // Cancellation
     std::atomic<bool> cancelled_{false};
+
+    // Thread-safety: mutex guards for shared mutation points
+    mutable std::mutex historyMutex_;     // guards messageHistory_
+    mutable std::mutex callbackMutex_;    // guards all callback setters and invocations
+    mutable std::mutex toolFilterMutex_;  // guards allowedTools_, disallowedTools_, pendingSkillTools_, pendingSkillModel_
+    mutable std::mutex stateMutex_;       // guards interleaveToolExecution_, currentUserInput_, reactiveCompactAttempts_
 
     // Per-agent overrides
     int maxIterations_ = DEFAULT_MAX_ITERATIONS;
