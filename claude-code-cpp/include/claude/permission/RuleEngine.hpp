@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <unordered_set>
 #include <functional>
+#include <mutex>
 
 namespace claude {
 
@@ -179,6 +180,7 @@ private:
     BashClassifier bashClassifier_;
     YoloClassifier yoloClassifier_;
     PermissionRequestQueue requestQueue_;
+    mutable std::recursive_mutex rulesMutex_;  // guards settings_ access, denialTracker_, classifiers
 
     // 只读工具集合
     static const std::unordered_set<String> READ_ONLY_TOOLS;

@@ -11,6 +11,7 @@ namespace claude {
 ContextInjector::ContextInjector() = default;
 
 InjectedContext ContextInjector::buildContext(const String& userQuery) {
+    std::lock_guard lock(contextMutex_);
     InjectedContext ctx;
 
     // Date
@@ -61,6 +62,7 @@ InjectedContext ContextInjector::buildContext(const String& userQuery) {
 }
 
 void ContextInjector::addFileAttachment(const String& path, const String& content, bool truncated) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "file";
     att.file.type = "file";
@@ -72,6 +74,7 @@ void ContextInjector::addFileAttachment(const String& path, const String& conten
 }
 
 void ContextInjector::addDirectoryAttachment(const String& path, const String& content) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "directory";
     att.directory.type = "directory";
@@ -82,6 +85,7 @@ void ContextInjector::addDirectoryAttachment(const String& path, const String& c
 }
 
 void ContextInjector::addEditedFile(const String& path, const String& snippet) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "edited_text_file";
     att.editedFile.type = "edited_text_file";
@@ -92,6 +96,7 @@ void ContextInjector::addEditedFile(const String& path, const String& snippet) {
 
 void ContextInjector::addIdeSelection(const String& ideName, const String& path,
                                        int lineStart, int lineEnd, const String& content) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "selected_lines_in_ide";
     att.ideSelection.type = "selected_lines_in_ide";
@@ -105,6 +110,7 @@ void ContextInjector::addIdeSelection(const String& ideName, const String& path,
 }
 
 void ContextInjector::addSystemReminder(const String& content) {
+    std::lock_guard lock(contextMutex_);
     SystemReminderAttachment reminder;
     reminder.type = "system_reminder";
     reminder.content = content;
@@ -112,6 +118,7 @@ void ContextInjector::addSystemReminder(const String& content) {
 }
 
 void ContextInjector::addPdfAttachment(const String& filename, int pageCount, size_t fileSize) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "pdf_reference";
     att.pdf.type = "pdf_reference";
@@ -123,6 +130,7 @@ void ContextInjector::addPdfAttachment(const String& filename, int pageCount, si
 }
 
 void ContextInjector::addTodoReminder(const String& content, int itemCount) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "todo_reminder";
     att.todo.type = "todo_reminder";
@@ -132,6 +140,7 @@ void ContextInjector::addTodoReminder(const String& content, int itemCount) {
 }
 
 void ContextInjector::addTaskReminder(const String& content, int itemCount) {
+    std::lock_guard lock(contextMutex_);
     Attachment att;
     att.type = "task_reminder";
     att.task.type = "task_reminder";
@@ -141,6 +150,7 @@ void ContextInjector::addTaskReminder(const String& content, int itemCount) {
 }
 
 void ContextInjector::addMemory(const String& path, const String& content) {
+    std::lock_guard lock(contextMutex_);
     MemoryAttachment mem;
     mem.type = "memory";
     mem.path = path;
@@ -150,14 +160,17 @@ void ContextInjector::addMemory(const String& path, const String& content) {
 }
 
 void ContextInjector::setClaudeMd(const String& content) {
+    std::lock_guard lock(contextMutex_);
     claudeMd_ = content;
 }
 
 void ContextInjector::setGitStatus(const GitStatusAttachment& status) {
+    std::lock_guard lock(contextMutex_);
     gitStatus_ = status;
 }
 
 void ContextInjector::loadSkills(const std::filesystem::path& skillsDir) {
+    std::lock_guard lock(contextMutex_);
     skills_ = skillLoader_.load(skillsDir);
     auto builtins = skillLoader_.getBuiltinSkills();
     skills_.insert(skills_.end(), builtins.begin(), builtins.end());
@@ -165,10 +178,12 @@ void ContextInjector::loadSkills(const std::filesystem::path& skillsDir) {
 }
 
 void ContextInjector::setPlanMode(const PlanModeAttachment& plan) {
+    std::lock_guard lock(contextMutex_);
     planMode_ = plan;
 }
 
 void ContextInjector::clearAttachments() {
+    std::lock_guard lock(contextMutex_);
     attachments_.clear();
 }
 
@@ -251,6 +266,7 @@ String ContextInjector::formatSystemReminders(const InjectedContext& ctx) {
 }
 
 bool ContextInjector::hasAttachments() const {
+    std::lock_guard lock(contextMutex_);
     return !attachments_.empty();
 }
 
@@ -268,6 +284,7 @@ String ContextInjector::getCurrentDate() {
 }
 
 std::vector<MemoryAttachment> ContextInjector::loadRelevantMemories(const String& query) {
+    std::lock_guard lock(contextMutex_);
     if (query.empty() || memories_.empty()) {
         return memories_;
     }

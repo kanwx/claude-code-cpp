@@ -8,6 +8,7 @@
 #include <optional>
 #include <map>
 #include <filesystem>
+#include <mutex>
 
 namespace claude {
 
@@ -222,6 +223,7 @@ private:
     std::vector<Skill> skills_;
     SkillLoader skillLoader_;
     std::optional<PlanModeAttachment> planMode_;
+    mutable std::recursive_mutex contextMutex_;  // guards all attachments and build state
 
     /// Get current date string
     String getCurrentDate();

@@ -24,6 +24,7 @@ PermissionDecision RuleEngine::evaluate(
     const Json& input,
     bool isReadOnly
 ) {
+    std::lock_guard lock(rulesMutex_);
     return evaluateInner(toolName, input, isReadOnly, false, nullptr);
 }
 
@@ -33,6 +34,7 @@ PermissionDecision RuleEngine::evaluate(
     bool isReadOnly,
     const std::vector<Message>& transcript
 ) {
+    std::lock_guard lock(rulesMutex_);
     return evaluateInner(toolName, input, isReadOnly, false, &transcript);
 }
 
@@ -42,6 +44,7 @@ PermissionDecision RuleEngine::evaluate(
     bool isReadOnly,
     bool isSandboxed
 ) {
+    std::lock_guard lock(rulesMutex_);
     return evaluateInner(toolName, input, isReadOnly, isSandboxed, nullptr);
 }
 
@@ -52,6 +55,7 @@ PermissionDecision RuleEngine::evaluate(
     bool isSandboxed,
     const std::vector<Message>* transcript
 ) {
+    std::lock_guard lock(rulesMutex_);
     return evaluateInner(toolName, input, isReadOnly, isSandboxed, transcript);
 }
 
@@ -333,6 +337,7 @@ void RuleEngine::applyChoice(
     const String& toolName,
     const String& command
 ) {
+    std::lock_guard lock(rulesMutex_);
     PermissionRuleSource destSource = determineChoiceSource(choice);
     applyChoiceToSource(choice, toolName, command, destSource);
 }
@@ -343,6 +348,7 @@ void RuleEngine::applyChoiceToSource(
     const String& command,
     PermissionRuleSource destination
 ) {
+    std::lock_guard lock(rulesMutex_);
     String prefix = extractCommandPrefix(command);
 
     switch (choice) {
@@ -388,6 +394,7 @@ void RuleEngine::applyChoiceToSource(
 }
 
 PermissionRuleSource RuleEngine::determineChoiceSource(PermissionChoice choice) const {
+    std::lock_guard lock(rulesMutex_);
     // Default routing: "Always allow/deny" choices go to user settings
     // If we have a settings manager context, we could route differently
     // For now, default to UserSettings (matches TS behavior for non-project rules)
@@ -395,6 +402,7 @@ PermissionRuleSource RuleEngine::determineChoiceSource(PermissionChoice choice) 
 }
 
 void RuleEngine::syncFromDisk() {
+    std::lock_guard lock(rulesMutex_);
     if (settingsManager_) {
         settings_.syncPermissionRulesFromDisk(*settingsManager_);
     }
