@@ -1,0 +1,2037 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ontology Platform - 本体建模平台</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-brain"></i>
+                    <span>Ontology</span>
+                </div>
+                <span class="version">v1.0.0</span>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">主菜单</div>
+                    <a href="#" class="nav-item active" data-page="dashboard">
+                        <i class="fas fa-th-large"></i>
+                        <span>仪表盘</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="ontology">
+                        <i class="fas fa-project-diagram"></i>
+                        <span>本体管理</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="triples">
+                        <i class="fas fa-link"></i>
+                        <span>三元组管理</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-title">推理分析</div>
+                    <a href="#" class="nav-item" data-page="reasoning">
+                        <i class="fas fa-lightbulb"></i>
+                        <span>混合推理</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="rules">
+                        <i class="fas fa-code-branch"></i>
+                        <span>规则引擎</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="sparql">
+                        <i class="fas fa-search"></i>
+                        <span>SPARQL 查询</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-title">知识检索</div>
+                    <a href="#" class="nav-item" data-page="search">
+                        <i class="fas fa-search-plus"></i>
+                        <span>语义搜索</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="embeddings">
+                        <i class="fas fa-vector-square"></i>
+                        <span>嵌入可视化</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="rag">
+                        <i class="fas fa-book-open"></i>
+                        <span>RAG 知识库</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-title">可视化</div>
+                    <a href="#" class="nav-item" data-page="knowledge-graph">
+                        <i class="fas fa-project-diagram"></i>
+                        <span>知识图谱</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="neural-view">
+                        <i class="fas fa-brain"></i>
+                        <span>神经网络视图</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="collaboration">
+                        <i class="fas fa-users"></i>
+                        <span>智能体协作</span>
+                    </a>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">系统管理</div>
+                    <a href="#" class="nav-item" data-page="storage">
+                        <i class="fas fa-database"></i>
+                        <span>存储配置</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="settings">
+                        <i class="fas fa-cog"></i>
+                        <span>系统设置</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="monitor">
+                        <i class="fas fa-chart-line"></i>
+                        <span>性能监控</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="llm">
+                        <i class="fas fa-brain"></i>
+                        <span>LLM 集成</span>
+                    </a>
+                </div>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="connection-status" id="connection-status">
+                    <i class="fas fa-circle text-success" id="ws-status-icon"></i>
+                    <span id="ws-status-text">已连接</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 顶部工具栏 -->
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="btn-icon" id="sidebar-toggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <h1 class="page-title" id="page-title">仪表盘</h1>
+                </div>
+                <div class="topbar-right">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="全局搜索..." id="global-search">
+                    </div>
+                    <button class="btn-icon" title="刷新数据" onclick="refreshData()">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <button class="btn-icon" title="导出本体" onclick="exportOntology()">
+                        <i class="fas fa-download"></i>
+                    </button>
+                    <button class="btn-primary" onclick="showQuickAddModal()">
+                        <i class="fas fa-plus"></i> 快速添加
+                    </button>
+                </div>
+            </header>
+
+            <!-- 页面内容容器 -->
+            <div class="page-container">
+                <!-- 仪表盘页面 -->
+                <div id="page-dashboard" class="page active">
+                    <!-- 统计卡片 -->
+                    <div class="stats-row">
+                        <div class="stat-card">
+                            <div class="stat-icon bg-primary">
+                                <i class="fas fa-cubes"></i>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="stat-classes">0</div>
+                                <div class="stat-label">类</div>
+                                <div class="stat-trend up"><i class="fas fa-arrow-up"></i> 12%</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon bg-success">
+                                <i class="fas fa-user-friends"></i>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="stat-individuals">0</div>
+                                <div class="stat-label">实例</div>
+                                <div class="stat-trend up"><i class="fas fa-arrow-up"></i> 8%</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon bg-warning">
+                                <i class="fas fa-project-diagram"></i>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="stat-triples">0</div>
+                                <div class="stat-label">三元组</div>
+                                <div class="stat-trend up"><i class="fas fa-arrow-up"></i> 15%</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon bg-info">
+                                <i class="fas fa-random"></i>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="stat-relations">0</div>
+                                <div class="stat-label">关系</div>
+                                <div class="stat-trend down"><i class="fas fa-arrow-down"></i> 3%</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 图表和内容行 -->
+                    <div class="dashboard-row">
+                        <!-- 类层次图 -->
+                        <div class="card card-large">
+                            <div class="card-header">
+                                <h3><i class="fas fa-sitemap"></i> 类层次结构</h3>
+                                <div class="card-actions">
+                                    <button class="btn-sm" onclick="expandAll()">展开全部</button>
+                                    <button class="btn-sm" onclick="collapseAll()">折叠全部</button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div id="class-hierarchy" class="hierarchy-view">
+                                    <!-- 动态生成类层次树 -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 最近活动 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-history"></i> 最近活动</h3>
+                            </div>
+                            <div class="card-body">
+                                <div id="recent-activities" class="activity-timeline">
+                                    <!-- 动态生成活动时间线 -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 知识图谱预览 -->
+                    <div class="dashboard-row">
+                        <div class="card card-large">
+                            <div class="card-header">
+                                <h3><i class="fas fa-project-diagram"></i> 知识图谱预览</h3>
+                                <div class="card-actions">
+                                    <button class="btn-sm" onclick="navigateTo('knowledge-graph')">
+                                        <i class="fas fa-expand"></i> 全屏查看
+                                    </button>
+                                    <select id="graph-layout" onchange="changeGraphLayout()">
+                                        <option value="force">力导向布局</option>
+                                        <option value="tree">树形布局</option>
+                                        <option value="radial">径向布局</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="card-body" style="padding: 0">
+                                <div id="knowledge-graph-preview" class="graph-container" style="height: 400px">
+                                    <canvas id="graph-canvas"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-row three-col">
+                        <!-- 推理统计 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-chart-pie"></i> 推理统计</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-placeholder" id="reasoning-chart">
+                                    <div class="chart-stat">
+                                        <div class="chart-stat-item">
+                                            <span class="chart-stat-value" id="stat-symbolic">0</span>
+                                            <span class="chart-stat-label">符号推理</span>
+                                        </div>
+                                        <div class="chart-stat-item">
+                                            <span class="chart-stat-value" id="stat-neural">0</span>
+                                            <span class="chart-stat-label">神经推理</span>
+                                        </div>
+                                        <div class="chart-stat-item">
+                                            <span class="chart-stat-value" id="stat-rules">0</span>
+                                            <span class="chart-stat-label">规则触发</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mini-chart" id="reasoning-trend">
+                                    <!-- SVG mini chart -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 神经网络状态 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-brain"></i> 神经网络</h3>
+                                <span class="status-badge connected">训练完成</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="neural-summary">
+                                    <div class="neural-item">
+                                        <span class="neural-label">嵌入模型</span>
+                                        <span class="neural-value" id="embedding-model-name">TransE</span>
+                                    </div>
+                                    <div class="neural-item">
+                                        <span class="neural-label">向量维度</span>
+                                        <span class="neural-value" id="embedding-dim">128</span>
+                                    </div>
+                                    <div class="neural-item">
+                                        <span class="neural-label">训练损失</span>
+                                        <span class="neural-value" id="training-loss">0.0234</span>
+                                    </div>
+                                    <div class="neural-item">
+                                        <span class="neural-label">最后训练</span>
+                                        <span class="neural-value" id="last-trained">2小时前</span>
+                                    </div>
+                                </div>
+                                <div class="loss-chart" id="loss-history">
+                                    <!-- Loss curve visualization -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 智能体连接 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-robot"></i> 连接的智能体</h3>
+                                <span class="agent-count" id="agent-count">0</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="agent-list" id="dashboard-agent-list">
+                                    <div class="agent-item" style="color:#888;text-align:center;padding:20px;">
+                                        <i class="fas fa-robot" style="font-size:24px;margin-bottom:8px;display:block;"></i>
+                                        尚无已连接智能体
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-row three-col">
+                        <!-- 存储状态 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-server"></i> 存储状态</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="storage-status">
+                                    <div class="storage-item">
+                                        <div class="storage-icon memory">
+                                            <i class="fas fa-memory"></i>
+                                        </div>
+                                        <div class="storage-info">
+                                            <div class="storage-name">内存存储</div>
+                                            <div class="storage-status-text connected">运行中</div>
+                                            <div class="storage-metrics">
+                                                <span>2.4MB / 1GB</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="storage-item">
+                                        <div class="storage-icon neo4j">
+                                            <i class="fas fa-database"></i>
+                                        </div>
+                                        <div class="storage-info">
+                                            <div class="storage-name">Neo4j</div>
+                                            <div class="storage-status-text" id="neo4j-status">未连接</div>
+                                        </div>
+                                    </div>
+                                    <div class="storage-item">
+                                        <div class="storage-icon milvus">
+                                            <i class="fas fa-vector-square"></i>
+                                        </div>
+                                        <div class="storage-info">
+                                            <div class="storage-name">Milvus</div>
+                                            <div class="storage-status-text" id="milvus-status">未连接</div>
+                                        </div>
+                                    </div>
+                                    <div class="storage-item">
+                                        <div class="storage-icon qdrant">
+                                            <i class="fas fa-cube"></i>
+                                        </div>
+                                        <div class="storage-info">
+                                            <div class="storage-name">Qdrant</div>
+                                            <div class="storage-status-text" id="qdrant-status">未连接</div>
+                                        </div>
+                                    </div>
+                                    <div class="storage-item">
+                                        <div class="storage-icon neo4j">
+                                            <i class="fas fa-project-diagram"></i>
+                                        </div>
+                                        <div class="storage-info">
+                                            <div class="storage-name">StellarDB</div>
+                                            <div class="storage-status-text" id="stellardb-status">未连接</div>
+                                        </div>
+                                    </div>
+                                    <div class="storage-item">
+                                        <div class="storage-icon milvus">
+                                            <i class="fas fa-hippo"></i>
+                                        </div>
+                                        <div class="storage-info">
+                                            <div class="storage-name">Hippo</div>
+                                            <div class="storage-status-text" id="hippo-status">未连接</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 最近推理结果 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-lightbulb"></i> 最近推理</h3>
+                                <a href="#" class="view-all" onclick="navigateTo('reasoning')">查看全部</a>
+                            </div>
+                            <div class="card-body">
+                                <div class="inference-list">
+                                    <div class="inference-item">
+                                        <div class="inference-header">
+                                            <span class="inference-type symbolic">符号</span>
+                                            <span class="inference-time">2分钟前</span>
+                                        </div>
+                                        <div class="inference-query">
+                                            (alice, manages, ?) → 3 结果
+                                        </div>
+                                    </div>
+                                    <div class="inference-item">
+                                        <div class="inference-header">
+                                            <span class="inference-type neural">神经</span>
+                                            <span class="inference-time">5分钟前</span>
+                                        </div>
+                                        <div class="inference-query">
+                                            链接预测 (?, reportsTo, ceo) → 5 候选
+                                        </div>
+                                    </div>
+                                    <div class="inference-item">
+                                        <div class="inference-header">
+                                            <span class="inference-type hybrid">混合</span>
+                                            <span class="inference-time">10分钟前</span>
+                                        </div>
+                                        <div class="inference-query">
+                                            传递闭包 → 12 新事实
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 快速操作 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-bolt"></i> 快速操作</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="quick-actions-grid">
+                                    <button class="quick-action-btn" onclick="showCreateClassModal()">
+                                        <i class="fas fa-plus-circle"></i>
+                                        <span>新建类</span>
+                                    </button>
+                                    <button class="quick-action-btn" onclick="showCreateRelationModal()">
+                                        <i class="fas fa-project-diagram"></i>
+                                        <span>新建关系</span>
+                                    </button>
+                                    <button class="quick-action-btn" onclick="showCreateIndividualModal()">
+                                        <i class="fas fa-user-plus"></i>
+                                        <span>新建实例</span>
+                                    </button>
+                                    <button class="quick-action-btn" onclick="showCreateTripleModal()">
+                                        <i class="fas fa-link"></i>
+                                        <span>新建三元组</span>
+                                    </button>
+                                    <button class="quick-action-btn" onclick="showImportModal()">
+                                        <i class="fas fa-file-import"></i>
+                                        <span>导入本体</span>
+                                    </button>
+                                    <button class="quick-action-btn" onclick="checkConsistency()">
+                                        <i class="fas fa-check-circle"></i>
+                                        <span>一致性检查</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 本体管理页面 -->
+                <div id="page-ontology" class="page">
+                    <div class="page-header">
+                        <h2>本体管理</h2>
+                        <div class="page-actions">
+                            <button class="btn-primary" onclick="showCreateClassModal()">
+                                <i class="fas fa-plus"></i> 新建类
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 标签页 -->
+                    <div class="tabs-container">
+                        <div class="tabs">
+                            <button class="tab active" data-tab="classes">类管理</button>
+                            <button class="tab" data-tab="relations">关系管理</button>
+                            <button class="tab" data-tab="individuals">实例管理</button>
+                        </div>
+                        
+                        <!-- 类管理标签 -->
+                        <div id="tab-classes" class="tab-content active">
+                            <div class="toolbar">
+                                <div class="toolbar-left">
+                                    <input type="text" class="search-input" placeholder="搜索类..." id="class-search" oninput="filterClasses()">
+                                </div>
+                                <div class="toolbar-right">
+                                    <select id="class-sort">
+                                        <option value="name">按名称排序</option>
+                                        <option value="id">按ID排序</option>
+                                        <option value="date">按创建时间</option>
+                                    </select>
+                                    <button class="btn-icon" title="切换视图" onclick="toggleClassView()">
+                                        <i class="fas fa-th-list"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="class-list" class="entity-grid">
+                                <!-- 动态生成类列表 -->
+                            </div>
+                        </div>
+                        
+                        <!-- 关系管理标签 -->
+                        <div id="tab-relations" class="tab-content">
+                            <div class="toolbar">
+                                <div class="toolbar-left">
+                                    <input type="text" class="search-input" placeholder="搜索关系..." id="relation-search" oninput="filterRelations()">
+                                </div>
+                                <div class="toolbar-right">
+                                    <button class="btn-primary" onclick="showCreateRelationModal()">
+                                        <i class="fas fa-plus"></i> 新建关系
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="relation-list" class="entity-table">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>名称</th>
+                                            <th>定义域</th>
+                                            <th>值域</th>
+                                            <th>特性</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="relation-tbody">
+                                        <!-- 动态生成 -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- 实例管理标签 -->
+                        <div id="tab-individuals" class="tab-content">
+                            <div class="toolbar">
+                                <div class="toolbar-left">
+                                    <input type="text" class="search-input" placeholder="搜索实例..." id="individual-search" oninput="filterIndividuals()">
+                                    <select id="individual-class-filter">
+                                        <option value="">所有类</option>
+                                    </select>
+                                </div>
+                                <div class="toolbar-right">
+                                    <button class="btn-primary" onclick="showCreateIndividualModal()">
+                                        <i class="fas fa-plus"></i> 新建实例
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="individual-list" class="entity-grid">
+                                <!-- 动态生成实例列表 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 三元组管理页面 -->
+                <div id="page-triples" class="page">
+                    <div class="page-header">
+                        <h2>三元组管理</h2>
+                        <div class="page-actions">
+                            <button class="btn-primary" onclick="showCreateTripleModal()">
+                                <i class="fas fa-plus"></i> 新建三元组
+                            </button>
+                            <button class="btn-secondary" onclick="batchImportTriples()">
+                                <i class="fas fa-file-import"></i> 批量导入
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 模式查询 -->
+                    <div class="query-panel">
+                        <h3><i class="fas fa-search"></i> 模式查询</h3>
+                        <div class="query-builder">
+                            <div class="query-item">
+                                <label>主语</label>
+                                <input type="text" id="triple-subject" placeholder="留空表示变量">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="subject-var"> 变量
+                                </label>
+                            </div>
+                            <div class="query-item">
+                                <label>谓词</label>
+                                <input type="text" id="triple-predicate" placeholder="留空表示变量">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="predicate-var"> 变量
+                                </label>
+                            </div>
+                            <div class="query-item">
+                                <label>宾语</label>
+                                <input type="text" id="triple-object" placeholder="留空表示变量">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="object-var"> 变量
+                                </label>
+                            </div>
+                            <button class="btn-primary" onclick="queryTriples()">
+                                <i class="fas fa-search"></i> 查询
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 三元组列表 -->
+                    <div id="triple-list" class="triple-table-container">
+                        <table class="triple-table">
+                            <thead>
+                                <tr>
+                                    <th>主语</th>
+                                    <th>谓词</th>
+                                    <th>宾语</th>
+                                    <th>置信度</th>
+                                    <th>来源</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="triple-tbody">
+                                <!-- 动态生成 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- 分页 -->
+                    <div class="pagination">
+                        <button class="btn-sm" onclick="prevPage()"><i class="fas fa-chevron-left"></i></button>
+                        <span id="page-info">第 1 页 / 共 1 页</span>
+                        <button class="btn-sm" onclick="nextPage()"><i class="fas fa-chevron-right"></i></button>
+                    </div>
+                </div>
+
+                <!-- 推理分析页面 -->
+                <div id="page-reasoning" class="page">
+                    <div class="page-header">
+                        <h2>混合推理引擎</h2>
+                    </div>
+                    
+                    <div class="reasoning-container">
+                        <!-- 推理面板 -->
+                        <div class="card reasoning-panel">
+                            <div class="card-header">
+                                <h3><i class="fas fa-brain"></i> 推理配置</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>推理类型</label>
+                                    <select id="reasoning-type">
+                                        <option value="hybrid">混合推理 (符号 + 神经)</option>
+                                        <option value="symbolic">符号推理</option>
+                                        <option value="neural">神经推理</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>起始实体</label>
+                                    <input type="text" id="infer-entity" placeholder="输入实体ID">
+                                    <div class="entity-suggestions" id="entity-suggestions"></div>
+                                </div>
+                                <div class="form-group">
+                                    <label>推理深度</label>
+                                    <input type="range" id="infer-depth" min="1" max="10" value="3">
+                                    <span id="infer-depth-value">3</span>
+                                </div>
+                                <div class="form-group">
+                                    <label>置信度阈值</label>
+                                    <input type="range" id="confidence-threshold" min="0" max="1" step="0.1" value="0.5">
+                                    <span id="confidence-threshold-value">0.5</span>
+                                </div>
+                                <div class="form-group">
+                                    <label>权重配置</label>
+                                    <div class="weight-sliders">
+                                        <div class="weight-item">
+                                            <span>符号推理权重</span>
+                                            <input type="range" id="symbolic-weight" min="0" max="1" step="0.1" value="0.5">
+                                            <span id="symbolic-weight-value">0.5</span>
+                                        </div>
+                                        <div class="weight-item">
+                                            <span>神经推理权重</span>
+                                            <input type="range" id="neural-weight" min="0" max="1" step="0.1" value="0.5">
+                                            <span id="neural-weight-value">0.5</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button class="btn-primary btn-block" onclick="performInference()">
+                                    <i class="fas fa-play"></i> 开始推理
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 推理结果 -->
+                        <div class="card reasoning-results">
+                            <div class="card-header">
+                                <h3><i class="fas fa-list-alt"></i> 推理结果</h3>
+                                <div class="card-actions">
+                                    <button class="btn-sm" onclick="exportResults()">
+                                        <i class="fas fa-download"></i> 导出
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div id="infer-results" class="results-container">
+                                    <div class="empty-state">
+                                        <i class="fas fa-lightbulb"></i>
+                                        <p>配置推理参数后点击"开始推理"</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 推理链可视化 -->
+                        <div class="card reasoning-chain">
+                            <div class="card-header">
+                                <h3><i class="fas fa-route"></i> 推理链</h3>
+                            </div>
+                            <div class="card-body">
+                                <div id="reasoning-chain" class="chain-visualization">
+                                    <div class="empty-state">
+                                        <i class="fas fa-project-diagram"></i>
+                                        <p>推理链将在此显示</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 规则引擎页面 -->
+                <div id="page-rules" class="page">
+                    <div class="page-header">
+                        <h2>SWRL 规则引擎</h2>
+                        <div class="page-actions">
+                            <button class="btn-primary" onclick="showCreateRuleModal()">
+                                <i class="fas fa-plus"></i> 新建规则
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="rules-container">
+                        <!-- 规则列表 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-list"></i> 规则列表</h3>
+                            </div>
+                            <div class="card-body">
+                                <div id="rule-list" class="rule-list">
+                                    <!-- 动态生成 -->
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 规则推理 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-play-circle"></i> 执行推理</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>最大迭代次数</label>
+                                    <input type="number" id="rule-max-iterations" value="100">
+                                </div>
+                                <button class="btn-primary btn-block" onclick="executeRules()">
+                                    <i class="fas fa-play"></i> 执行规则推理
+                                </button>
+                                <div id="rule-infer-results" class="mt-3">
+                                    <!-- 结果显示 -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SPARQL 查询页面 -->
+                <div id="page-sparql" class="page">
+                    <div class="page-header">
+                        <h2>SPARQL 查询</h2>
+                    </div>
+                    
+                    <div class="sparql-container">
+                        <div class="sparql-editor">
+                            <div class="editor-toolbar">
+                                <span>SPARQL 查询</span>
+                                <div class="editor-actions">
+                                    <button class="btn-sm" onclick="loadSparqlTemplate('select')">SELECT 模板</button>
+                                    <button class="btn-sm" onclick="loadSparqlTemplate('ask')">ASK 模板</button>
+                                    <button class="btn-sm" onclick="loadSparqlTemplate('construct')">CONSTRUCT 模板</button>
+                                    <button class="btn-sm" onclick="formatSparql()">格式化</button>
+                                </div>
+                            </div>
+                            <textarea id="sparql-query" placeholder="输入 SPARQL 查询...">SELECT ?s ?p ?o
+WHERE {
+  ?s ?p ?o .
+}
+LIMIT 100</textarea>
+                        </div>
+                        
+                        <div class="sparql-actions">
+                            <button class="btn-primary" onclick="executeSparql()">
+                                <i class="fas fa-play"></i> 执行查询
+                            </button>
+                            <button class="btn-secondary" onclick="explainSparql()">
+                                <i class="fas fa-info-circle"></i> 查询解释
+                            </button>
+                        </div>
+                        
+                        <div class="sparql-results">
+                            <div class="results-header">
+                                <span id="sparql-result-count">0 条结果</span>
+                                <span id="sparql-exec-time">执行时间: 0ms</span>
+                            </div>
+                            <div id="sparql-results-table" class="results-table">
+                                <!-- 动态生成 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 语义搜索页面 -->
+                <div id="page-search" class="page">
+                    <div class="page-header">
+                        <h2>语义搜索</h2>
+                    </div>
+                    
+                    <div class="search-container">
+                        <div class="search-box-large">
+                            <i class="fas fa-search"></i>
+                            <textarea id="semantic-query" placeholder="输入自然语言查询，例如：&#10;- 找出所有管理部门的人员&#10;- 预算审批流程是什么&#10;- 谁向CEO汇报工作"></textarea>
+                            <button class="btn-primary" onclick="semanticSearch()">
+                                <i class="fas fa-search"></i> 搜索
+                            </button>
+                        </div>
+                        
+                        <div class="search-options">
+                            <div class="option-group">
+                                <label>返回数量</label>
+                                <input type="number" id="search-topk" value="10" min="1" max="100">
+                            </div>
+                            <div class="option-group">
+                                <label>过滤类</label>
+                                <select id="search-class-filter">
+                                    <option value="">全部</option>
+                                </select>
+                            </div>
+                            <div class="option-group">
+                                <label>相似度阈值</label>
+                                <input type="range" id="search-threshold" min="0" max="1" step="0.1" value="0.5">
+                                <span id="search-threshold-value">0.5</span>
+                            </div>
+                        </div>
+                        
+                        <div id="search-results" class="search-results">
+                            <div class="empty-state">
+                                <i class="fas fa-search"></i>
+                                <p>输入查询开始语义搜索</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 嵌入可视化页面 -->
+                <div id="page-embeddings" class="page">
+                    <div class="page-header">
+                        <h2>嵌入可视化</h2>
+                    </div>
+                    
+                    <div class="embeddings-container">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-cube"></i> 嵌入模型配置</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>选择模型</label>
+                                    <select id="embedding-model">
+                                        <option value="TransE">TransE</option>
+                                        <option value="TransR">TransR</option>
+                                        <option value="DistMult">DistMult</option>
+                                        <option value="ComplEx">ComplEx</option>
+                                        <option value="RotatE">RotatE</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>嵌入维度</label>
+                                    <select id="embedding-dimension">
+                                        <option value="64">64</option>
+                                        <option value="128" selected>128</option>
+                                        <option value="256">256</option>
+                                        <option value="512">512</option>
+                                    </select>
+                                </div>
+                                <button class="btn-primary" onclick="trainEmbeddings()">
+                                    <i class="fas fa-graduation-cap"></i> 训练嵌入
+                                </button>
+                                <button class="btn-secondary" onclick="visualizeEmbeddings()">
+                                    <i class="fas fa-eye"></i> 可视化
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="card card-large">
+                            <div class="card-header">
+                                <h3><i class="fas fa-chart-scatter"></i> 向量空间可视化</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="tabs">
+                                    <button class="tab active" onclick="switchEmbeddingTab('2d')">2D 投影</button>
+                                    <button class="tab" onclick="switchEmbeddingTab('3d')">3D 可视化</button>
+                                </div>
+                                <div id="embedding-visualization" class="visualization-area">
+                                    <div class="empty-state">
+                                        <i class="fas fa-vector-square"></i>
+                                        <p>训练嵌入后可在此查看可视化</p>
+                                    </div>
+                                </div>
+                                <div id="embedding-3d-container" class="visualization-area" style="display:none; min-height: 500px;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 存储配置页面 -->
+                <div id="page-storage" class="page">
+                    <div class="page-header">
+                        <h2>存储配置</h2>
+                    </div>
+                    
+                    <div class="storage-config">
+                        <!-- Neo4j 配置 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-database"></i> Neo4j 图数据库</h3>
+                                <label class="switch">
+                                    <input type="checkbox" id="neo4j-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>URI</label>
+                                        <input type="text" id="neo4j-uri" value="bolt://localhost:7687">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>用户名</label>
+                                        <input type="text" id="neo4j-username" value="neo4j">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>密码</label>
+                                        <input type="password" id="neo4j-password">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>连接超时 (秒)</label>
+                                        <input type="number" id="neo4j-timeout" value="30">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>连接池大小</label>
+                                        <input type="number" id="neo4j-pool" value="100">
+                                    </div>
+                                </div>
+                                <div class="config-actions">
+                                    <button class="btn-secondary" onclick="testConnection('neo4j')">
+                                        <i class="fas fa-plug"></i> 测试连接
+                                    </button>
+                                    <span id="neo4j-conn-status" class="status-badge"></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Milvus 配置 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-vector-square"></i> Milvus 向量数据库</h3>
+                                <label class="switch">
+                                    <input type="checkbox" id="milvus-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Host</label>
+                                        <input type="text" id="milvus-host" value="localhost">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Port</label>
+                                        <input type="number" id="milvus-port" value="19530">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Collection</label>
+                                        <input type="text" id="milvus-collection" value="ontology_vectors">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>向量维度</label>
+                                        <input type="number" id="milvus-dimension" value="128">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>距离度量</label>
+                                        <select id="milvus-metric">
+                                            <option value="cosine">Cosine</option>
+                                            <option value="l2">L2</option>
+                                            <option value="ip">Inner Product</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="config-actions">
+                                    <button class="btn-secondary" onclick="testConnection('milvus')">
+                                        <i class="fas fa-plug"></i> 测试连接
+                                    </button>
+                                    <span id="milvus-conn-status" class="status-badge"></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Qdrant 配置 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-cube"></i> Qdrant 向量数据库</h3>
+                                <label class="switch">
+                                    <input type="checkbox" id="qdrant-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Host</label>
+                                        <input type="text" id="qdrant-host" value="localhost">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Port</label>
+                                        <input type="number" id="qdrant-port" value="6333">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Collection</label>
+                                        <input type="text" id="qdrant-collection" value="ontology_vectors">
+                                    </div>
+                                </div>
+                                <div class="config-actions">
+                                    <button class="btn-secondary" onclick="testConnection('qdrant')">
+                                        <i class="fas fa-plug"></i> 测试连接
+                                    </button>
+                                    <span id="qdrant-conn-status" class="status-badge"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- StellarDB (星环图数据库) 配置 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-project-diagram"></i> StellarDB 星环图数据库</h3>
+                                <label class="switch">
+                                    <input type="checkbox" id="stellardb-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Host</label>
+                                        <input type="text" id="stellardb-host" value="localhost">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Port</label>
+                                        <input type="number" id="stellardb-port" value="8182">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>图名称</label>
+                                        <input type="text" id="stellardb-graph-name" value="ontology">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>用户名</label>
+                                        <input type="text" id="stellardb-username">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>密码</label>
+                                        <input type="password" id="stellardb-password">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Token</label>
+                                        <input type="password" id="stellardb-token">
+                                    </div>
+                                </div>
+                                <div class="toggle-row">
+                                    <label class="toggle-item">
+                                        <input type="checkbox" id="stellardb-use-https"> 启用 HTTPS
+                                    </label>
+                                </div>
+                                <div class="config-actions">
+                                    <button class="btn-secondary" onclick="testConnection('stellardb')">
+                                        <i class="fas fa-plug"></i> 测试连接
+                                    </button>
+                                    <span id="stellardb-conn-status" class="status-badge"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hippo (星环向量库) 配置 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-hippo"></i> Hippo 星环向量数据库</h3>
+                                <label class="switch">
+                                    <input type="checkbox" id="hippo-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Host</label>
+                                        <input type="text" id="hippo-host" value="localhost">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Port</label>
+                                        <input type="number" id="hippo-port" value="9200">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>最大连接池</label>
+                                        <input type="number" id="hippo-pool" value="10">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>用户名</label>
+                                        <input type="text" id="hippo-username">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>密码</label>
+                                        <input type="password" id="hippo-password">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Token</label>
+                                        <input type="password" id="hippo-token">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>连接超时 (秒)</label>
+                                        <input type="number" id="hippo-conn-timeout" value="30">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>搜索超时 (秒)</label>
+                                        <input type="number" id="hippo-search-timeout" value="60">
+                                    </div>
+                                </div>
+                                <div class="toggle-row">
+                                    <label class="toggle-item">
+                                        <input type="checkbox" id="hippo-use-https"> 启用 HTTPS
+                                    </label>
+                                    <label class="toggle-item">
+                                        <input type="checkbox" id="hippo-enable-ssl"> 启用 SSL
+                                    </label>
+                                </div>
+                                <div class="form-row" id="hippo-ssl-row" style="display: none;">
+                                    <div class="form-group">
+                                        <label>SSL 证书路径</label>
+                                        <input type="text" id="hippo-ssl-cert-path" placeholder="/path/to/cert.pem">
+                                    </div>
+                                </div>
+                                <div class="config-actions">
+                                    <button class="btn-secondary" onclick="testConnection('hippo')">
+                                        <i class="fas fa-plug"></i> 测试连接
+                                    </button>
+                                    <span id="hippo-conn-status" class="status-badge"></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="config-footer">
+                            <button class="btn-primary" onclick="saveStorageConfig()">
+                                <i class="fas fa-save"></i> 保存配置
+                            </button>
+                            <button class="btn-secondary" onclick="syncToExternalStorage()">
+                                <i class="fas fa-sync"></i> 同步到外部存储
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 系统设置页面 -->
+                <div id="page-settings" class="page">
+                    <div class="page-header">
+                        <h2>系统设置</h2>
+                    </div>
+                    
+                    <div class="settings-container">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-server"></i> 服务器设置</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>HTTP 端口</label>
+                                        <input type="number" id="http-port" value="8080">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>MCP 端口</label>
+                                        <input type="number" id="mcp-port" value="9090">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>最大连接数</label>
+                                        <input type="number" id="max-connections" value="100">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-brain"></i> 推理设置</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>默认推理深度</label>
+                                        <input type="number" id="default-depth" value="5">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>缓存 TTL (秒)</label>
+                                        <input type="number" id="cache-ttl" value="3600">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-primary" onclick="saveSettings()">
+                            <i class="fas fa-save"></i> 保存设置
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 性能监控页面 -->
+                <div id="page-monitor" class="page">
+                    <div class="page-header">
+                        <h2>性能监控</h2>
+                        <div class="page-actions">
+                            <button class="btn-secondary" onclick="refreshMonitor()">
+                                <i class="fas fa-sync"></i> 刷新
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="monitor-container">
+                        <div class="stats-row">
+                            <div class="stat-card">
+                                <div class="stat-icon bg-primary">
+                                    <i class="fas fa-tachometer-alt"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value" id="monitor-requests">0</div>
+                                    <div class="stat-label">总请求数</div>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon bg-success">
+                                    <i class="fas fa-clock"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value" id="monitor-latency">0ms</div>
+                                    <div class="stat-label">平均延迟</div>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon bg-warning">
+                                    <i class="fas fa-database"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value" id="monitor-cache-hit">0%</div>
+                                    <div class="stat-label">缓存命中率</div>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon bg-info">
+                                    <i class="fas fa-memory"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value" id="monitor-memory">0MB</div>
+                                    <div class="stat-label">内存使用</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card card-large">
+                            <div class="card-header">
+                                <h3><i class="fas fa-chart-area"></i> 操作性能统计</h3>
+                            </div>
+                            <div class="card-body">
+                                <table class="monitor-table">
+                                    <thead>
+                                        <tr>
+                                            <th>操作</th>
+                                            <th>调用次数</th>
+                                            <th>平均时间</th>
+                                            <th>最小时间</th>
+                                            <th>最大时间</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="monitor-tbody">
+                                        <!-- 动态生成 -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 知识图谱可视化页面 -->
+                <div id="page-knowledge-graph" class="page">
+                    <div class="page-header">
+                        <h2>知识图谱可视化</h2>
+                        <div class="page-actions">
+                            <select id="kg-layout">
+                                <option value="force">力导向布局</option>
+                                <option value="tree">树形布局</option>
+                                <option value="radial">径向布局</option>
+                                <option value="circular">环形布局</option>
+                            </select>
+                            <button class="btn-secondary" onclick="resetGraphView()">
+                                <i class="fas fa-undo"></i> 重置视图
+                            </button>
+                            <button class="btn-secondary" onclick="exportGraphImage()">
+                                <i class="fas fa-image"></i> 导出图片
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="kg-container">
+                        <!-- 图谱控制面板 -->
+                        <div class="kg-sidebar">
+                            <div class="kg-panel">
+                                <h4><i class="fas fa-filter"></i> 过滤器</h4>
+                                <div class="filter-group">
+                                    <label>节点类型</label>
+                                    <div class="filter-checkboxes">
+                                        <label><input type="checkbox" checked data-filter="class"> 类</label>
+                                        <label><input type="checkbox" checked data-filter="individual"> 实例</label>
+                                        <label><input type="checkbox" checked data-filter="literal"> 字面值</label>
+                                    </div>
+                                </div>
+                                <div class="filter-group">
+                                    <label>关系类型</label>
+                                    <select id="kg-relation-filter">
+                                        <option value="">全部关系</option>
+                                    </select>
+                                </div>
+                                <div class="filter-group">
+                                    <label>显示深度</label>
+                                    <input type="range" id="kg-depth" min="1" max="5" value="2">
+                                    <span id="kg-depth-value">2</span>
+                                </div>
+                            </div>
+
+                            <div class="kg-panel">
+                                <h4><i class="fas fa-search"></i> 搜索节点</h4>
+                                <input type="text" id="kg-search" placeholder="输入节点ID或名称...">
+                                <div id="kg-search-results" class="search-results-mini"></div>
+                            </div>
+
+                            <div class="kg-panel">
+                                <h4><i class="fas fa-info-circle"></i> 节点信息</h4>
+                                <div id="kg-node-info" class="node-info-panel">
+                                    <p class="text-muted">点击节点查看详情</p>
+                                </div>
+                            </div>
+
+                            <div class="kg-panel">
+                                <h4><i class="fas fa-chart-bar"></i> 图谱统计</h4>
+                                <div class="kg-stats">
+                                    <div class="kg-stat-item">
+                                        <span class="kg-stat-label">节点数</span>
+                                        <span class="kg-stat-value" id="kg-nodes">0</span>
+                                    </div>
+                                    <div class="kg-stat-item">
+                                        <span class="kg-stat-label">边数</span>
+                                        <span class="kg-stat-value" id="kg-edges">0</span>
+                                    </div>
+                                    <div class="kg-stat-item">
+                                        <span class="kg-stat-label">平均度</span>
+                                        <span class="kg-stat-value" id="kg-avg-degree">0</span>
+                                    </div>
+                                    <div class="kg-stat-item">
+                                        <span class="kg-stat-label">连通分量</span>
+                                        <span class="kg-stat-value" id="kg-components">0</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 主图谱区域 -->
+                        <div class="kg-main">
+                            <div id="knowledge-graph-full" class="graph-container-full">
+                                <canvas id="kg-canvas"></canvas>
+                                <!-- 图例 -->
+                                <div class="graph-legend">
+                                    <div class="legend-item"><span class="legend-dot class"></span> 类</div>
+                                    <div class="legend-item"><span class="legend-dot individual"></span> 实例</div>
+                                    <div class="legend-item"><span class="legend-dot literal"></span> 字面值</div>
+                                </div>
+                                <!-- 缩放控制 -->
+                                <div class="zoom-controls">
+                                    <button onclick="zoomIn()"><i class="fas fa-plus"></i></button>
+                                    <button onclick="zoomOut()"><i class="fas fa-minus"></i></button>
+                                    <button onclick="fitToScreen()"><i class="fas fa-expand"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 神经网络视图页面 -->
+                <div id="page-neural-view" class="page">
+                    <div class="page-header">
+                        <h2>神经网络视图</h2>
+                        <div class="page-actions">
+                            <button class="btn-secondary" onclick="refreshNeuralView()">
+                                <i class="fas fa-sync"></i> 刷新
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="neural-container">
+                        <!-- 嵌入空间可视化 -->
+                        <div class="card card-large">
+                            <div class="card-header">
+                                <h3><i class="fas fa-vector-square"></i> 嵌入空间 (UMAP/PCA 降维)</h3>
+                                <div class="card-actions">
+                                    <select id="projection-method">
+                                        <option value="umap">UMAP</option>
+                                        <option value="pca">PCA</option>
+                                        <option value="tsne">t-SNE</option>
+                                    </select>
+                                    <select id="projection-dimension">
+                                        <option value="2">2D</option>
+                                        <option value="3">3D</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="card-body" style="padding: 0">
+                                <div id="embedding-space" class="embedding-space-viz">
+                                    <canvas id="embedding-canvas"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="neural-row">
+                            <!-- 关系嵌入 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-link"></i> 关系嵌入</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div id="relation-embeddings" class="relation-viz">
+                                        <!-- 每个关系用向量/超平面可视化 -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 训练曲线 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-chart-line"></i> 训练曲线</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div id="training-curves" class="training-curves">
+                                        <canvas id="loss-curve"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 链接预测 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-magic"></i> 链接预测</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group">
+                                        <label>头实体</label>
+                                        <input type="text" id="link-head" placeholder="例如: alice">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>关系</label>
+                                        <select id="link-relation">
+                                            <option value="">选择关系</option>
+                                        </select>
+                                    </div>
+                                    <button class="btn-primary btn-block" onclick="predictTail()">
+                                        <i class="fas fa-search"></i> 预测尾实体
+                                    </button>
+                                    <div id="link-prediction-results" class="prediction-results mt-3"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 神经网络架构图 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-project-diagram"></i> 模型架构</h3>
+                                <select id="nn-model-select">
+                                    <option value="TransE">TransE</option>
+                                    <option value="TransR">TransR</option>
+                                    <option value="DistMult">DistMult</option>
+                                    <option value="ComplEx">ComplEx</option>
+                                    <option value="RotatE">RotatE</option>
+                                </select>
+                            </div>
+                            <div class="card-body">
+                                <div id="nn-architecture" class="nn-architecture">
+                                    <!-- 神经网络层可视化 -->
+                                    <div class="nn-layer">
+                                        <div class="layer-name">输入层</div>
+                                        <div class="layer-shape">
+                                            <div class="neurons">
+                                                <div class="neuron"></div>
+                                                <div class="neuron"></div>
+                                                <div class="neuron"></div>
+                                                <span class="neuron-more">...</span>
+                                                <div class="neuron"></div>
+                                                <div class="neuron"></div>
+                                            </div>
+                                        </div>
+                                        <div class="layer-info">dim: 128</div>
+                                    </div>
+                                    <div class="nn-arrow"><i class="fas fa-arrow-down"></i></div>
+                                    <div class="nn-layer">
+                                        <div class="layer-name">嵌入层</div>
+                                        <div class="layer-shape embedding">
+                                            <div class="embedding-block">
+                                                <span>E<sub>entity</sub></span>
+                                            </div>
+                                            <div class="embedding-block relation">
+                                                <span>E<sub>relation</sub></span>
+                                            </div>
+                                        </div>
+                                        <div class="layer-info">entities: 156, relations: 24</div>
+                                    </div>
+                                    <div class="nn-arrow"><i class="fas fa-arrow-down"></i></div>
+                                    <div class="nn-layer">
+                                        <div class="layer-name">距离函数</div>
+                                        <div class="layer-shape function">
+                                            <span>d(h+r, t)</span>
+                                        </div>
+                                        <div class="layer-info">L2 Norm</div>
+                                    </div>
+                                    <div class="nn-arrow"><i class="fas fa-arrow-down"></i></div>
+                                    <div class="nn-layer">
+                                        <div class="layer-name">输出层</div>
+                                        <div class="layer-shape output">
+                                            <div class="output-value">score</div>
+                                        </div>
+                                        <div class="layer-info">范围: [0, ∞)</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 智能体协作页面 -->
+                <div id="page-collaboration" class="page">
+                    <div class="page-header">
+                        <h2>智能体协作</h2>
+                        <div class="page-actions">
+                            <button class="btn-primary" onclick="registerNewAgent()">
+                                <i class="fas fa-plus"></i> 注册智能体
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="collaboration-container">
+                        <!-- 协作架构图 -->
+                        <div class="card card-large">
+                            <div class="card-header">
+                                <h3><i class="fas fa-network-wired"></i> 协作架构</h3>
+                            </div>
+                            <div class="card-body" style="padding: 0">
+                                <div id="collaboration-diagram" class="collaboration-diagram">
+                                    <svg viewBox="0 0 800 400" class="collab-svg" id="collab-svg">
+                                        <!-- Cognitive Backend (Center) -->
+                                        <g class="backend-node" transform="translate(400, 200)">
+                                            <circle r="60" class="backend-circle"/>
+                                            <text class="backend-label" text-anchor="middle" dy="-15">认知后端</text>
+                                            <text class="backend-sublabel" text-anchor="middle" dy="5">Ontology Platform</text>
+                                            <text class="backend-stats" text-anchor="middle" dy="25" id="backend-stats-text">0 智能体</text>
+                                        </g>
+
+                                        <!-- Knowledge Stores -->
+                                        <g class="store-node" transform="translate(400, 80)">
+                                            <rect x="-50" y="-25" width="100" height="50" class="store-rect"/>
+                                            <text class="store-label" text-anchor="middle" dy="5">知识存储</text>
+                                        </g>
+                                        <line x1="400" y1="140" x2="400" y2="105" class="connection-line"/>
+
+                                        <!-- Agent nodes rendered dynamically by renderCollabDiagram() -->
+                                        <g id="svg-agent-nodes"></g>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="collab-row">
+                            <!-- 已连接智能体列表 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-robot"></i> 已连接智能体</h3>
+                                    <span class="badge" id="connected-agent-count">2</span>
+                                </div>
+                                <div class="card-body">
+                                    <div id="agent-list" class="agent-list-full">
+                                        <div class="agent-item" style="color:#888;text-align:center;padding:20px;">
+                                            <i class="fas fa-robot" style="font-size:24px;margin-bottom:8px;display:block;"></i>
+                                            尚无已连接智能体
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 协作活动日志 -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-stream"></i> 协作活动</h3>
+                                    <select id="activity-filter">
+                                        <option value="all">全部</option>
+                                        <option value="query">查询</option>
+                                        <option value="inference">推理</option>
+                                        <option value="write">写入</option>
+                                    </select>
+                                </div>
+                                <div class="card-body">
+                                    <div id="collab-activity-log" class="activity-log">
+                                        <div class="log-entry">
+                                            <div class="log-time">14:32:05</div>
+                                            <div class="log-agent claude">Claude</div>
+                                            <div class="log-action">
+                                                <span class="log-tool">cognitive_query</span>
+                                                <span class="log-params">(alice, manages, ?)</span>
+                                            </div>
+                                            <div class="log-result success">3 结果</div>
+                                        </div>
+                                        <div class="log-entry">
+                                            <div class="log-time">14:31:42</div>
+                                            <div class="log-agent gpt">GPT-4</div>
+                                            <div class="log-action">
+                                                <span class="log-tool">cognitive_infer</span>
+                                                <span class="log-params">transitive: manages</span>
+                                            </div>
+                                            <div class="log-result success">12 新事实</div>
+                                        </div>
+                                        <div class="log-entry">
+                                            <div class="log-time">14:30:18</div>
+                                            <div class="log-agent claude">Claude</div>
+                                            <div class="log-action">
+                                                <span class="log-tool">cognitive_create</span>
+                                                <span class="log-params">Individual: bob</span>
+                                            </div>
+                                            <div class="log-result success">已创建</div>
+                                        </div>
+                                        <div class="log-entry">
+                                            <div class="log-time">14:28:55</div>
+                                            <div class="log-agent gpt">GPT-4</div>
+                                            <div class="log-action">
+                                                <span class="log-tool">cognitive_search</span>
+                                                <span class="log-params">"管理部门人员"</span>
+                                            </div>
+                                            <div class="log-result success">8 结果</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- MCP 工具使用统计 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-tools"></i> MCP 工具使用统计</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="tools-stats-grid">
+                                    <div class="tool-stat-item">
+                                        <div class="tool-name">cognitive_query</div>
+                                        <div class="tool-bar-container">
+                                            <div class="tool-bar" style="width: 85%"></div>
+                                        </div>
+                                        <div class="tool-count">85 次</div>
+                                    </div>
+                                    <div class="tool-stat-item">
+                                        <div class="tool-name">cognitive_infer</div>
+                                        <div class="tool-bar-container">
+                                            <div class="tool-bar" style="width: 45%"></div>
+                                        </div>
+                                        <div class="tool-count">45 次</div>
+                                    </div>
+                                    <div class="tool-stat-item">
+                                        <div class="tool-name">cognitive_search</div>
+                                        <div class="tool-bar-container">
+                                            <div class="tool-bar" style="width: 38%"></div>
+                                        </div>
+                                        <div class="tool-count">38 次</div>
+                                    </div>
+                                    <div class="tool-stat-item">
+                                        <div class="tool-name">cognitive_create</div>
+                                        <div class="tool-bar-container">
+                                            <div class="tool-bar" style="width: 25%"></div>
+                                        </div>
+                                        <div class="tool-count">25 次</div>
+                                    </div>
+                                    <div class="tool-stat-item">
+                                        <div class="tool-name">cognitive_suggest</div>
+                                        <div class="tool-bar-container">
+                                            <div class="tool-bar" style="width: 18%"></div>
+                                        </div>
+                                        <div class="tool-count">18 次</div>
+                                    </div>
+                                    <div class="tool-stat-item">
+                                        <div class="tool-name">cognitive_embed</div>
+                                        <div class="tool-bar-container">
+                                            <div class="tool-bar" style="width: 12%"></div>
+                                        </div>
+                                        <div class="tool-count">12 次</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LLM 集成页面 -->
+                <div id="page-llm" class="page">
+                    <div class="page-header">
+                        <h2>LLM 集成与自动建模</h2>
+                        <p class="text-muted">使用大语言模型进行自动本体建模、实体提取和协作推理</p>
+                    </div>
+
+                    <!-- 顶部: 远程 API + 协作推理 -->
+                    <div class="llm-config-grid">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-cloud"></i> 远程 API 配置</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>Anthropic API Key</label>
+                                    <input type="password" id="llm-api-key" class="form-control" placeholder="sk-ant-...">
+                                </div>
+                                <div class="form-group">
+                                    <label>模型</label>
+                                    <select id="llm-model" class="form-control">
+                                        <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                                        <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                                        <option value="claude-haiku-4-20251001">Claude Haiku 4.5</option>
+                                    </select>
+                                </div>
+                                <button class="btn btn-primary" onclick="saveLlmConfig()">保存配置</button>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-comments"></i> 协作推理</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>问题</label>
+                                    <textarea id="llm-reason-query" class="form-control" rows="3" placeholder="输入问题，LLM 将结合知识图谱进行推理..."></textarea>
+                                </div>
+                                <button class="btn btn-primary" onclick="llmReason()">推理</button>
+                                <div id="llm-reason-results" style="margin-top: 1rem"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 本地模型配置 - 全宽 -->
+                    <div class="card llm-local-model-card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-server"></i> 本地模型配置 (HTTP API)</h3>
+                            <span class="text-muted" style="font-size: 0.8rem;">vLLM / TEI / Ollama / 本地部署服务</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="grid-2" style="gap: 1.5rem;">
+
+                                <!-- 左列: Embedding + Rerank -->
+                                <div>
+                                    <!-- Embedding 模型 -->
+                                    <div class="model-section">
+                                        <div class="model-section-title"><i class="fas fa-vector-square"></i> Embedding 模型</div>
+                                        <div class="form-group">
+                                            <label>Endpoint</label>
+                                            <input type="text" id="local-embedding-endpoint" class="form-control" placeholder="http://localhost:8000">
+                                        </div>
+                                        <div class="form-row-compact">
+                                            <div class="form-group">
+                                                <label>模型名称</label>
+                                                <input type="text" id="local-embedding-model" class="form-control" placeholder="bge-large-zh-v1.5">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>API 路径</label>
+                                                <input type="text" id="local-embedding-api-path" class="form-control" value="/v1/embeddings">
+                                            </div>
+                                        </div>
+                                        <div class="form-row-compact">
+                                            <div class="form-group">
+                                                <label>API Key (可选)</label>
+                                                <input type="password" id="local-embedding-api-key" class="form-control" placeholder="留空则不鉴权">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>超时 (ms)</label>
+                                                <input type="number" id="local-embedding-timeout" class="form-control" value="30000">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Rerank 模型 -->
+                                    <div class="model-section">
+                                        <div class="model-section-title"><i class="fas fa-sort-amount-down"></i> Rerank 模型</div>
+                                        <div class="form-group">
+                                            <label>Endpoint</label>
+                                            <input type="text" id="local-rerank-endpoint" class="form-control" placeholder="http://localhost:8001">
+                                        </div>
+                                        <div class="form-row-compact">
+                                            <div class="form-group">
+                                                <label>模型名称</label>
+                                                <input type="text" id="local-rerank-model" class="form-control" placeholder="bge-reranker-large">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>API 路径</label>
+                                                <input type="text" id="local-rerank-api-path" class="form-control" value="/v1/rerank">
+                                            </div>
+                                        </div>
+                                        <div class="form-row-compact">
+                                            <div class="form-group">
+                                                <label>API Key (可选)</label>
+                                                <input type="password" id="local-rerank-api-key" class="form-control" placeholder="留空则不鉴权">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>超时 (ms)</label>
+                                                <input type="number" id="local-rerank-timeout" class="form-control" value="30000">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 右列: LLM 模型 -->
+                                <div>
+                                    <div class="model-section" style="border-bottom: none; margin-bottom: 0;">
+                                        <div class="model-section-title"><i class="fas fa-brain"></i> LLM 模型 (含 image2text)</div>
+                                        <div class="form-group">
+                                            <label>Endpoint</label>
+                                            <input type="text" id="local-llm-endpoint" class="form-control" placeholder="http://localhost:8002">
+                                        </div>
+                                        <div class="form-row-compact">
+                                            <div class="form-group">
+                                                <label>模型名称</label>
+                                                <input type="text" id="local-llm-model" class="form-control" placeholder="glm-5.1">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>API 路径</label>
+                                                <input type="text" id="local-llm-api-path" class="form-control" value="/v1/chat/completions">
+                                            </div>
+                                        </div>
+                                        <div class="form-row-compact">
+                                            <div class="form-group">
+                                                <label>API Key (可选)</label>
+                                                <input type="password" id="local-llm-api-key" class="form-control" placeholder="留空则不鉴权">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>超时 (ms)</label>
+                                                <input type="number" id="local-llm-timeout" class="form-control" value="60000">
+                                            </div>
+                                        </div>
+                                        <div class="form-row-2col">
+                                            <div class="form-group">
+                                                <label>最大 Tokens</label>
+                                                <input type="number" id="local-llm-max-tokens" class="form-control" value="4096">
+                                            </div>
+                                            <div class="form-group">
+                                                <label style="visibility: hidden;">占位</label>
+                                                <label class="toggle-item" style="margin-top: 0;">
+                                                    <input type="checkbox" id="local-enable-image2text"> 启用 Image2Text
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 0.5rem; display: flex; justify-content: flex-end;">
+                                <button class="btn btn-primary" onclick="saveLocalModelConfig()"><i class="fas fa-save"></i> 保存本地模型配置</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 底部: 自动建模 + 实体提取 -->
+                    <div class="grid-2" style="margin-top: 1rem;">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-sitemap"></i> 自动本体建模</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>文本内容</label>
+                                    <textarea id="llm-model-text" class="form-control" rows="5" placeholder="输入描述文本，LLM 将分析并建议本体结构..."></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>领域 (可选)</label>
+                                    <input type="text" id="llm-model-domain" class="form-control" placeholder="如: 医疗、金融、教育">
+                                </div>
+                                <button class="btn btn-primary" onclick="llmAutoModel()">生成本体建议</button>
+                                <div id="llm-model-results" style="margin-top: 1rem"></div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-project-diagram"></i> 实体/关系提取</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group">
+                                    <label>文本内容</label>
+                                    <textarea id="llm-extract-text" class="form-control" rows="5" placeholder="输入文本，LLM 将提取实体和关系..."></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>领域 (可选)</label>
+                                    <input type="text" id="llm-extract-domain" class="form-control" placeholder="如: 医疗、金融、教育">
+                                </div>
+                                <button class="btn btn-primary" onclick="llmExtract()">提取</button>
+                                <div id="llm-extract-results" style="margin-top: 1rem"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="page-rag" class="page">
+                    <div class="page-header">
+                        <h2>RAG 知识库</h2>
+                        <p class="page-desc">检索增强生成 - 文档摄入与语义搜索</p>
+                    </div>
+                    <div class="rag-layout" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                        <div class="rag-panel">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>知识库管理</h3>
+                                    <button onclick="createKnowledgeBase()" class="btn btn-primary btn-sm">新建知识库</button>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group">
+                                        <label>名称</label>
+                                        <input type="text" id="rag-kb-name" placeholder="知识库名称">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>描述</label>
+                                        <input type="text" id="rag-kb-desc" placeholder="知识库描述">
+                                    </div>
+                                    <div id="rag-kb-list">
+                                        <p class="text-muted">加载中...</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="card" style="margin-top: 1rem;">
+                                <div class="card-header">
+                                    <h3>文档摄入</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group">
+                                        <label>目标知识库</label>
+                                        <input type="text" id="rag-upload-kb" value="default" placeholder="知识库ID">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>文档标题</label>
+                                        <input type="text" id="rag-doc-title" placeholder="文档标题">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>文档内容</label>
+                                        <textarea id="rag-doc-content" rows="6" placeholder="输入或粘贴文档内容..."></textarea>
+                                    </div>
+                                    <button onclick="uploadRagDocument()" class="btn btn-primary">摄入文档</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="rag-panel">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>语义搜索</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group">
+                                        <label>搜索查询</label>
+                                        <div style="display: flex; gap: 0.5rem;">
+                                            <input type="text" id="rag-search-input" placeholder="输入自然语言查询..." style="flex: 1;">
+                                            <button onclick="ragSearch()" class="btn btn-primary">搜索</button>
+                                        </div>
+                                    </div>
+                                    <div id="rag-search-results">
+                                        <p class="text-muted">输入查询开始搜索</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 模态框 -->
+    <div id="modal" class="modal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 id="modal-title"></h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="modal-body" class="modal-body"></div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal()">取消</button>
+                <button class="btn-primary" id="modal-submit">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通知容器 -->
+    <div id="notifications" class="notifications"></div>
+
+    <!-- 加载遮罩 -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+            <span>加载中...</span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

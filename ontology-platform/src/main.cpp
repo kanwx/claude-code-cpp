@@ -19,6 +19,7 @@ std::shared_ptr<ApiHandler> createRagHandler();
 std::shared_ptr<ApiHandler> createShaclHandler();
 std::shared_ptr<ApiHandler> createPersistenceHandler();
 std::shared_ptr<ApiHandler> createExportHandler();
+std::shared_ptr<ApiHandler> createAgentHandler();
 } // namespace ontology
 
 // ============================================================================
@@ -163,6 +164,7 @@ int main(int argc, char* argv[]) {
     server.addHandler(createShaclHandler());
     server.addHandler(createPersistenceHandler());
     server.addHandler(createExportHandler());
+    server.addHandler(createAgentHandler());
 
     // Print endpoint listing
     printEndpoints(config.server.port, config);

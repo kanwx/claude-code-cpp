@@ -121,6 +121,7 @@ set(API_SOURCES
     src/api/handlers/PersistenceHandler.cpp
     src/api/handlers/ExportHandler.cpp
     src/api/handlers/JsonHelpers.cpp
+    src/api/handlers/AgentHandler.cpp
 )
 
 set(BOOTSTRAP_SOURCES
