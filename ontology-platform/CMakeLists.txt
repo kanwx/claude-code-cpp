@@ -75,6 +75,7 @@ set(INFERENCE_SOURCES
     src/inference/Explainability.cpp
     src/inference/SwrlBackwardChainer.cpp
     src/inference/DlReasoner.cpp
+    src/inference/Temporal.cpp
 )
 
 set(MCP_SOURCES
