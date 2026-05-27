@@ -1719,51 +1719,54 @@ std::vector<AlignmentResult> AutoModelEngine::alignEntities(
 
     std::vector<AlignmentResult> alignments;
 
-    if (!embeddingsTrained_) {
-        trainEmbeddings();
-    }
-
-    // 使用嵌入相似度进行对齐
     for (const auto& e1 : entities1) {
-        float maxSim = 0.0f;
-        String bestMatch;
-
-        auto emb1 = neuralReasoner_->getEmbedding(e1);
-        if (emb1.empty()) continue;
-
         for (const auto& e2 : entities2) {
-            auto emb2 = neuralReasoner_->getEmbedding(e2);
-            if (emb2.empty()) continue;
-
-            // 计算余弦相似度
-            float dot = 0, norm1 = 0, norm2 = 0;
-            for (size_t i = 0; i < emb1.size(); ++i) {
-                dot += emb1[i] * emb2[i];
-                norm1 += emb1[i] * emb1[i];
-                norm2 += emb2[i] * emb2[i];
-            }
-
-            float sim = dot / (std::sqrt(norm1) * std::sqrt(norm2));
-            if (sim > maxSim) {
-                maxSim = sim;
-                bestMatch = e2;
-            }
-        }
-
-        if (maxSim >= 0.8f) {
             AlignmentResult ar;
             ar.entity1 = e1;
-            ar.entity2 = bestMatch;
-            ar.embeddingScore = maxSim;
-            ar.structuralScore = jaccardCoefficient(e1, bestMatch);
-            ar.labelScore = 1.0f - static_cast<float>(levenshteinDistance(e1, bestMatch)) /
-                static_cast<float>(std::max(e1.size(), bestMatch.size()));
-            ar.combinedScore = alignWeightEmbedding_ * ar.embeddingScore +
+            ar.entity2 = e2;
+
+            // 1. Embedding similarity
+            ar.embeddingScore = 0.0f;
+            if (embeddingsTrained_ && neuralReasoner_) {
+                auto emb1 = neuralReasoner_->getEmbedding(e1);
+                auto emb2 = neuralReasoner_->getEmbedding(e2);
+                if (!emb1.empty() && !emb2.empty() && emb1.size() == emb2.size()) {
+                    float dot = 0, norm1 = 0, norm2 = 0;
+                    for (size_t i = 0; i < emb1.size(); ++i) {
+                        dot += emb1[i] * emb2[i];
+                        norm1 += emb1[i] * emb1[i];
+                        norm2 += emb2[i] * emb2[i];
+                    }
+                    if (norm1 > 0 && norm2 > 0) {
+                        ar.embeddingScore = dot / (std::sqrt(norm1) * std::sqrt(norm2));
+                    }
+                }
+            }
+
+            // 2. Structural similarity (Jaccard of shared properties)
+            ar.structuralScore = jaccardCoefficient(e1, e2);
+
+            // 3. Label similarity (normalized Levenshtein)
+            int dist = levenshteinDistance(e1, e2);
+            int maxLen = std::max(static_cast<int>(e1.size()), static_cast<int>(e2.size()));
+            ar.labelScore = maxLen > 0 ? 1.0f - static_cast<float>(dist) / maxLen : 0.0f;
+
+            // Combined score
+            ar.combinedScore =
+                alignWeightEmbedding_ * ar.embeddingScore +
                 alignWeightStructural_ * ar.structuralScore +
                 alignWeightLabel_ * ar.labelScore;
-            alignments.push_back(ar);
+
+            if (ar.combinedScore >= 0.3f) {
+                alignments.push_back(ar);
+            }
         }
     }
+
+    std::sort(alignments.begin(), alignments.end(),
+        [](const AlignmentResult& a, const AlignmentResult& b) {
+            return a.combinedScore > b.combinedScore;
+        });
 
     return alignments;
 }

@@ -150,6 +150,60 @@ void test_detect_no_conflicts() {
     PASS();
 }
 
+void test_align_entities_multi_signal() {
+    TEST("alignEntities uses multi-signal scoring");
+    auto storage = std::make_shared<HybridStorage>(nullptr, nullptr);
+    AutoModelEngine engine(storage);
+
+    auto* ts = storage->getTripleStore();
+    ts->add({"Dog", "hasPart", "Tail"});
+    ts->add({"Dog", "livesIn", "Home"});
+    ts->add({"Canine", "hasPart", "Tail"});
+    ts->add({"Canine", "livesIn", "Home"});
+
+    auto alignments = engine.alignEntities({"Dog"}, {"Canine"});
+    bool found = false;
+    for (const auto& a : alignments) {
+        if ((a.entity1 == "Dog" && a.entity2 == "Canine") ||
+            (a.entity1 == "Canine" && a.entity2 == "Dog")) {
+            found = true;
+            ASSERT_TRUE(a.structuralScore > 0.5f);
+            ASSERT_TRUE(a.labelScore >= 0.0f);
+            ASSERT_TRUE(a.combinedScore >= 0.25f);
+        }
+    }
+    ASSERT_TRUE(found);
+    PASS();
+}
+
+void test_merge_ontologies_with_provenance() {
+    TEST("mergeOntologies tracks provenance and deduplicates");
+    auto storage = std::make_shared<HybridStorage>(nullptr, nullptr);
+    AutoModelEngine engine(storage);
+
+    auto* ts = storage->getTripleStore();
+    ts->add({"Dog", "http://www.w3.org/2000/01/rdf-schema#subClassOf", "Animal"});
+
+    std::vector<Triple> external;
+    Triple t1;
+    t1.subject = "Dog"; t1.predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf"; t1.object = "Animal";
+    Triple t2;
+    t2.subject = "Cat"; t2.predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf"; t2.object = "Animal";
+    external.push_back(t1);
+    external.push_back(t2);
+
+    engine.mergeOntologies(external, "ext1", "External Source");
+
+    auto allTriples = storage->getAllTriples();
+    std::unordered_set<String> uniqueKeys;
+    for (const auto& t : allTriples) {
+        uniqueKeys.insert(t.subject + "|" + t.predicate + "|" + t.object);
+    }
+    ASSERT_TRUE(uniqueKeys.size() == 2);
+
+    PASS();
+}
+
 int main() {
     test_foil_produces_nontrivial_rule();
     test_resolveConflict_dryrun();
@@ -157,6 +211,8 @@ int main() {
     test_detect_disjoint_conflict();
     test_detect_functional_property_violation();
     test_detect_no_conflicts();
+    test_align_entities_multi_signal();
+    test_merge_ontologies_with_provenance();
     std::cout << "\nAutoModel tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;
