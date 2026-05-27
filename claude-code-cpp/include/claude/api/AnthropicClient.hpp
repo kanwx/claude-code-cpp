@@ -5,7 +5,6 @@
 #include "../core/Types.hpp"
 #include "../utils/CircuitBreaker.hpp"
 #include "../core/Cache.hpp"
-#include "ApiDebugTracker.hpp"
 #include <httplib.h>
 #include <memory>
 #include <chrono>

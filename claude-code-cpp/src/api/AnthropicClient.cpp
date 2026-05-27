@@ -1,4 +1,5 @@
 #include <claude/api/AnthropicClient.hpp>
+#include <claude/api/ApiDebugTracker.hpp>
 #include <claude/api/BetaHeaders.hpp>
 #include <claude/api/MessageRepair.hpp>
 #include <claude/utils/ConnectionPool.hpp>
