@@ -101,3 +101,8 @@ add_test(NAME io COMMAND test_io)
 add_executable(test_temporal test_temporal.cpp)
 target_link_libraries(test_temporal PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME temporal COMMAND test_temporal)
+
+# Unit test: Distributed Storage
+add_executable(test_distributed test_distributed.cpp)
+target_link_libraries(test_distributed PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME distributed COMMAND test_distributed)
