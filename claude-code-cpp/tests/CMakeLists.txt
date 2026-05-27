@@ -147,3 +147,7 @@ catch_discover_tests(test_anthropic_format)
 add_executable(test_context_injector test_context_injector.cpp)
 target_link_libraries(test_context_injector PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_context_injector)
+
+add_executable(test_tool_registry test_tool_registry.cpp)
+target_link_libraries(test_tool_registry PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_tool_registry)

@@ -1,4 +1,5 @@
 #include <claude/tool/ToolRegistry.hpp>
+#include <shared_mutex>
 #include <claude/tool/impl/BashTool.hpp>
 #include <claude/tool/impl/FileReadTool.hpp>
 #include <claude/tool/impl/FileWriteTool.hpp>
@@ -153,7 +154,10 @@ void ToolRegistry::registerMcpTools(std::shared_ptr<McpManager> manager) {
         return;
     }
 
-    mcpManager_ = manager;
+    {
+        std::unique_lock lock(registryMutex_);
+        mcpManager_ = manager;
+    }
 
     auto mcpTools = MCPTool::createAllFromManager(manager);
     int count = 0;

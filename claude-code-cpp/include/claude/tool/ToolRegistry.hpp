@@ -8,6 +8,7 @@
 #include <vector>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <spdlog/spdlog.h>
 
 namespace claude {
@@ -17,6 +18,12 @@ namespace claude {
 /// 工具分两类：
 /// - 核心工具: 立即注册，总是发送给 API
 /// - 延迟工具: 注册但标记为 deferred，需要通过 ToolSearch 按需加载
+///
+/// Thread safety: All public methods are guarded by shared_mutex.
+/// - READ methods use shared_lock (concurrent reads allowed)
+/// - WRITE methods use unique_lock (exclusive access)
+/// - Internal "Unsafe" helpers skip locking and are called from
+///   within already-locked contexts to avoid recursive locking.
 class ToolRegistry {
 public:
     ToolRegistry() = default;
@@ -26,6 +33,7 @@ public:
     /// 注册工具
     /// 若工具 isEnabled() 返回 false 则跳过
     void registerTool(ToolPtr tool) {
+        std::unique_lock lock(registryMutex_);
         if (!tool) {
             spdlog::warn("Attempted to register null tool");
             return;
@@ -67,18 +75,22 @@ public:
     void registerMcpTools(std::shared_ptr<McpManager> manager);
 
     /// 获取 MCP 管理器
-    std::shared_ptr<McpManager> getMcpManager() const { return mcpManager_; }
+    std::shared_ptr<McpManager> getMcpManager() const {
+        std::shared_lock lock(registryMutex_);
+        return mcpManager_;
+    }
 
     // ========== 查找 ==========
 
     /// 按名称查找
     Tool* findByName(const String& name) const {
-        auto it = tools_.find(name);
-        return it != tools_.end() ? it->second.get() : nullptr;
+        std::shared_lock lock(registryMutex_);
+        return findByNameUnsafe(name);
     }
 
     /// 检查是否存在
     bool has(const String& name) const {
+        std::shared_lock lock(registryMutex_);
         return tools_.contains(name);
     }
 
@@ -86,6 +98,7 @@ public:
 
     /// 获取所有已注册工具
     std::vector<Tool*> getTools() const {
+        std::shared_lock lock(registryMutex_);
         std::vector<Tool*> result;
         result.reserve(tools_.size());
         for (const auto& [_, tool] : tools_) {
@@ -96,6 +109,7 @@ public:
 
     /// 获取所有工具名称
     std::vector<String> getToolNames() const {
+        std::shared_lock lock(registryMutex_);
         std::vector<String> names;
         names.reserve(tools_.size());
         for (const auto& [name, _] : tools_) {
@@ -108,20 +122,16 @@ public:
 
     /// 判断工具是否为延迟工具
     bool isDeferredTool(const String& name) const {
-        auto* tool = findByName(name);
-        if (!tool) return false;
-        // alwaysLoad 的工具不延迟
-        if (tool->alwaysLoad()) return false;
-        // shouldDefer 的工具延迟
-        if (tool->shouldDefer()) return true;
-        return false;
+        std::shared_lock lock(registryMutex_);
+        return isDeferredToolUnsafe(name);
     }
 
     /// 获取所有核心 (非延迟) 工具
     std::vector<Tool*> getCoreTools() const {
+        std::shared_lock lock(registryMutex_);
         std::vector<Tool*> result;
         for (const auto& [_, tool] : tools_) {
-            if (!isDeferredTool(tool->name())) {
+            if (!isDeferredToolUnsafe(tool->name())) {
                 result.push_back(tool.get());
             }
         }
@@ -130,9 +140,10 @@ public:
 
     /// 获取所有延迟工具名称
     std::vector<String> getDeferredToolNames() const {
+        std::shared_lock lock(registryMutex_);
         std::vector<String> names;
         for (const auto& [name, _] : tools_) {
-            if (isDeferredTool(name)) {
+            if (isDeferredToolUnsafe(name)) {
                 names.push_back(name);
             }
         }
@@ -141,9 +152,10 @@ public:
 
     /// 获取延迟工具列表的格式化文本 (每行一个)
     String getDeferredToolList() const {
+        std::shared_lock lock(registryMutex_);
         std::ostringstream oss;
         for (const auto& [name, tool] : tools_) {
-            if (isDeferredTool(name)) {
+            if (isDeferredToolUnsafe(name)) {
                 String hint = tool->searchHint();
                 if (hint.empty()) {
                     oss << name << "\n";
@@ -168,22 +180,25 @@ public:
     /// @param maxResults 最大结果数 (默认 5)
     /// @return 匹配的工具名称和得分
     std::vector<SearchResult> searchTools(const String& query, int maxResults = 5) const {
+        std::shared_lock lock(registryMutex_);
         // 检查 select: 前缀
         if (query.starts_with("select:")) {
-            return searchBySelect(query.substr(7), maxResults);
+            return searchBySelectUnsafe(query.substr(7), maxResults);
         }
-        return searchByKeywords(query, maxResults);
+        return searchByKeywordsUnsafe(query, maxResults);
     }
 
     // ========== 已发现工具追踪 ==========
 
     /// 记录已发现的延迟工具
     void markDiscovered(const String& name) {
+        std::unique_lock lock(registryMutex_);
         discoveredTools_.insert(name);
     }
 
     /// 批量记录已发现的延迟工具
     void markDiscovered(const std::vector<String>& names) {
+        std::unique_lock lock(registryMutex_);
         for (const auto& name : names) {
             discoveredTools_.insert(name);
         }
@@ -191,16 +206,19 @@ public:
 
     /// 检查延迟工具是否已被发现
     bool isDiscovered(const String& name) const {
+        std::shared_lock lock(registryMutex_);
         return discoveredTools_.contains(name);
     }
 
     /// 获取所有已发现的延迟工具名称
     const std::unordered_set<String>& getDiscoveredTools() const {
+        std::shared_lock lock(registryMutex_);
         return discoveredTools_;
     }
 
     /// 清除已发现状态
     void clearDiscovered() {
+        std::unique_lock lock(registryMutex_);
         discoveredTools_.clear();
     }
 
@@ -208,6 +226,7 @@ public:
 
     /// 转换为 API 调用格式 (核心工具 + 已发现的延迟工具)
     std::vector<ToolDefinition> toToolDefinitions() const {
+        std::shared_lock lock(registryMutex_);
         std::vector<ToolDefinition> defs;
         defs.reserve(tools_.size());
 
@@ -221,7 +240,7 @@ public:
                 schema = {{"type", "object"}};
             }
 
-            bool deferred = isDeferredTool(tool->name());
+            bool deferred = isDeferredToolUnsafe(tool->name());
 
             // 延迟但未发现的工具: 跳过 (不发送给 API)
             // 但在启用 tool search 时，已发现的延迟工具发送 defer_loading=true
@@ -244,6 +263,7 @@ public:
 
     /// 转换为 API 格式 (不使用延迟加载 — 全部工具)
     std::vector<ToolDefinition> toToolDefinitionsNoDefer() const {
+        std::shared_lock lock(registryMutex_);
         std::vector<ToolDefinition> defs;
         defs.reserve(tools_.size());
 
@@ -268,8 +288,16 @@ public:
 
     // ========== 统计 ==========
 
-    size_t size() const { return tools_.size(); }
-    bool empty() const { return tools_.empty(); }
+    size_t size() const {
+        std::shared_lock lock(registryMutex_);
+        return tools_.size();
+    }
+
+    bool empty() const {
+        std::shared_lock lock(registryMutex_);
+        return tools_.empty();
+    }
+
     size_t deferredCount() const { return getDeferredToolNames().size(); }
     size_t coreCount() const { return getCoreTools().size(); }
 
@@ -277,11 +305,29 @@ private:
     std::unordered_map<String, ToolPtr> tools_;
     std::unordered_set<String> discoveredTools_;
     std::shared_ptr<McpManager> mcpManager_;
+    mutable std::shared_mutex registryMutex_;
 
-    // ========== 搜索实现 ==========
+    // ========== Internal unsafe helpers (no lock — caller must hold registryMutex_) ==========
+
+    /// Lookup by name without locking. Caller must hold registryMutex_.
+    Tool* findByNameUnsafe(const String& name) const {
+        auto it = tools_.find(name);
+        return it != tools_.end() ? it->second.get() : nullptr;
+    }
+
+    /// Check deferred status without locking. Caller must hold registryMutex_.
+    bool isDeferredToolUnsafe(const String& name) const {
+        auto* tool = findByNameUnsafe(name);
+        if (!tool) return false;
+        if (tool->alwaysLoad()) return false;
+        if (tool->shouldDefer()) return true;
+        return false;
+    }
+
+    // ========== 搜索实现 (no lock — caller must hold registryMutex_) ==========
 
     /// select: 前缀精确选择
-    std::vector<SearchResult> searchBySelect(const String& names, int maxResults) const {
+    std::vector<SearchResult> searchBySelectUnsafe(const String& names, int maxResults) const {
         std::vector<SearchResult> results;
 
         // 逗号分隔的工具名称
@@ -304,7 +350,7 @@ private:
     }
 
     /// 关键词搜索
-    std::vector<SearchResult> searchByKeywords(const String& query, int maxResults) const {
+    std::vector<SearchResult> searchByKeywordsUnsafe(const String& query, int maxResults) const {
         std::vector<SearchResult> results;
 
         // 解析查询词
@@ -322,7 +368,7 @@ private:
 
         // 评分每个延迟工具
         for (const auto& [name, tool] : tools_) {
-            if (!isDeferredTool(name)) continue;
+            if (!isDeferredToolUnsafe(name)) continue;
 
             // 检查必要条件
             String lowerName = toLower(name);
@@ -377,7 +423,7 @@ private:
 
         // 精确名称匹配 (快速路径)
         auto exactIt = tools_.find(query);
-        if (exactIt != tools_.end() && isDeferredTool(query)) {
+        if (exactIt != tools_.end() && isDeferredToolUnsafe(query)) {
             // 检查是否已在结果中
             bool found = false;
             for (auto& r : results) {
