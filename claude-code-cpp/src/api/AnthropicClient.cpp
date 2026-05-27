@@ -35,10 +35,12 @@ AnthropicClient::~AnthropicClient() {
 }
 
 void AnthropicClient::setApiKey(const String& key) {
+    std::unique_lock lock(configMutex_);
     apiKey_ = key;
 }
 
 void AnthropicClient::setBaseUrl(const String& url) {
+    std::unique_lock lock(configMutex_);
     // Release old pooled connection before switching
     if (!pooledBaseUrl_.empty()) {
         ConnectionPool::instance().releaseConnection(pooledBaseUrl_);
@@ -60,18 +62,22 @@ void AnthropicClient::setBaseUrl(const String& url) {
 }
 
 void AnthropicClient::setModel(const String& model) {
+    std::unique_lock lock(configMutex_);
     model_ = model;
 }
 
 void AnthropicClient::setMaxTokens(int maxTokens) {
+    std::unique_lock lock(configMutex_);
     maxTokens_ = maxTokens;
 }
 
 void AnthropicClient::setTemperature(double temp) {
+    std::unique_lock lock(configMutex_);
     temperature_ = temp;
 }
 
 void AnthropicClient::setThinkingEnabled(bool enabled) {
+    std::unique_lock lock(configMutex_);
     thinkingEnabled_ = enabled;
     if (enabled) {
         betaHeaders_ = api::BetaHeaders::merge(betaHeaders_, api::BetaHeaders::forExtendedThinking());
@@ -79,6 +85,7 @@ void AnthropicClient::setThinkingEnabled(bool enabled) {
 }
 
 void AnthropicClient::setThinkingBudget(int budget) {
+    std::unique_lock lock(configMutex_);
     thinkingBudget_ = budget;
 }
 
@@ -359,6 +366,8 @@ httplib::Headers AnthropicClient::buildHttpHeaders() {
 // ============================================================================
 
 std::expected<Json, String> AnthropicClient::call(const Json& messages, const Json& tools) {
+    std::shared_lock lock(configMutex_);
+
     // Circuit breaker check
     if (!circuitBreaker_.allowCall()) {
         return std::unexpected("Circuit breaker open — too many recent failures");
@@ -865,9 +874,8 @@ void AnthropicClient::stream(
     const Json& tools,
     std::function<void(const Json& chunk)> onChunk
 ) {
-    lastDidFallBack_ = false;
-
-    // Delegate to streamWithState, discarding the state return
+    // Delegate to streamWithState, discarding the state return.
+    // streamWithState handles all locking and lastDidFallBack_ internally.
     auto result = streamWithState(messages, tools, std::move(onChunk));
 
     if (result.isErr()) {
@@ -884,18 +892,59 @@ Result<StreamingState> AnthropicClient::streamWithState(
     const Json& tools,
     std::function<void(const Json& chunk)> onChunk
 ) {
-    lastDidFallBack_ = false;
+    // ---- Reset fallback flag under unique_lock ----
+    {
+        std::unique_lock lock(configMutex_);
+        lastDidFallBack_ = false;
+    }
 
-    Json req = buildRequest(messages, tools);
-    req["stream"] = true;
+    // ---- Snapshot all config fields under shared_lock ----
+    // The streaming lambdas outlive the lock, so they must use local copies
+    // rather than reading this->apiKey_, this->model_, etc.
+    String apiKey, baseUrl, model;
+    int maxTokens;
+    double temperature;
+    bool thinkingEnabled, promptCachingEnabled, isCustomBaseUrl, cacheEnabled;
+    int thinkingBudget, streamIdleTimeoutSec;
+    std::vector<String> betaHeaders;
+    std::shared_ptr<httplib::Client> httpClient;
+
+    {
+        std::shared_lock lock(configMutex_);
+        apiKey = apiKey_;
+        baseUrl = baseUrl_;
+        model = model_;
+        maxTokens = maxTokens_;
+        temperature = temperature_;
+        thinkingEnabled = thinkingEnabled_;
+        thinkingBudget = thinkingBudget_;
+        promptCachingEnabled = promptCachingEnabled_;
+        isCustomBaseUrl = isCustomBaseUrl_;
+        cacheEnabled = cacheEnabled_;
+        streamIdleTimeoutSec = streamIdleTimeoutSec_;
+        betaHeaders = betaHeaders_;
+        httpClient = httpClient_;
+    }
+
+    // ---- Build request using snapshot values ----
+    // buildRequest/buildHttpHeaders read config members directly; since we hold
+    // no lock now, we must avoid calling them. Instead, inline the logic using
+    // the snapshot copies. However, buildRequest is complex; the simpler and
+    // safe approach is to build the request *inside* the lock scope above.
+    // For clarity, we build it under a second shared_lock acquisition.
+    Json req;
+    httplib::Headers headers;
+    String path = isCustomBaseUrl ? "/messages" : "/v1/messages";
+    {
+        std::shared_lock lock(configMutex_);
+        req = buildRequest(messages, tools);
+        req["stream"] = true;
+        headers = buildHttpHeaders();
+    }
 
     String body = req.dump();
 
-    httplib::Headers headers = buildHttpHeaders();
-
-    String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
-
-    spdlog::debug("Streaming to {}{} (model: {})", baseUrl_, path, model_);
+    spdlog::debug("Streaming to {}{} (model: {})", baseUrl, path, model);
     spdlog::debug("Request body size: {} bytes", body.size());
 
     // Initialize streaming state
@@ -939,15 +988,18 @@ Result<StreamingState> AnthropicClient::streamWithState(
     bool httpError = false;
     int httpStatus = 0;
 
-    auto res = httpClient_->Post(path.c_str(), headers, body, "application/json",
+    // Capture streamIdleTimeoutSec by value (already snapshot'd above)
+    int idleTimeout = streamIdleTimeoutSec;
+
+    auto res = httpClient->Post(path.c_str(), headers, body, "application/json",
         [&](const char* data, size_t len) {
             totalReceived += len;
 
             // Stall detection: check time since last chunk
-            if (streamIdleTimeoutSec_ > 0 && state.currentBlockIndex >= 0) {
+            if (idleTimeout > 0 && state.currentBlockIndex >= 0) {
                 auto now = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration<double, std::milli>(now - state.lastChunkTime).count();
-                double timeoutMs = static_cast<double>(streamIdleTimeoutSec_) * 1000.0;
+                double timeoutMs = static_cast<double>(idleTimeout) * 1000.0;
 
                 if (elapsed > timeoutMs) {
                     state.stallCount++;
@@ -1015,6 +1067,7 @@ Result<StreamingState> AnthropicClient::streamWithState(
 
         auto fallbackResult = fallbackToNonStreaming(messages, tools, onChunk);
         if (fallbackResult.ok()) {
+            std::unique_lock lock(configMutex_);
             lastDidFallBack_ = true;
             state = fallbackResult.value();
             state.usage.stallCount = state.stallCount;

@@ -9,6 +9,7 @@
 #include <httplib.h>
 #include <memory>
 #include <chrono>
+#include <shared_mutex>
 
 namespace claude {
 
@@ -173,30 +174,38 @@ public:
 
     /// 设置是否启用 prompt caching
     void setPromptCachingEnabled(bool enabled) {
+        std::unique_lock lock(configMutex_);
         promptCachingEnabled_ = enabled;
     }
 
     /// 设置查询来源 (影响缓存 TTL)
     void setQuerySource(const String& source) {
+        std::unique_lock lock(configMutex_);
         querySource_ = source;
     }
 
     /// Set stream idle timeout (seconds). 0 disables watchdog.
     void setStreamIdleTimeout(int seconds) {
+        std::unique_lock lock(configMutex_);
         streamIdleTimeoutSec_ = seconds;
     }
 
     void setBetaHeaders(const std::vector<String>& betas) {
+        std::unique_lock lock(configMutex_);
         betaHeaders_ = betas;
     }
     const std::vector<String>& getBetaHeaders() const {
+        std::shared_lock lock(configMutex_);
         return betaHeaders_;
     }
 
     // ========== 信息 ==========
 
     String getProviderName() const override { return "anthropic"; }
-    String getModelName() const override { return model_; }
+    String getModelName() const override {
+        std::shared_lock lock(configMutex_);
+        return model_;
+    }
 
     /// Get last quota status from response headers
     const QuotaStatus& lastQuotaStatus() const { return lastQuotaStatus_; }
@@ -210,11 +219,20 @@ public:
     const CircuitBreaker& circuitBreaker() const { return circuitBreaker_; }
 
     /// Enable/disable API response caching
-    void setCacheEnabled(bool enabled) { cacheEnabled_ = enabled; }
-    bool isCacheEnabled() const { return cacheEnabled_; }
+    void setCacheEnabled(bool enabled) {
+        std::unique_lock lock(configMutex_);
+        cacheEnabled_ = enabled;
+    }
+    bool isCacheEnabled() const {
+        std::shared_lock lock(configMutex_);
+        return cacheEnabled_;
+    }
 
     /// Whether the last stream() fell back to non-streaming
-    bool didFallBackToNonStreaming() const { return lastDidFallBack_; }
+    bool didFallBackToNonStreaming() const {
+        std::shared_lock lock(configMutex_);
+        return lastDidFallBack_;
+    }
 
 private:
     String apiKey_;
@@ -244,6 +262,7 @@ private:
     CircuitBreaker circuitBreaker_;
     ApiCache apiCache_;
     bool cacheEnabled_ = false;
+    mutable std::shared_mutex configMutex_;  // guards model/baseUrl/apiKey and all setters
 
     // 请求构建
     Json buildRequest(const Json& messages, const Json& tools);
