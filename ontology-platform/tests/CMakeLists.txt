@@ -96,3 +96,8 @@ add_test(NAME alc_reasoner COMMAND test_alc_reasoner)
 add_executable(test_io test_io.cpp)
 target_link_libraries(test_io PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME io COMMAND test_io)
+
+# Unit test: Temporal Reasoning (Allen Algebra)
+add_executable(test_temporal test_temporal.cpp)
+target_link_libraries(test_temporal PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME temporal COMMAND test_temporal)
