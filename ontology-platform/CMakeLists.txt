@@ -61,6 +61,7 @@ set(STORAGE_SOURCES
     src/storage/HybridStorage.cpp
     src/storage/StellarDBClient.cpp
     src/storage/HippoClient.cpp
+    src/storage/Distributed.cpp
 )
 
 set(INFERENCE_SOURCES
