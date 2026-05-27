@@ -268,7 +268,16 @@ void ShardManager::rebalance() {
         for (const auto& t : shard->leaderStore()->all()) {
             allTriples.push_back(t);
         }
-        shard->leaderStore()->clear();
+        // Clear ALL replicas, not just the leader
+        for (int i = 0; i < shard->replicaCount(); ++i) {
+            auto* replica = shard->getLeader();
+            if (i == 0) {
+                shard->leaderStore()->clear();
+            } else {
+                auto* follower = shard->getFollower(i - 1);
+                if (follower) follower->store.clear();
+            }
+        }
     }
     for (const auto& t : allTriples) {
         int targetShard = shardForKey(t.subject);
@@ -386,6 +395,11 @@ void DistributedStorage::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* shard : shardManager_.getAllShards()) {
         shard->leaderStore()->clear();
+        // Clear followers too
+        for (int i = 0; i < shard->replicaCount(); ++i) {
+            auto* follower = shard->getFollower(i);
+            if (follower) follower->store.clear();
+        }
     }
 }
 

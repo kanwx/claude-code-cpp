@@ -1025,7 +1025,19 @@ String NTriplesWriter::write(const Ontology& ontology) {
     // 写入类
     for (const auto& [id, cls] : ontology.classes) {
         oss << "<" << base << id << "> <" << OwlToOntologyConverter::RDF_NS << "type> <" << OwlToOntologyConverter::OWL_NS << "Class> .\n";
-        oss << "<" << base << id << "> <" << OwlToOntologyConverter::RDFS_NS << "label> \"" << cls.name << "\" .\n";
+        oss << "<" << base << id << "> <" << OwlToOntologyConverter::RDFS_NS << "label> \"";
+        // N-Triples string escaping
+        for (char c : cls.name) {
+            switch (c) {
+                case '\\': oss << "\\\\"; break;
+                case '"':  oss << "\\\""; break;
+                case '\n': oss << "\\n";  break;
+                case '\t': oss << "\\t";  break;
+                case '\r': oss << "\\r";  break;
+                default:   oss << c;
+            }
+        }
+        oss << "\" .\n";
         for (const auto& super : cls.superClasses) {
             oss << "<" << base << id << "> <" << OwlToOntologyConverter::RDFS_NS << "subClassOf> <" << base << super << "> .\n";
         }
@@ -1506,7 +1518,7 @@ String JsonLdWriter::writeRdf(const RdfGraph& graph) {
                         value = Json::object();
                         value["@value"] = triple->object;
                         value["@language"] = triple->language;
-                    } else if (!triple->datatype.empty() && triple->datatype != "xsd:string") {
+                    } else if (!triple->datatype.empty() && triple->datatype != "xsd:string" && triple->datatype != XSD_NS + "string") {
                         String dtIri = resolvePrefixInIri(triple->datatype, graph.prefixes);
                         if (dtIri == XSD_NS + "integer") {
                             try { value = std::stoi(triple->object); }

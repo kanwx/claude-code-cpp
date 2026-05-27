@@ -11,12 +11,14 @@ namespace ontology {
 // LLMInterface 实现
 // ============================================================================
 
+static std::once_flag curlInitFlag;
+
 LLMInterface::LLMInterface(const AutoModelConfig& config) : config_(config) {
-    curl_global_init(CURL_GLOBAL_ALL);
+    std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_ALL); });
 }
 
 LLMInterface::~LLMInterface() {
-    curl_global_cleanup();
+    // curl_global_cleanup must be called once at program exit, not per instance
 }
 
 void LLMInterface::setApiKey(const String& key) {
@@ -1852,7 +1854,10 @@ std::vector<Triple> naturalLanguageQuery(StoragePtr storage, const String& query
 
 size_t AutoModelEngine::tripleHash(const Triple& t) {
     std::hash<String> hasher;
-    return hasher(t.subject) ^ (hasher(t.predicate) << 1) ^ (hasher(t.object) << 2);
+    size_t h = hasher(t.subject);
+    h ^= hasher(t.predicate) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= hasher(t.object) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    return h;
 }
 
 int AutoModelEngine::levenshteinDistance(const String& s1, const String& s2) {
