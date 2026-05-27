@@ -210,8 +210,8 @@ public:
         return discoveredTools_.contains(name);
     }
 
-    /// 获取所有已发现的延迟工具名称
-    const std::unordered_set<String>& getDiscoveredTools() const {
+    /// 获取所有已发现的延迟工具名称 (returns copy for thread safety)
+    std::unordered_set<String> getDiscoveredTools() const {
         std::shared_lock lock(registryMutex_);
         return discoveredTools_;
     }

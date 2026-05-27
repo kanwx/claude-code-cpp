@@ -56,7 +56,7 @@ TEST_CASE("ToolRegistry concurrent writes", "[tool_registry][concurrent]") {
     for (auto& t : writers) t.join();
 
     // All discoveries should be recorded (set is deduplicated by name)
-    const auto& discovered = registry.getDiscoveredTools();
+    const auto discovered = registry.getDiscoveredTools();
     REQUIRE(discovered.size() == 4 * N);
 }
 

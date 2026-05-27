@@ -1,5 +1,4 @@
 #include <claude/tool/ToolRegistry.hpp>
-#include <shared_mutex>
 #include <claude/tool/impl/BashTool.hpp>
 #include <claude/tool/impl/FileReadTool.hpp>
 #include <claude/tool/impl/FileWriteTool.hpp>
