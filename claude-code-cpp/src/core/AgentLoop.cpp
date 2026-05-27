@@ -8,7 +8,6 @@
 #include <claude/tool/ResultTruncation.hpp>
 #include <claude/api/RetryableClient.hpp>
 #include <spdlog/spdlog.h>
-#include <algorithm>
 
 namespace claude {
 
