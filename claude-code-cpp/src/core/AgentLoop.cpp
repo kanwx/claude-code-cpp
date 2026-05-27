@@ -522,7 +522,7 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
     }
 
     // 解析 stop_reason
-    String stopReason = res.value("stop_reason", res.value("finish_reason", "end_turn"));
+    String stopReason = res.is_object() ? res.value("stop_reason", res.value("finish_reason", "end_turn")) : "end_turn";
 
     // 解析消息
     Message msg = Message::assistant("");
@@ -555,9 +555,12 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
         }
         if (res["message"].contains("tool_calls") && res["message"]["tool_calls"].is_array()) {
             for (const auto& tc : res["message"]["tool_calls"]) {
+                if (!tc.is_object()) continue;
                 String id = tc.value("id", "call_0");
-                String name = tc.contains("function") ? tc["function"].value("name", "unknown") : "unknown";
-                String args = tc.contains("function") ? tc["function"].value("arguments", "{}") : "{}";
+                String name = tc.contains("function") && tc["function"].is_object()
+                    ? tc["function"].value("name", "unknown") : "unknown";
+                String args = tc.contains("function") && tc["function"].is_object()
+                    ? tc["function"].value("arguments", "{}") : "{}";
                 msg.toolCalls.push_back({id, name, args});
             }
         }
@@ -1136,7 +1139,7 @@ String AgentLoop::executeTool(const ToolCall& call) {
                 }
 
                 // 应用选择
-                String command = input.value("command", input.value("file_path", ""));
+                String command = input.is_object() ? input.value("command", input.value("file_path", "")) : "";
                 permissionEngine_->applyChoice(choice, call.name, command);
             }
         }
@@ -1507,12 +1510,17 @@ bool AgentLoop::applyAutoCompact() {
     }
 
     String summary;
-    if (llmResult->contains("choices") && !(*llmResult)["choices"].empty()) {
-        summary = (*llmResult)["choices"][0]["message"]["content"].get<String>();
-    } else if (llmResult->contains("content") && !(*llmResult)["content"].empty()) {
-        auto& blocks = (*llmResult)["content"];
+    if (llmResult->contains("choices") && (*llmResult)["choices"].is_array() && !(*llmResult)["choices"].empty()) {
+        const auto& firstChoice = (*llmResult)["choices"][0];
+        if (firstChoice.is_object() && firstChoice.contains("message") && firstChoice["message"].is_object()
+            && firstChoice["message"].contains("content") && firstChoice["message"]["content"].is_string()) {
+            summary = firstChoice["message"]["content"].get<String>();
+        }
+    } else if (llmResult->contains("content") && (*llmResult)["content"].is_array() && !(*llmResult)["content"].empty()) {
+        const auto& blocks = (*llmResult)["content"];
         for (const auto& block : blocks) {
-            if (block.value("type", "") == "text") {
+            if (block.is_object() && block.value("type", "") == "text"
+                && block.contains("text") && block["text"].is_string()) {
                 summary += block["text"].get<String>();
             }
         }

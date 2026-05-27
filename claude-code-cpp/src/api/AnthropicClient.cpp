@@ -466,13 +466,13 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
 // ============================================================================
 
 void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) {
-    String type = event.value("type", "");
+    String type = event.is_object() ? event.value("type", "") : "";
 
     // ------ message_start ------
     if (type == "message_start") {
-        if (event.contains("message")) {
+        if (event.contains("message") && event["message"].is_object()) {
             const auto& msg = event["message"];
-            state.model = msg.value("model", "");
+            state.model = msg.is_object() ? msg.value("model", "") : "";
 
             // Extract usage from message_start
             if (msg.contains("usage") && msg["usage"].is_object()) {
@@ -658,7 +658,7 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
 
     // ------ message_delta ------
     else if (type == "message_delta") {
-        if (event.contains("delta")) {
+        if (event.contains("delta") && event["delta"].is_object()) {
             const auto& delta = event["delta"];
             state.stopReason = delta.value("stop_reason", "");
         }
@@ -825,10 +825,10 @@ Result<StreamingState> AnthropicClient::fallbackToNonStreaming(
     state.didFallBackToNonStreaming = true;
 
     // Extract model
-    state.model = response.value("model", "");
+    state.model = response.is_object() ? response.value("model", "") : "";
 
     // Extract stop_reason
-    state.stopReason = response.value("stop_reason", "");
+    state.stopReason = response.is_object() ? response.value("stop_reason", "") : "";
 
     // Extract usage
     if (response.contains("usage") && response["usage"].is_object()) {

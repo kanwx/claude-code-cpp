@@ -1154,6 +1154,7 @@ private:
 
             std::vector<Message> loadedMessages;
             for (const auto& jm : sessionJson["messages"]) {
+                if (!jm.is_object()) continue;
                 String roleStr = jm.value("role", "user");
                 MessageRole role = MessageRole::User;
                 if (roleStr == "system") role = MessageRole::System;
@@ -1166,9 +1167,10 @@ private:
 
                 if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
                     for (const auto& tcj : jm["tool_calls"]) {
+                        if (!tcj.is_object()) continue;
                         ToolCall tc;
                         tc.id = tcj.value("id", "");
-                        if (tcj.contains("function")) {
+                        if (tcj.contains("function") && tcj["function"].is_object()) {
                             tc.name = tcj["function"].value("name", "");
                             tc.arguments = tcj["function"].value("arguments", "");
                         }
@@ -1178,6 +1180,7 @@ private:
 
                 if (jm.contains("tool_results") && jm["tool_results"].is_array()) {
                     for (const auto& trj : jm["tool_results"]) {
+                        if (!trj.is_object()) continue;
                         ToolResponse tr;
                         tr.callId = trj.value("tool_call_id", "");
                         tr.toolName = trj.value("name", "");
