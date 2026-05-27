@@ -1,6 +1,5 @@
 #include <claude/core/PromptSuggestion.hpp>
 #include <algorithm>
-#include <regex>
 #include <chrono>
 #include <spdlog/spdlog.h>
 

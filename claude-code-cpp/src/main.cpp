@@ -142,7 +142,6 @@
 using namespace claude;
 
 // Bring new formatters into scope
-using claude::Figures;
 using claude::MessageResponse;
 
 // Signal handler globals — context-aware Ctrl+C handling
