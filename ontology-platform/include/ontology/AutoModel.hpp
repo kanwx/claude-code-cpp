@@ -396,6 +396,21 @@ public:
     /// 解决冲突
     void resolveConflict(const String& conflictId, bool dryRun = false);
 
+    // ===== 冲突检测与知识融合 =====
+
+    /// 检测冲突 (TBox-aware)
+    std::vector<OntologyConflict> detectConflicts();
+
+    /// 实体对齐 (multi-signal)
+    std::vector<AlignmentResult> alignEntities(
+        const std::vector<String>& entities1,
+        const std::vector<String>& entities2);
+
+    /// 本体融合 (provenance-aware)
+    void mergeOntologies(const std::vector<Triple>& externalTriples,
+                         const String& sourceId = "external",
+                         const String& sourceName = "External Ontology");
+
 private:
     String getClassList();
 
@@ -412,21 +427,6 @@ private:
 
     /// 优化本体
     std::vector<String> optimize();
-
-    /// 检测冲突 (TBox-aware)
-    std::vector<OntologyConflict> detectConflicts();
-
-    // ===== 知识融合 =====
-
-    /// 实体对齐 (multi-signal)
-    std::vector<AlignmentResult> alignEntities(
-        const std::vector<String>& entities1,
-        const std::vector<String>& entities2);
-
-    /// 本体融合 (provenance-aware)
-    void mergeOntologies(const std::vector<Triple>& externalTriples,
-                         const String& sourceId = "external",
-                         const String& sourceName = "External Ontology");
 
     // ===== 导出与解释 =====
 

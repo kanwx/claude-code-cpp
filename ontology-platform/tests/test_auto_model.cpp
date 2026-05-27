@@ -93,10 +93,70 @@ void test_importAndLearn_adds_rules() {
     PASS();
 }
 
+void test_detect_disjoint_conflict() {
+    TEST("detectConflicts finds disjoint class assertion conflicts");
+    auto storage = std::make_shared<HybridStorage>(nullptr, nullptr);
+    AutoModelEngine engine(storage);
+
+    auto* ts = storage->getTripleStore();
+    ts->add({"Cat", "http://www.w3.org/2002/07/owl#disjointWith", "Dog"});
+    ts->add({"fluffy", "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "Cat"});
+    ts->add({"fluffy", "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "Dog"});
+
+    auto conflicts = engine.detectConflicts();
+    bool foundDisjoint = false;
+    for (const auto& c : conflicts) {
+        if (c.type == OntologyConflict::DisjointClassAssertion) {
+            foundDisjoint = true;
+        }
+    }
+    ASSERT_TRUE(foundDisjoint);
+    PASS();
+}
+
+void test_detect_functional_property_violation() {
+    TEST("detectConflicts finds functional property violations");
+    auto storage = std::make_shared<HybridStorage>(nullptr, nullptr);
+    AutoModelEngine engine(storage);
+
+    auto* ts = storage->getTripleStore();
+    ts->add({"hasMother", "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+             "http://www.w3.org/2002/07/owl#FunctionalProperty"});
+    ts->add({"alice", "hasMother", "bob"});
+    ts->add({"alice", "hasMother", "carol"});
+
+    auto conflicts = engine.detectConflicts();
+    bool foundFunctional = false;
+    for (const auto& c : conflicts) {
+        if (c.type == OntologyConflict::FunctionalPropertyViolation) {
+            foundFunctional = true;
+        }
+    }
+    ASSERT_TRUE(foundFunctional);
+    PASS();
+}
+
+void test_detect_no_conflicts() {
+    TEST("detectConflicts returns empty for consistent data");
+    auto storage = std::make_shared<HybridStorage>(nullptr, nullptr);
+    AutoModelEngine engine(storage);
+
+    auto* ts = storage->getTripleStore();
+    ts->add({"Dog", "http://www.w3.org/2000/01/rdf-schema#subClassOf", "Animal"});
+    ts->add({"rex", "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "Dog"});
+
+    auto conflicts = engine.detectConflicts();
+    ASSERT_TRUE(conflicts.empty());
+    PASS();
+}
+
 int main() {
     test_foil_produces_nontrivial_rule();
     test_resolveConflict_dryrun();
     test_importAndLearn_adds_rules();
+    test_detect_disjoint_conflict();
+    test_detect_functional_property_violation();
+    test_detect_no_conflicts();
     std::cout << "\nAutoModel tests: " << testsPassed << " passed, "
               << testsFailed << " failed\n";
     return testsFailed > 0 ? 1 : 0;

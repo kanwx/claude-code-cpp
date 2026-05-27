@@ -1419,7 +1419,9 @@ std::vector<ConflictAction> AutoModelEngine::parseConflictActions(const String& 
     return actions;
 }
 
-void AutoModelEngine::mergeOntologies(const std::vector<Triple>& externalTriples) {
+void AutoModelEngine::mergeOntologies(const std::vector<Triple>& externalTriples,
+                                      const String& sourceId,
+                                      const String& sourceName) {
     // 实体对齐
     std::vector<String> localEntities, externalEntities;
     auto localIndividuals = storage_->getAllIndividuals();
@@ -1444,10 +1446,17 @@ void AutoModelEngine::mergeOntologies(const std::vector<Triple>& externalTriples
         Triple merged = t;
 
         // 检查主体是否需要对齐
-        for (const auto& [local, ext] : alignments) {
-            if (merged.subject == ext) merged.subject = local;
-            if (merged.object == ext) merged.object = local;
+        for (const auto& al : alignments) {
+            if (merged.subject == al.entity2) merged.subject = al.entity1;
+            if (merged.object == al.entity2) merged.object = al.entity1;
         }
+
+        // 添加来源追踪
+        Provenance prov;
+        prov.sourceId = sourceId;
+        prov.sourceName = sourceName;
+        prov.confidence = t.confidence;
+        provenanceIndex_[tripleHash(merged)] = prov;
 
         // 添加合并后的三元组
         storage_->addTriple(merged);
@@ -1630,29 +1639,71 @@ void AutoModelEngine::trainEmbeddings(int epochs, float lr) {
     embeddingsTrained_ = true;
 }
 
-std::vector<String> AutoModelEngine::detectConflicts() {
-    std::vector<String> conflicts;
+std::vector<OntologyConflict> AutoModelEngine::detectConflicts() {
+    std::vector<OntologyConflict> conflicts;
+    auto* ts = storage_->getTripleStore();
+    if (!ts) return conflicts;
 
-    // 检查矛盾的陈述
-    auto triples = storage_->getAllTriples();
+    // ---- 1. Disjoint class assertion conflicts ----
+    std::vector<std::pair<String, String>> disjointPairs;
+    auto disjointTriples = ts->findByPredicate(
+        "http://www.w3.org/2002/07/owl#disjointWith");
+    for (const auto& dt : disjointTriples) {
+        disjointPairs.push_back({dt.subject, dt.object});
+    }
 
-    // 检查互斥关系
-    std::unordered_map<String, std::vector<String>> mutexRelations = {
-        {"marriedTo", {"divorcedFrom"}},
-        {"employedBy", {"firedFrom"}},
-        {"alive", {"deceased"}}
-    };
+    std::unordered_map<String, std::vector<String>> individualTypes;
+    auto typeTriples = ts->findByPredicate(
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+    for (const auto& tt : typeTriples) {
+        individualTypes[tt.subject].push_back(tt.object);
+    }
 
-    for (const auto& t : triples) {
-        auto it = mutexRelations.find(t.predicate);
-        if (it != mutexRelations.end()) {
-            for (const auto& mutex : it->second) {
-                auto conflicting = storage_->queryTriples(
-                    TripleStore::TriplePattern{t.subject, mutex, "", false, false, true});
-                if (!conflicting.empty()) {
-                    conflicts.push_back("冲突: " + t.subject + " 同时有 " +
-                        t.predicate + " 和 " + mutex + " 关系");
+    for (const auto& [individual, types] : individualTypes) {
+        for (size_t i = 0; i < types.size(); ++i) {
+            for (size_t j = i + 1; j < types.size(); ++j) {
+                for (const auto& [c1, c2] : disjointPairs) {
+                    if ((types[i] == c1 && types[j] == c2) ||
+                        (types[i] == c2 && types[j] == c1)) {
+                        OntologyConflict c;
+                        c.type = OntologyConflict::DisjointClassAssertion;
+                        c.description = individual + " is typed as both " +
+                            types[i] + " and " + types[j] + " which are disjoint";
+                        c.severity = 1.0f;
+                        for (const auto& tt : typeTriples) {
+                            if (tt.subject == individual &&
+                                (tt.object == types[i] || tt.object == types[j])) {
+                                c.conflictingTriples.push_back(tt);
+                            }
+                        }
+                        conflicts.push_back(c);
+                    }
                 }
+            }
+        }
+    }
+
+    // ---- 2. Functional property violations ----
+    auto funcPropTriples = ts->findByPO(
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+        "http://www.w3.org/2002/07/owl#FunctionalProperty");
+
+    for (const auto& fp : funcPropTriples) {
+        String prop = fp.subject;
+        std::unordered_map<String, std::vector<Triple>> subjectValues;
+        auto propTriples = ts->findByPredicate(prop);
+        for (const auto& pt : propTriples) {
+            subjectValues[pt.subject].push_back(pt);
+        }
+        for (const auto& [subj, vals] : subjectValues) {
+            if (vals.size() > 1) {
+                OntologyConflict c;
+                c.type = OntologyConflict::FunctionalPropertyViolation;
+                c.description = subj + " has " + std::to_string(vals.size()) +
+                    " values for functional property " + prop;
+                c.conflictingTriples = vals;
+                c.severity = 0.9f;
+                conflicts.push_back(c);
             }
         }
     }
@@ -1662,11 +1713,11 @@ std::vector<String> AutoModelEngine::detectConflicts() {
 
 // ===== 知识融合 =====
 
-std::vector<std::pair<String, String>> AutoModelEngine::alignEntities(
+std::vector<AlignmentResult> AutoModelEngine::alignEntities(
     const std::vector<String>& entities1,
     const std::vector<String>& entities2) {
 
-    std::vector<std::pair<String, String>> alignments;
+    std::vector<AlignmentResult> alignments;
 
     if (!embeddingsTrained_) {
         trainEmbeddings();
@@ -1700,7 +1751,17 @@ std::vector<std::pair<String, String>> AutoModelEngine::alignEntities(
         }
 
         if (maxSim >= 0.8f) {
-            alignments.push_back({e1, bestMatch});
+            AlignmentResult ar;
+            ar.entity1 = e1;
+            ar.entity2 = bestMatch;
+            ar.embeddingScore = maxSim;
+            ar.structuralScore = jaccardCoefficient(e1, bestMatch);
+            ar.labelScore = 1.0f - static_cast<float>(levenshteinDistance(e1, bestMatch)) /
+                static_cast<float>(std::max(e1.size(), bestMatch.size()));
+            ar.combinedScore = alignWeightEmbedding_ * ar.embeddingScore +
+                alignWeightStructural_ * ar.structuralScore +
+                alignWeightLabel_ * ar.labelScore;
+            alignments.push_back(ar);
         }
     }
 
@@ -1780,6 +1841,53 @@ std::vector<Triple> naturalLanguageQuery(StoragePtr storage, const String& query
     }
 
     return results;
+}
+
+// ============================================================================
+// Helper methods
+// ============================================================================
+
+size_t AutoModelEngine::tripleHash(const Triple& t) {
+    std::hash<String> hasher;
+    return hasher(t.subject) ^ (hasher(t.predicate) << 1) ^ (hasher(t.object) << 2);
+}
+
+int AutoModelEngine::levenshteinDistance(const String& s1, const String& s2) {
+    int m = static_cast<int>(s1.size());
+    int n = static_cast<int>(s2.size());
+    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1));
+
+    for (int i = 0; i <= m; ++i) dp[i][0] = i;
+    for (int j = 0; j <= n; ++j) dp[0][j] = j;
+
+    for (int i = 1; i <= m; ++i) {
+        for (int j = 1; j <= n; ++j) {
+            int cost = (s1[i-1] == s2[j-1]) ? 0 : 1;
+            dp[i][j] = std::min({dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost});
+        }
+    }
+    return dp[m][n];
+}
+
+float AutoModelEngine::jaccardCoefficient(const String& entity1, const String& entity2) const {
+    auto* ts = storage_->getTripleStore();
+    if (!ts) return 0.0f;
+
+    auto triples1 = ts->findBySubject(entity1);
+    auto triples2 = ts->findBySubject(entity2);
+
+    std::unordered_set<String> props1, props2;
+    for (const auto& t : triples1) props1.insert(t.predicate);
+    for (const auto& t : triples2) props2.insert(t.predicate);
+
+    if (props1.empty() && props2.empty()) return 0.0f;
+
+    int intersection = 0;
+    for (const auto& p : props1) {
+        if (props2.count(p)) intersection++;
+    }
+    int unionSize = static_cast<int>(props1.size() + props2.size()) - intersection;
+    return unionSize > 0 ? static_cast<float>(intersection) / unionSize : 0.0f;
 }
 
 } // namespace ontology
