@@ -2,7 +2,6 @@
 #include <string>
 #include <memory>
 #include <filesystem>
-#include <fstream>
 #include <thread>
 #include <CLI/CLI.hpp>
 #include <spdlog/spdlog.h>

@@ -3,7 +3,6 @@
 
 #include <unistd.h>
 #include <termios.h>
-#include <iostream>
 
 namespace claude {
 

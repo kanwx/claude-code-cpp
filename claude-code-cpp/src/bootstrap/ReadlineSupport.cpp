@@ -121,10 +121,18 @@ void saveSession(AgentLoop* loop) {
 // ========== Readline-specific functions (guarded) ==========
 
 #if __has_include(<readline/readline.h>)
+#ifndef USE_READLINE
 #define USE_READLINE 1
+#endif
 #endif
 
 #ifdef USE_READLINE
+
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #include <sys/ioctl.h>
 #include <unistd.h>
