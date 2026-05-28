@@ -101,6 +101,9 @@ target_link_libraries(httplib INTERFACE OpenSSL::SSL OpenSSL::Crypto)
 # 核心源文件
 set(CORE_SOURCES
     src/core/AgentLoop.cpp
+    src/core/AgentLoopCompact.cpp
+    src/core/AgentLoopStreaming.cpp
+    src/core/AgentLoopTools.cpp
     src/core/BackgroundAgentHandle.cpp
     src/core/UnifiedTaskStore.cpp
     src/core/TokenTracker.cpp
