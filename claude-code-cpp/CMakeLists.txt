@@ -359,6 +359,7 @@ set(UTILS_SOURCES
     src/utils/OutputStyles.cpp
     src/utils/UserMessage.cpp
     src/utils/ConnectionPool.cpp
+    src/utils/I18n.cpp
 )
 
 # Swarm源文件
