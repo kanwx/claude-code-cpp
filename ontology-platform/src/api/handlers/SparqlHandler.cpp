@@ -1,4 +1,5 @@
 #include <ontology/ApiHandler.hpp>
+#include <ontology/Sparql.hpp>
 #include <spdlog/spdlog.h>
 
 namespace ontology {

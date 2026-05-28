@@ -1,4 +1,10 @@
 #include <ontology/ApiHandler.hpp>
+#include <ontology/RagStorage.hpp>
+#include <ontology/RagPipeline.hpp>
+#include <ontology/RagQuery.hpp>
+#include <ontology/QueryTransform.hpp>
+#include <ontology/Reranker.hpp>
+#include <ontology/GraphRagAgent.hpp>
 
 namespace ontology {
 

@@ -1,29 +1,41 @@
 #pragma once
-
-#include "Storage.hpp"
-#include "Inference.hpp"
-#include "Swrl.hpp"
-#include "Sparql.hpp"
-#include "TextEmbedding.hpp"
-#include "EmbeddingService.hpp"
-#include "RagStorage.hpp"
-#include "RagPipeline.hpp"
-#include "RagQuery.hpp"
-#include "HybridRetrieval.hpp"
-#include "QueryTransform.hpp"
-#include "Reranker.hpp"
-#include "SemanticChunker.hpp"
-#include "CommunityDetection.hpp"
-#include "GraphRagAgent.hpp"
-#include "LlmBackend.hpp"
-#include "DocumentPreprocessor.hpp"
-#include "NeuroSymbolicLearning.hpp"
-#include "Explainability.hpp"
-#include "Persistence.hpp"
-#include "ShaclValidation.hpp"
 #include <memory>
 
 namespace ontology {
+
+// Forward declarations
+class HybridStorage;
+class GraphDatabase;
+class VectorDatabase;
+class HybridReasoner;
+class SymbolicReasoner;
+class NeuralReasoner;
+class SwrlEngine;
+class SparqlEndpoint;
+class TextEmbedder;
+class EmbeddingService;
+class RagStorage;
+class RagPipeline;
+class RagQueryEngine;
+class HybridRetrievalEngine;
+class QueryTransformEngine;
+class RerankerEngine;
+class SemanticChunker;
+class CommunityDetector;
+class GraphRagAgent;
+class LlmBackend;
+class DocumentPreprocessor;
+class NeuroSymbolicLearner;
+class WalManager;
+class SnapshotManager;
+class ShaclValidator;
+class IncrementalReasoner;
+class ExplainabilityEngine;
+
+// Type aliases for storage — previously from storage/Forward.hpp via Storage.hpp
+using StoragePtr        = std::shared_ptr<HybridStorage>;
+using GraphDatabasePtr  = std::shared_ptr<GraphDatabase>;
+using VectorDatabasePtr = std::shared_ptr<VectorDatabase>;
 
 // Type aliases for reasoning — these were previously in Api.hpp.
 // Now defined here alongside ServiceContext so that Api.hpp does not
@@ -37,6 +49,9 @@ using SparqlEndpointPtr   = std::shared_ptr<SparqlEndpoint>;
 /// Dependency injection container holding all service instances.
 /// Replaces the 20+ setter injection methods on HttpServer with a single struct.
 struct ServiceContext {
+    // Destructor must be defined in .cpp where complete types are visible
+    ~ServiceContext();
+
     // --- Core storage ---
     StoragePtr storage;
     GraphDatabasePtr graphDB;

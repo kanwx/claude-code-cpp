@@ -1,5 +1,6 @@
 #include <ontology/Api.hpp>
 #include <ontology/Config.hpp>
+#include <ontology/Persistence.hpp>
 #include "bootstrap/Bootstrap.hpp"
 #include <iostream>
 #include <iomanip>

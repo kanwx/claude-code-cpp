@@ -1,4 +1,6 @@
 #include <ontology/ApiHandler.hpp>
+#include <ontology/Storage.hpp>
+#include <ontology/storage/TripleStore.hpp>
 #include <spdlog/spdlog.h>
 
 namespace ontology {

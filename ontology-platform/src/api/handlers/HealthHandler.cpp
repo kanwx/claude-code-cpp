@@ -1,4 +1,5 @@
 #include <ontology/ApiHandler.hpp>
+#include <ontology/Storage.hpp>
 
 namespace ontology {
 

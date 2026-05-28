@@ -1,4 +1,8 @@
 #include <ontology/ApiHandler.hpp>
+#include <ontology/Inference.hpp>
+#include <ontology/Explainability.hpp>
+#include <ontology/NeuroSymbolicLearning.hpp>
+#include <ontology/Storage.hpp>
 #include <spdlog/spdlog.h>
 
 namespace ontology {

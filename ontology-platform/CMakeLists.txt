@@ -126,6 +126,7 @@ set(API_SOURCES
 
 set(BOOTSTRAP_SOURCES
     src/bootstrap/Bootstrap.cpp
+    src/bootstrap/ServiceContext.cpp
 )
 
 # 创建核心库
