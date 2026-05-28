@@ -151,3 +151,23 @@ catch_discover_tests(test_context_injector)
 add_executable(test_tool_registry test_tool_registry.cpp)
 target_link_libraries(test_tool_registry PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_tool_registry)
+
+add_executable(test_anthropic_client_sync test_anthropic_client_sync.cpp)
+target_link_libraries(test_anthropic_client_sync PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_anthropic_client_sync)
+
+add_executable(test_compact_service_unit test_compact_service_unit.cpp)
+target_link_libraries(test_compact_service_unit PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_compact_service_unit)
+
+add_executable(test_hook_manager test_hook_manager.cpp)
+target_link_libraries(test_hook_manager PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_hook_manager)
+
+add_executable(test_mcp_client test_mcp_client.cpp)
+target_link_libraries(test_mcp_client PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_mcp_client)
+
+add_executable(test_rule_engine test_rule_engine.cpp)
+target_link_libraries(test_rule_engine PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_rule_engine)
