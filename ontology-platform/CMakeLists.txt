@@ -9,8 +9,21 @@ find_package(nlohmann_json REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(CLI11 REQUIRED)
 
-# 使用 OpenSSL 3.0
-set(OPENSSL_ROOT_DIR "/usr/local/Cellar/openssl@3/3.6.2")
+# OpenSSL — auto-detect Homebrew on macOS, allow manual override via -DOPENSSL_ROOT_DIR
+if(NOT DEFINED OPENSSL_ROOT_DIR AND APPLE)
+    find_program(BREW_EXECUTABLE brew)
+    if(BREW_EXECUTABLE)
+        execute_process(
+            COMMAND ${BREW_EXECUTABLE} --prefix openssl@3
+            OUTPUT_VARIABLE BREW_OPENSSL_PREFIX
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(BREW_OPENSSL_PREFIX)
+            set(OPENSSL_ROOT_DIR "${BREW_OPENSSL_PREFIX}")
+        endif()
+    endif()
+endif()
 find_package(OpenSSL REQUIRED)
 
 # httplib - 使用 OpenSSL 3.0
