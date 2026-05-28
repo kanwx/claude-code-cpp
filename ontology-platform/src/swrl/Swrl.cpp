@@ -8,6 +8,7 @@
 #include <cmath>
 #include <unordered_set>
 #include <ontology/Temporal.hpp>
+#include <spdlog/spdlog.h>
 
 namespace ontology {
 
@@ -1066,7 +1067,11 @@ bool SwrlBuiltIns::notEqual(const String& a, const String& b) {
 bool SwrlBuiltIns::lessThan(const String& a, const String& b) {
     try {
         return std::stod(a) < std::stod(b);
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return a < b;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return a < b;
     }
 }
@@ -1117,7 +1122,11 @@ bool SwrlBuiltIns::matches(const String& s, const String& pattern) {
     try {
         std::regex re(pattern);
         return std::regex_match(s, re);
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1131,7 +1140,11 @@ bool SwrlBuiltIns::substring(const String& s, const String& startIndex, const St
         if (start + length > static_cast<int>(s.size())) length = static_cast<int>(s.size()) - start;
         result = s.substr(start, length);
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1152,7 +1165,11 @@ bool SwrlBuiltIns::add(const String& a, const String& b, String& result) {
     try {
         result = std::to_string(std::stod(a) + std::stod(b));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1161,7 +1178,11 @@ bool SwrlBuiltIns::subtract(const String& a, const String& b, String& result) {
     try {
         result = std::to_string(std::stod(a) - std::stod(b));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1170,7 +1191,11 @@ bool SwrlBuiltIns::multiply(const String& a, const String& b, String& result) {
     try {
         result = std::to_string(std::stod(a) * std::stod(b));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1181,7 +1206,11 @@ bool SwrlBuiltIns::divide(const String& a, const String& b, String& result) {
         if (bVal == 0) return false;
         result = std::to_string(std::stod(a) / bVal);
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1190,7 +1219,11 @@ bool SwrlBuiltIns::abs(const String& a, String& result) {
     try {
         result = std::to_string(std::abs(std::stod(a)));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1201,7 +1234,11 @@ bool SwrlBuiltIns::sqrt(const String& a, String& result) {
         if (val < 0) return false;
         result = std::to_string(std::sqrt(val));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1212,7 +1249,11 @@ bool SwrlBuiltIns::mod(const String& a, const String& b, String& result) {
         if (bVal == 0) return false;
         result = std::to_string(std::fmod(std::stod(a), bVal));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1221,7 +1262,11 @@ bool SwrlBuiltIns::ceiling(const String& a, String& result) {
     try {
         result = std::to_string(std::ceil(std::stod(a)));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1230,7 +1275,11 @@ bool SwrlBuiltIns::floor(const String& a, String& result) {
     try {
         result = std::to_string(std::floor(std::stod(a)));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
@@ -1239,7 +1288,11 @@ bool SwrlBuiltIns::round(const String& a, String& result) {
     try {
         result = std::to_string(std::round(std::stod(a)));
         return true;
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("SWRL JSON error: {}", e.what());
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("SWRL rule error: {}", e.what());
         return false;
     }
 }
