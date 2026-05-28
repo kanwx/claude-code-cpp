@@ -1,5 +1,6 @@
 #include <ontology/Storage.hpp>
 #include <ontology/Persistence.hpp>
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cmath>
 
@@ -501,7 +502,7 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
         // Snapshot IDs are "snap_<epochMs>"
         if (snapId.substr(0, 5) == "snap_") {
             int64_t snapTs = 0;
-            try { snapTs = std::stoll(snapId.substr(5)); } catch (...) { continue; }
+            try { snapTs = std::stoll(snapId.substr(5)); } catch (const std::exception&) { continue; }
             if (snapTs <= timestamp && snapTs > bestSnapshotTs) {
                 bestSnapshotTs = snapTs;
                 bestSnapshotId = snapId;

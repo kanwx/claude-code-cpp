@@ -662,7 +662,7 @@ public:
         try {
             Json j = Json::parse(file);
             config = fromJson(j);
-        } catch (...) {
+        } catch (const std::exception&) {
             // 解析失败，返回默认配置
         }
 

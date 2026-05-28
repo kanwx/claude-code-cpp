@@ -1,5 +1,6 @@
 #include <ontology/ApiHandler.hpp>
 #include <ontology/AgentCollaboration.hpp>
+#include <spdlog/spdlog.h>
 
 namespace ontology {
 
@@ -33,7 +34,7 @@ public:
             int limit = 100;
             String filter;
             if (req.has_param("limit")) {
-                try { limit = std::stoi(req.get_param_value("limit")); } catch (...) {}
+                try { limit = std::stoi(req.get_param_value("limit")); } catch (const std::exception&) {}
             }
             if (req.has_param("agentId")) {
                 filter = req.get_param_value("agentId");

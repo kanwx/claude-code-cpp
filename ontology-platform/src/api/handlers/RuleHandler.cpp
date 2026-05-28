@@ -1,4 +1,5 @@
 #include <ontology/ApiHandler.hpp>
+#include <spdlog/spdlog.h>
 
 namespace ontology {
 
@@ -34,8 +35,13 @@ public:
                 ctx_->swrlEngine->addRule(rule);
                 res.status = 201;
                 jsonResponse(res, rule.toJson());
-            } catch (...) {
-                errorResponse(res, 400, "Invalid JSON or rule format");
+            } catch (const nlohmann::json::parse_error& e) {
+                errorResponse(res, 400, std::string("Invalid JSON: ") + e.what());
+            } catch (const nlohmann::json::type_error& e) {
+                errorResponse(res, 400, std::string("Type mismatch: ") + e.what());
+            } catch (const std::exception& e) {
+                spdlog::error("Handler error: {}", e.what());
+                errorResponse(res, 500, "Internal error");
             }
         });
 
@@ -73,8 +79,13 @@ public:
                 }
                 j["count"] = inferred.size();
                 jsonResponse(res, j);
-            } catch (...) {
-                errorResponse(res, 400, "Invalid JSON");
+            } catch (const nlohmann::json::parse_error& e) {
+                errorResponse(res, 400, std::string("Invalid JSON: ") + e.what());
+            } catch (const nlohmann::json::type_error& e) {
+                errorResponse(res, 400, std::string("Type mismatch: ") + e.what());
+            } catch (const std::exception& e) {
+                spdlog::error("Handler error: {}", e.what());
+                errorResponse(res, 500, "Internal error");
             }
         });
     }

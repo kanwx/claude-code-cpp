@@ -1,4 +1,5 @@
 #include <ontology/OntologyIO.hpp>
+#include <spdlog/spdlog.h>
 #include <sstream>
 #include <fstream>
 #include <regex>
@@ -1522,10 +1523,10 @@ String JsonLdWriter::writeRdf(const RdfGraph& graph) {
                         String dtIri = resolvePrefixInIri(triple->datatype, graph.prefixes);
                         if (dtIri == XSD_NS + "integer") {
                             try { value = std::stoi(triple->object); }
-                            catch (...) { value = triple->object; }
+                            catch (const std::exception&) { value = triple->object; }
                         } else if (dtIri == XSD_NS + "float" || dtIri == XSD_NS + "double" || dtIri == XSD_NS + "decimal") {
                             try { value = std::stod(triple->object); }
-                            catch (...) { value = triple->object; }
+                            catch (const std::exception&) { value = triple->object; }
                         } else if (dtIri == XSD_NS + "boolean") {
                             value = (triple->object == "true" || triple->object == "1");
                         } else {

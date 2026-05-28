@@ -1,5 +1,6 @@
 #include <ontology/AutoModel.hpp>
 #include <ontology/Storage.hpp>
+#include <spdlog/spdlog.h>
 #include <sstream>
 #include <random>
 #include <cmath>
@@ -60,7 +61,11 @@ String LLMInterface::chat(const String& prompt, const String& systemPrompt) {
     try {
         Json result = Json::parse(response);
         return result["choices"][0]["message"]["content"].get<String>();
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("AutoModel JSON error: {}", e.what());
+        return "";
+    } catch (const std::exception& e) {
+        spdlog::error("AutoModel error: {}", e.what());
         return "";
     }
 }
@@ -76,7 +81,11 @@ Json LLMInterface::chatJson(const String& prompt, const String& systemPrompt) {
         String jsonStr = response.substr(start, end - start + 1);
         try {
             return Json::parse(jsonStr);
-        } catch (...) {}
+        } catch (const nlohmann::json::exception& e) {
+            spdlog::error("AutoModel JSON error: {}", e.what());
+        } catch (const std::exception& e) {
+            spdlog::error("AutoModel error: {}", e.what());
+        }
     }
 
     return Json::object();
@@ -124,7 +133,11 @@ String LLMInterface::complete(const String& prompt) {
     try {
         Json result = Json::parse(response);
         return result["choices"][0]["text"].get<String>();
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("AutoModel JSON error: {}", e.what());
+        return "";
+    } catch (const std::exception& e) {
+        spdlog::error("AutoModel error: {}", e.what());
         return "";
     }
 }
@@ -276,7 +289,11 @@ ExtractionResult EntityExtractor::parseResult(const String& llmResponse, const S
         if (start != String::npos && end != String::npos) {
             response = Json::parse(llmResponse.substr(start, end - start + 1));
         }
-    } catch (...) {
+    } catch (const nlohmann::json::exception& e) {
+        spdlog::error("AutoModel JSON error: {}", e.what());
+        return result;
+    } catch (const std::exception& e) {
+        spdlog::error("AutoModel error: {}", e.what());
         return result;
     }
 

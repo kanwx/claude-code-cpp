@@ -1,4 +1,5 @@
 #include <ontology/sparql/SparqlParser.hpp>
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <sstream>
 
@@ -34,10 +35,8 @@ std::optional<Query> SparqlParser::parse(const String& source) {
         }
         return std::nullopt;
     } catch (const std::exception& e) {
+        spdlog::error("SPARQL parser error: {}", e.what());
         lastError_ = e.what();
-        return std::nullopt;
-    } catch (...) {
-        lastError_ = "Unknown parse error";
         return std::nullopt;
     }
 }

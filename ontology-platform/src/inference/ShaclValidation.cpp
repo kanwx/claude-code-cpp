@@ -1,5 +1,6 @@
 #include <ontology/ShaclValidation.hpp>
 #include <ontology/Temporal.hpp>
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <sstream>
 #include <regex>
@@ -368,11 +369,11 @@ std::vector<ShaclValidationResult> ShaclValidator::validateValueType(
                 matches = true; // all values are strings in our model
             } else if (property.datatype == "http://www.w3.org/2001/XMLSchema#integer" ||
                        property.datatype == "http://www.w3.org/2001/XMLSchema#int") {
-                try { std::stoi(val); matches = true; } catch (...) {}
+                try { std::stoi(val); matches = true; } catch (const std::exception&) {}
             } else if (property.datatype == "http://www.w3.org/2001/XMLSchema#decimal" ||
                        property.datatype == "http://www.w3.org/2001/XMLSchema#double" ||
                        property.datatype == "http://www.w3.org/2001/XMLSchema#float") {
-                try { std::stod(val); matches = true; } catch (...) {}
+                try { std::stod(val); matches = true; } catch (const std::exception&) {}
             } else if (property.datatype == "http://www.w3.org/2001/XMLSchema#boolean") {
                 matches = (val == "true" || val == "false" || val == "1" || val == "0");
             } else {
@@ -475,7 +476,7 @@ std::vector<ShaclValidationResult> ShaclValidator::validateRange(
                     r.severity = property.severity;
                     results.push_back(r);
                 }
-            } catch (...) {
+            } catch (const std::exception&) {
                 // Not a numeric value, skip
             }
         }
