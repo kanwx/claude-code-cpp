@@ -63,6 +63,12 @@ public:
     bool removeRelation(const String& id);
     std::optional<Relation> getRelation(const String& id) const;
 
+    /// Get direct sub-classes using the index (O(1) lookup)
+    std::vector<String> getDirectSubClasses(const String& classId) const;
+
+    /// Get all sub-classes transitively using the index (O(depth) DFS)
+    std::vector<String> getAllSubClasses(const String& classId) const;
+
     /// 统计
     size_t classCount() const;
     size_t relationCount() const;
@@ -149,6 +155,8 @@ private:
     std::unordered_map<String, Individual> individuals_;
     std::unordered_map<String, Class> classes_;
     std::unordered_map<String, Relation> relations_;
+    /// SubClassOf index: parent class -> direct child classes
+    std::unordered_map<String, std::vector<String>> subClassOfIndex_;
     mutable std::shared_mutex mutex_;
 
     // Private unlocked implementations (called under lock by public methods or other _impl)

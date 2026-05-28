@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <unordered_set>
 
 namespace ontology {
@@ -310,6 +311,7 @@ void HybridStorage::clear() {
     individuals_.clear();
     classes_.clear();
     relations_.clear();
+    subClassOfIndex_.clear();
 
     if (graphDB_) {
         // Delete all nodes and relationships in Neo4j
@@ -620,15 +622,29 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
 // ============================================================================
 
 bool HybridStorage::addTripleImpl_(const Triple& triple) {
-    return tripleStore_.add(triple);
+    bool result = tripleStore_.add(triple);
+    if (result && triple.predicate == "subClassOf") {
+        subClassOfIndex_[triple.object].push_back(triple.subject);
+    }
+    return result;
 }
 
 bool HybridStorage::removeTripleImpl_(const Triple& triple) {
-    return tripleStore_.remove(triple);
+    bool result = tripleStore_.remove(triple);
+    if (result && triple.predicate == "subClassOf") {
+        auto& children = subClassOfIndex_[triple.object];
+        children.erase(std::remove(children.begin(), children.end(), triple.subject), children.end());
+        if (children.empty()) subClassOfIndex_.erase(triple.object);
+    }
+    return result;
 }
 
 bool HybridStorage::storeTripleImpl_(const Triple& triple) {
-    return tripleStore_.add(triple);
+    bool result = tripleStore_.add(triple);
+    if (result && triple.predicate == "subClassOf") {
+        subClassOfIndex_[triple.object].push_back(triple.subject);
+    }
+    return result;
 }
 
 bool HybridStorage::addClassImpl_(const Class& cls) {
@@ -766,6 +782,37 @@ std::optional<Relation> HybridStorage::getRelationImpl_(const String& id) const 
         return it->second;
     }
     return std::nullopt;
+}
+
+// ============================================================================
+// SubClassOf index accessors
+// ============================================================================
+
+std::vector<String> HybridStorage::getDirectSubClasses(const String& classId) const {
+    std::shared_lock lock(mutex_);
+    auto it = subClassOfIndex_.find(classId);
+    if (it != subClassOfIndex_.end()) return it->second;
+    return {};
+}
+
+std::vector<String> HybridStorage::getAllSubClasses(const String& classId) const {
+    std::shared_lock lock(mutex_);
+    std::vector<String> result;
+    std::unordered_set<String> visited;
+
+    std::function<void(const String&)> collect = [&](const String& cid) {
+        auto it = subClassOfIndex_.find(cid);
+        if (it != subClassOfIndex_.end()) {
+            for (const auto& sub : it->second) {
+                if (visited.insert(sub).second) {
+                    result.push_back(sub);
+                    collect(sub);
+                }
+            }
+        }
+    };
+    collect(classId);
+    return result;
 }
 
 } // namespace ontology

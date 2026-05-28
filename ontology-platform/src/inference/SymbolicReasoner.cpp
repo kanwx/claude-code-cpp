@@ -65,31 +65,7 @@ std::vector<String> SymbolicReasoner::getSuperClasses(const String& classId) {
 }
 
 std::vector<String> SymbolicReasoner::getSubClasses(const String& classId) {
-    std::vector<String> subs;
-    // 简化实现：通过三元组查询子类
-    auto triples = storage_->getAllTriples();
-    std::unordered_map<String, std::vector<String>> classHierarchy;
-
-    for (const auto& t : triples) {
-        if (t.predicate == "subClassOf") {
-            classHierarchy[t.object].push_back(t.subject);
-        }
-    }
-
-    std::function<void(const String&)> collect = [&](const String& cid) {
-        auto it = classHierarchy.find(cid);
-        if (it != classHierarchy.end()) {
-            for (const auto& sub : it->second) {
-                if (std::find(subs.begin(), subs.end(), sub) == subs.end()) {
-                    subs.push_back(sub);
-                    collect(sub);
-                }
-            }
-        }
-    };
-
-    collect(classId);
-    return subs;
+    return storage_->getAllSubClasses(classId);
 }
 
 bool SymbolicReasoner::isInstanceOf(const String& individualId, const String& classId) {
