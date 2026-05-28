@@ -25,6 +25,8 @@
 
 namespace claude {
 
+namespace detail { class MainComponent; } // forward-declare for friend access
+
 class FtxuiRepl {
 public:
     using OnSubmit = std::function<void(const String&)>;
@@ -85,6 +87,8 @@ public:
     std::vector<DisplayMessage>& messages() { return messages_; }
 
 private:
+    friend class detail::MainComponent;  // extracted render component needs private access
+
     ftxui::Component BuildMainComponent();
     static String formatElapsed(int seconds);
     static String truncate(const String& s, size_t maxLen);

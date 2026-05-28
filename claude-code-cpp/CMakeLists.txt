@@ -453,6 +453,9 @@ set(UI_SOURCES
     src/ui/UIComponents.cpp
     src/ui/FtxuiApp.cpp
     src/ui/FtxuiRepl.cpp
+    src/ui/FtxuiStreaming.cpp
+    src/ui/FtxuiPermission.cpp
+    src/ui/FtxuiRender.cpp
     src/ui/FtxuiMarkdown.cpp
     src/ui/UiMessageTypes.cpp
     src/ui/MessagePipeline.cpp
