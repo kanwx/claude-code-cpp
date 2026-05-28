@@ -106,3 +106,8 @@ add_test(NAME temporal COMMAND test_temporal)
 add_executable(test_distributed test_distributed.cpp)
 target_link_libraries(test_distributed PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME distributed COMMAND test_distributed)
+
+# Unit test: Thread Safety
+add_executable(test_thread_safety test_thread_safety.cpp)
+target_link_libraries(test_thread_safety PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME thread_safety COMMAND test_thread_safety)
