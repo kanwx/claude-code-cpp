@@ -832,6 +832,24 @@ private:
     std::unordered_map<String, Individual> individuals_;
     std::unordered_map<String, Class> classes_;
     std::unordered_map<String, Relation> relations_;
+    mutable std::shared_mutex mutex_;
+
+    // Private unlocked implementations (called under lock by public methods or other _impl)
+    bool addTripleImpl_(const Triple& triple);
+    bool removeTripleImpl_(const Triple& triple);
+    bool addClassImpl_(const Class& cls);
+    bool updateClassImpl_(const Class& cls);
+    bool removeClassImpl_(const String& id);
+    bool addRelationImpl_(const Relation& rel);
+    bool updateRelationImpl_(const Relation& rel);
+    bool removeRelationImpl_(const String& id);
+    bool addIndividualImpl_(const Individual& ind);
+    bool updateIndividualImpl_(const Individual& ind);
+    bool removeIndividualImpl_(const String& id);
+    bool storeTripleImpl_(const Triple& triple);
+    std::optional<Individual> getIndividualImpl_(const String& id) const;
+    std::optional<Class> getClassImpl_(const String& id) const;
+    std::optional<Relation> getRelationImpl_(const String& id) const;
 };
 
 } // namespace ontology

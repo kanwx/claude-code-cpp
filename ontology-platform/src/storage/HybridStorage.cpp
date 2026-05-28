@@ -14,6 +14,7 @@ HybridStorage::HybridStorage(GraphDatabasePtr graphDB, VectorDatabasePtr vectorD
 }
 
 bool HybridStorage::initialize(const String& collectionName, int embeddingDimension) {
+    std::unique_lock lock(mutex_);
     // 初始化向量集合
     if (vectorDB_) {
         if (!vectorDB_->createCollection(collectionName, embeddingDimension)) {
@@ -28,31 +29,33 @@ bool HybridStorage::initialize(const String& collectionName, int embeddingDimens
 // ============================================================================
 
 bool HybridStorage::storeOntology(const Ontology& ontology) {
+    std::unique_lock lock(mutex_);
     // 存储类
     for (const auto& [id, cls] : ontology.classes) {
-        if (!addClass(cls)) return false;
+        if (!addClassImpl_(cls)) return false;
     }
 
     // 存储关系
     for (const auto& [id, rel] : ontology.relations) {
-        if (!addRelation(rel)) return false;
+        if (!addRelationImpl_(rel)) return false;
     }
 
     // 存储个体
     for (const auto& [id, ind] : ontology.individuals) {
-        if (!addIndividual(ind)) return false;
+        if (!addIndividualImpl_(ind)) return false;
     }
 
     // 存储三元组
     for (const auto& triple : ontology.triples) {
-        if (!storeTriple(triple)) return false;
+        if (!storeTripleImpl_(triple)) return false;
     }
 
     return true;
 }
 
 bool HybridStorage::storeIndividual(const Individual& ind, const std::vector<float>& embedding) {
-    if (!addIndividual(ind)) return false;
+    std::unique_lock lock(mutex_);
+    if (!addIndividualImpl_(ind)) return false;
 
     // 存储向量嵌入
     if (vectorDB_ && !embedding.empty()) {
@@ -70,46 +73,57 @@ bool HybridStorage::storeIndividual(const Individual& ind, const std::vector<flo
 // ============================================================================
 
 bool HybridStorage::storeTriple(const Triple& triple) {
-    return tripleStore_.add(triple);
+    std::unique_lock lock(mutex_);
+    return storeTripleImpl_(triple);
 }
 
 bool HybridStorage::addTriple(const Triple& triple) {
-    return tripleStore_.add(triple);
+    std::unique_lock lock(mutex_);
+    return addTripleImpl_(triple);
 }
 
 bool HybridStorage::removeTriple(const Triple& triple) {
-    return tripleStore_.remove(triple);
+    std::unique_lock lock(mutex_);
+    return removeTripleImpl_(triple);
 }
 
 std::optional<Triple> HybridStorage::findTriple(const String& subject, const String& predicate, const String& object) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.find(subject, predicate, object);
 }
 
 std::vector<Triple> HybridStorage::findBySubject(const String& subject) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.findBySubject(subject);
 }
 
 std::vector<Triple> HybridStorage::findByPredicate(const String& predicate) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.findByPredicate(predicate);
 }
 
 std::vector<Triple> HybridStorage::findByObject(const String& object) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.findByObject(object);
 }
 
 std::vector<Triple> HybridStorage::findBySP(const String& subject, const String& predicate) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.findBySP(subject, predicate);
 }
 
 std::vector<Triple> HybridStorage::findByPO(const String& predicate, const String& object) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.findByPO(predicate, object);
 }
 
 std::vector<Triple> HybridStorage::getAllTriples() const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.all();
 }
 
 std::vector<Triple> HybridStorage::queryTriples(const TripleStore::TriplePattern& pattern) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.query(pattern);
 }
 
@@ -118,14 +132,12 @@ std::vector<Triple> HybridStorage::queryTriples(const TripleStore::TriplePattern
 // ============================================================================
 
 std::optional<Individual> HybridStorage::getIndividual(const String& id) const {
-    auto it = individuals_.find(id);
-    if (it != individuals_.end()) {
-        return it->second;
-    }
-    return std::nullopt;
+    std::shared_lock lock(mutex_);
+    return getIndividualImpl_(id);
 }
 
 std::vector<Individual> HybridStorage::getIndividualsByClass(const String& classId) const {
+    std::shared_lock lock(mutex_);
     std::vector<Individual> result;
     for (const auto& [id, ind] : individuals_) {
         if (ind.classId == classId) {
@@ -136,61 +148,18 @@ std::vector<Individual> HybridStorage::getIndividualsByClass(const String& class
 }
 
 bool HybridStorage::addIndividual(const Individual& ind) {
-    individuals_[ind.id] = ind;
-
-    // 同时在图数据库中创建节点
-    if (graphDB_) {
-        Json props;
-        props["name"] = ind.name;
-        props["classId"] = ind.classId;
-        props["properties"] = ind.properties;
-        props["importance"] = ind.importance;
-        props["metadata"] = ind.metadata;
-        graphDB_->createNode(ind.id, "Individual", props);
-    }
-
-    return true;
+    std::unique_lock lock(mutex_);
+    return addIndividualImpl_(ind);
 }
 
 bool HybridStorage::updateIndividual(const Individual& ind) {
-    auto it = individuals_.find(ind.id);
-    if (it == individuals_.end()) {
-        return false;
-    }
-    it->second = ind;
-
-    // 同时更新图数据库
-    if (graphDB_) {
-        Json props;
-        props["name"] = ind.name;
-        props["classId"] = ind.classId;
-        props["properties"] = ind.properties;
-        props["importance"] = ind.importance;
-        props["metadata"] = ind.metadata;
-        graphDB_->updateNode(ind.id, props);
-    }
-
-    return true;
+    std::unique_lock lock(mutex_);
+    return updateIndividualImpl_(ind);
 }
 
 bool HybridStorage::removeIndividual(const String& id) {
-    auto it = individuals_.find(id);
-    if (it == individuals_.end()) {
-        return false;
-    }
-    individuals_.erase(it);
-
-    // 同时从图数据库删除
-    if (graphDB_) {
-        graphDB_->deleteNode(id);
-    }
-
-    // 从向量数据库删除
-    if (vectorDB_) {
-        vectorDB_->remove("individuals", id);
-    }
-
-    return true;
+    std::unique_lock lock(mutex_);
+    return removeIndividualImpl_(id);
 }
 
 // ============================================================================
@@ -198,52 +167,23 @@ bool HybridStorage::removeIndividual(const String& id) {
 // ============================================================================
 
 bool HybridStorage::addClass(const Class& cls) {
-    classes_[cls.id] = cls;
-
-    // 同时在图数据库中创建节点
-    if (graphDB_) {
-        Json props;
-        props["name"] = cls.name;
-        props["description"] = cls.description;
-        props["superClasses"] = cls.superClasses;
-        props["metadata"] = cls.metadata;
-        graphDB_->createNode(cls.id, "Class", props);
-    }
-
-    return true;
+    std::unique_lock lock(mutex_);
+    return addClassImpl_(cls);
 }
 
 bool HybridStorage::addRelation(const Relation& rel) {
-    relations_[rel.id] = rel;
-
-    // 同时在图数据库中创建节点
-    if (graphDB_) {
-        Json props;
-        props["name"] = rel.name;
-        props["description"] = rel.description;
-        props["domain"] = rel.domain;
-        props["range"] = rel.range;
-        props["metadata"] = rel.metadata;
-        graphDB_->createNode(rel.id, "Relation", props);
-    }
-
-    return true;
+    std::unique_lock lock(mutex_);
+    return addRelationImpl_(rel);
 }
 
 std::optional<Class> HybridStorage::getClass(const String& id) const {
-    auto it = classes_.find(id);
-    if (it != classes_.end()) {
-        return it->second;
-    }
-    return std::nullopt;
+    std::shared_lock lock(mutex_);
+    return getClassImpl_(id);
 }
 
 std::optional<Relation> HybridStorage::getRelation(const String& id) const {
-    auto it = relations_.find(id);
-    if (it != relations_.end()) {
-        return it->second;
-    }
-    return std::nullopt;
+    std::shared_lock lock(mutex_);
+    return getRelationImpl_(id);
 }
 
 // ============================================================================
@@ -258,8 +198,17 @@ HybridStorage::HybridResult HybridStorage::hybridQuery(
 ) const {
     HybridResult result;
 
-    // 符号匹配
-    for (const auto& [id, ind] : individuals_) {
+    // Copy local data under read lock
+    std::unordered_map<String, Individual> individualsCopy;
+    VectorDatabasePtr vectorDBCopy;
+    {
+        std::shared_lock lock(mutex_);
+        individualsCopy = individuals_;
+        vectorDBCopy = vectorDB_;
+    }
+
+    // 符号匹配 (no lock held)
+    for (const auto& [id, ind] : individualsCopy) {
         // 简单匹配: 检查类ID是否在查询的类列表中
         if (query.selectClasses.empty() ||
             std::find(query.selectClasses.begin(), query.selectClasses.end(), ind.classId) != query.selectClasses.end()) {
@@ -267,9 +216,9 @@ HybridStorage::HybridResult HybridStorage::hybridQuery(
         }
     }
 
-    // 向量搜索
-    if (vectorDB_ && !queryEmbedding.empty()) {
-        result.vectorMatches = vectorDB_->search("individuals", queryEmbedding, 10);
+    // 向量搜索 (no lock held)
+    if (vectorDBCopy && !queryEmbedding.empty()) {
+        result.vectorMatches = vectorDBCopy->search("individuals", queryEmbedding, 10);
     }
 
     // 混合排序
@@ -285,11 +234,11 @@ HybridStorage::HybridResult HybridStorage::hybridQuery(
         scores[match.id] += vectorWeight * match.score;
     }
 
-    // 合并结果
+    // 合并结果 (look up from local copy, not from getIndividual)
     for (const auto& [id, score] : scores) {
-        auto ind = getIndividual(id);
-        if (ind) {
-            result.combined.push_back({*ind, score});
+        auto it = individualsCopy.find(id);
+        if (it != individualsCopy.end()) {
+            result.combined.push_back({it->second, score});
         }
     }
 
@@ -305,20 +254,30 @@ std::vector<Individual> HybridStorage::semanticSearch(
     const String& classFilter,
     int topK
 ) const {
-    if (!vectorDB_) return {};
+    // Copy local data under read lock
+    std::unordered_map<String, Individual> individualsCopy;
+    VectorDatabasePtr vectorDBCopy;
+    {
+        std::shared_lock lock(mutex_);
+        individualsCopy = individuals_;
+        vectorDBCopy = vectorDB_;
+    }
+
+    // Now do vector search without holding the lock
+    if (!vectorDBCopy) return {};
 
     Json filter;
     if (!classFilter.empty()) {
         filter["classId"] = classFilter;
     }
 
-    auto matches = vectorDB_->search("individuals", embedding, topK, filter);
+    auto matches = vectorDBCopy->search("individuals", embedding, topK, filter);
 
     std::vector<Individual> results;
     for (const auto& match : matches) {
-        auto ind = getIndividual(match.id);
-        if (ind) {
-            results.push_back(*ind);
+        auto it = individualsCopy.find(match.id);
+        if (it != individualsCopy.end()) {
+            results.push_back(it->second);
         }
     }
 
@@ -329,8 +288,14 @@ std::vector<VectorDatabase::SearchResult> HybridStorage::vectorSearch(
     const std::vector<float>& embedding,
     int topK
 ) const {
-    if (!vectorDB_) return {};
-    return vectorDB_->search("individuals", embedding, topK);
+    // Copy pointer under read lock, then release before network call
+    VectorDatabasePtr vectorDBCopy;
+    {
+        std::shared_lock lock(mutex_);
+        vectorDBCopy = vectorDB_;
+    }
+    if (!vectorDBCopy) return {};
+    return vectorDBCopy->search("individuals", embedding, topK);
 }
 
 // ============================================================================
@@ -338,6 +303,7 @@ std::vector<VectorDatabase::SearchResult> HybridStorage::vectorSearch(
 // ============================================================================
 
 void HybridStorage::clear() {
+    std::unique_lock lock(mutex_);
     tripleStore_.clear();
     individuals_.clear();
     classes_.clear();
@@ -355,14 +321,17 @@ void HybridStorage::clear() {
 }
 
 size_t HybridStorage::tripleCount() const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.count();
 }
 
 size_t HybridStorage::individualCount() const {
+    std::shared_lock lock(mutex_);
     return individuals_.size();
 }
 
 std::vector<Individual> HybridStorage::getAllIndividuals() const {
+    std::shared_lock lock(mutex_);
     std::vector<Individual> result;
     for (const auto& [id, ind] : individuals_) {
         result.push_back(ind);
@@ -371,6 +340,7 @@ std::vector<Individual> HybridStorage::getAllIndividuals() const {
 }
 
 std::vector<Class> HybridStorage::getAllClasses() const {
+    std::shared_lock lock(mutex_);
     std::vector<Class> result;
     for (const auto& [id, cls] : classes_) {
         result.push_back(cls);
@@ -379,6 +349,7 @@ std::vector<Class> HybridStorage::getAllClasses() const {
 }
 
 std::vector<Relation> HybridStorage::getAllRelations() const {
+    std::shared_lock lock(mutex_);
     std::vector<Relation> result;
     for (const auto& [id, rel] : relations_) {
         result.push_back(rel);
@@ -387,37 +358,38 @@ std::vector<Relation> HybridStorage::getAllRelations() const {
 }
 
 bool HybridStorage::updateClass(const Class& cls) {
-    auto it = classes_.find(cls.id);
-    if (it == classes_.end()) return false;
-    it->second = cls;
-    return true;
+    std::unique_lock lock(mutex_);
+    return updateClassImpl_(cls);
 }
 
 bool HybridStorage::removeClass(const String& id) {
-    return classes_.erase(id) > 0;
+    std::unique_lock lock(mutex_);
+    return removeClassImpl_(id);
 }
 
 bool HybridStorage::updateRelation(const Relation& rel) {
-    auto it = relations_.find(rel.id);
-    if (it == relations_.end()) return false;
-    it->second = rel;
-    return true;
+    std::unique_lock lock(mutex_);
+    return updateRelationImpl_(rel);
 }
 
 bool HybridStorage::removeRelation(const String& id) {
-    return relations_.erase(id) > 0;
+    std::unique_lock lock(mutex_);
+    return removeRelationImpl_(id);
 }
 
 size_t HybridStorage::classCount() const {
+    std::shared_lock lock(mutex_);
     return classes_.size();
 }
 
 size_t HybridStorage::relationCount() const {
+    std::shared_lock lock(mutex_);
     return relations_.size();
 }
 
 std::vector<std::vector<String>> HybridStorage::findPath(
     const String& from, const String& to, const String& predicate, int maxDepth) const {
+    std::shared_lock lock(mutex_);
     return tripleStore_.findPath(from, to, predicate, maxDepth);
 }
 
@@ -426,9 +398,10 @@ std::vector<std::vector<String>> HybridStorage::findPath(
 // ============================================================================
 
 HybridStorage::BatchResult HybridStorage::batchAddTriples(const std::vector<Triple>& triples) {
+    std::unique_lock lock(mutex_);
     BatchResult result;
     for (const auto& t : triples) {
-        if (addTriple(t)) {
+        if (addTripleImpl_(t)) {
             result.succeeded++;
         } else {
             result.failed++;
@@ -439,9 +412,10 @@ HybridStorage::BatchResult HybridStorage::batchAddTriples(const std::vector<Trip
 }
 
 HybridStorage::BatchResult HybridStorage::batchAddClasses(const std::vector<Class>& classes) {
+    std::unique_lock lock(mutex_);
     BatchResult result;
     for (const auto& cls : classes) {
-        if (addClass(cls)) {
+        if (addClassImpl_(cls)) {
             result.succeeded++;
         } else {
             result.failed++;
@@ -452,9 +426,10 @@ HybridStorage::BatchResult HybridStorage::batchAddClasses(const std::vector<Clas
 }
 
 HybridStorage::BatchResult HybridStorage::batchAddIndividuals(const std::vector<Individual>& individuals) {
+    std::unique_lock lock(mutex_);
     BatchResult result;
     for (const auto& ind : individuals) {
-        if (addIndividual(ind)) {
+        if (addIndividualImpl_(ind)) {
             result.succeeded++;
         } else {
             result.failed++;
@@ -465,9 +440,10 @@ HybridStorage::BatchResult HybridStorage::batchAddIndividuals(const std::vector<
 }
 
 HybridStorage::BatchResult HybridStorage::batchRemoveTriples(const std::vector<Triple>& triples) {
+    std::unique_lock lock(mutex_);
     BatchResult result;
     for (const auto& t : triples) {
-        if (removeTriple(t)) {
+        if (removeTripleImpl_(t)) {
             result.succeeded++;
         } else {
             result.failed++;
@@ -478,6 +454,7 @@ HybridStorage::BatchResult HybridStorage::batchRemoveTriples(const std::vector<T
 }
 
 std::vector<std::pair<String, String>> HybridStorage::computeTransitiveClosure(const String& predicate, int maxDepth) {
+    std::unique_lock lock(mutex_);
     std::vector<std::pair<String, String>> closure;
     // Start with all direct (subject, object) pairs for this predicate
     auto direct = tripleStore_.findByPredicate(predicate);
@@ -513,6 +490,7 @@ std::vector<std::pair<String, String>> HybridStorage::computeTransitiveClosure(c
 }
 
 bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotManager* snapshotMgr) {
+    std::unique_lock lock(mutex_);
     if (!snapshotMgr) return false;
 
     // Find the latest snapshot before the target timestamp
@@ -552,7 +530,7 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
                 entry.type == WalEntryType::CommitTxn ||
                 entry.type == WalEntryType::RollbackTxn) return;
 
-            // Replay the operation
+            // Replay the operation (use Impl_ versions — already under lock)
             switch (entry.type) {
                 case WalEntryType::AddTriple: {
                     Triple t;
@@ -566,7 +544,7 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
                     t.provenance = entry.data.value("provenance", "");
                     t.validFrom = entry.data.value("validFrom", "");
                     t.validTo = entry.data.value("validTo", "");
-                    addTriple(t);
+                    addTripleImpl_(t);
                     break;
                 }
                 case WalEntryType::RemoveTriple: {
@@ -574,7 +552,7 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
                     t.subject = entry.data.value("subject", "");
                     t.predicate = entry.data.value("predicate", "");
                     t.object = entry.data.value("object", "");
-                    removeTriple(t);
+                    removeTripleImpl_(t);
                     break;
                 }
                 case WalEntryType::AddClass: {
@@ -587,11 +565,11 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
                     }
                     cls.validFrom = entry.data.value("validFrom", "");
                     cls.validTo = entry.data.value("validTo", "");
-                    addClass(cls);
+                    addClassImpl_(cls);
                     break;
                 }
                 case WalEntryType::RemoveClass: {
-                    removeClass(entry.data.value("id", ""));
+                    removeClassImpl_(entry.data.value("id", ""));
                     break;
                 }
                 case WalEntryType::AddRelation: {
@@ -602,11 +580,11 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
                     rel.range = entry.data.value("range", "");
                     rel.isTransitive = entry.data.value("isTransitive", false);
                     rel.isSymmetric = entry.data.value("isSymmetric", false);
-                    addRelation(rel);
+                    addRelationImpl_(rel);
                     break;
                 }
                 case WalEntryType::RemoveRelation: {
-                    removeRelation(entry.data.value("id", ""));
+                    removeRelationImpl_(entry.data.value("id", ""));
                     break;
                 }
                 case WalEntryType::AddIndividual: {
@@ -619,11 +597,11 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
                     ind.importance = entry.data.value("importance", 1.0f);
                     ind.validFrom = entry.data.value("validFrom", "");
                     ind.validTo = entry.data.value("validTo", "");
-                    addIndividual(ind);
+                    addIndividualImpl_(ind);
                     break;
                 }
                 case WalEntryType::RemoveIndividual: {
-                    removeIndividual(entry.data.value("id", ""));
+                    removeIndividualImpl_(entry.data.value("id", ""));
                     break;
                 }
                 default:
@@ -633,6 +611,159 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
     }
 
     return true;
+}
+
+// ============================================================================
+// Private unlocked implementations (called under lock by public methods)
+// ============================================================================
+
+bool HybridStorage::addTripleImpl_(const Triple& triple) {
+    return tripleStore_.add(triple);
+}
+
+bool HybridStorage::removeTripleImpl_(const Triple& triple) {
+    return tripleStore_.remove(triple);
+}
+
+bool HybridStorage::storeTripleImpl_(const Triple& triple) {
+    return tripleStore_.add(triple);
+}
+
+bool HybridStorage::addClassImpl_(const Class& cls) {
+    classes_[cls.id] = cls;
+
+    // 同时在图数据库中创建节点
+    if (graphDB_) {
+        Json props;
+        props["name"] = cls.name;
+        props["description"] = cls.description;
+        props["superClasses"] = cls.superClasses;
+        props["metadata"] = cls.metadata;
+        graphDB_->createNode(cls.id, "Class", props);
+    }
+
+    return true;
+}
+
+bool HybridStorage::updateClassImpl_(const Class& cls) {
+    auto it = classes_.find(cls.id);
+    if (it == classes_.end()) return false;
+    it->second = cls;
+    return true;
+}
+
+bool HybridStorage::removeClassImpl_(const String& id) {
+    return classes_.erase(id) > 0;
+}
+
+bool HybridStorage::addRelationImpl_(const Relation& rel) {
+    relations_[rel.id] = rel;
+
+    // 同时在图数据库中创建节点
+    if (graphDB_) {
+        Json props;
+        props["name"] = rel.name;
+        props["description"] = rel.description;
+        props["domain"] = rel.domain;
+        props["range"] = rel.range;
+        props["metadata"] = rel.metadata;
+        graphDB_->createNode(rel.id, "Relation", props);
+    }
+
+    return true;
+}
+
+bool HybridStorage::updateRelationImpl_(const Relation& rel) {
+    auto it = relations_.find(rel.id);
+    if (it == relations_.end()) return false;
+    it->second = rel;
+    return true;
+}
+
+bool HybridStorage::removeRelationImpl_(const String& id) {
+    return relations_.erase(id) > 0;
+}
+
+bool HybridStorage::addIndividualImpl_(const Individual& ind) {
+    individuals_[ind.id] = ind;
+
+    // 同时在图数据库中创建节点
+    if (graphDB_) {
+        Json props;
+        props["name"] = ind.name;
+        props["classId"] = ind.classId;
+        props["properties"] = ind.properties;
+        props["importance"] = ind.importance;
+        props["metadata"] = ind.metadata;
+        graphDB_->createNode(ind.id, "Individual", props);
+    }
+
+    return true;
+}
+
+bool HybridStorage::updateIndividualImpl_(const Individual& ind) {
+    auto it = individuals_.find(ind.id);
+    if (it == individuals_.end()) {
+        return false;
+    }
+    it->second = ind;
+
+    // 同时更新图数据库
+    if (graphDB_) {
+        Json props;
+        props["name"] = ind.name;
+        props["classId"] = ind.classId;
+        props["properties"] = ind.properties;
+        props["importance"] = ind.importance;
+        props["metadata"] = ind.metadata;
+        graphDB_->updateNode(ind.id, props);
+    }
+
+    return true;
+}
+
+bool HybridStorage::removeIndividualImpl_(const String& id) {
+    auto it = individuals_.find(id);
+    if (it == individuals_.end()) {
+        return false;
+    }
+    individuals_.erase(it);
+
+    // 同时从图数据库删除
+    if (graphDB_) {
+        graphDB_->deleteNode(id);
+    }
+
+    // 从向量数据库删除
+    if (vectorDB_) {
+        vectorDB_->remove("individuals", id);
+    }
+
+    return true;
+}
+
+std::optional<Individual> HybridStorage::getIndividualImpl_(const String& id) const {
+    auto it = individuals_.find(id);
+    if (it != individuals_.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+std::optional<Class> HybridStorage::getClassImpl_(const String& id) const {
+    auto it = classes_.find(id);
+    if (it != classes_.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+std::optional<Relation> HybridStorage::getRelationImpl_(const String& id) const {
+    auto it = relations_.find(id);
+    if (it != relations_.end()) {
+        return it->second;
+    }
+    return std::nullopt;
 }
 
 } // namespace ontology
