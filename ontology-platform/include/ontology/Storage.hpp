@@ -706,19 +706,19 @@ public:
     bool removeTriple(const Triple& triple);
 
     /// 三元组查询
-    std::optional<Triple> findTriple(const String& subject, const String& predicate, const String& object);
-    std::vector<Triple> findBySubject(const String& subject);
-    std::vector<Triple> findByPredicate(const String& predicate);
-    std::vector<Triple> findByObject(const String& object);
-    std::vector<Triple> findBySP(const String& subject, const String& predicate);
-    std::vector<Triple> findByPO(const String& predicate, const String& object);
-    std::vector<Triple> getAllTriples();
-    std::vector<Triple> queryTriples(const TripleStore::TriplePattern& pattern);
-    std::vector<std::vector<String>> findPath(const String& from, const String& to, const String& predicate = "", int maxDepth = 5);
+    std::optional<Triple> findTriple(const String& subject, const String& predicate, const String& object) const;
+    std::vector<Triple> findBySubject(const String& subject) const;
+    std::vector<Triple> findByPredicate(const String& predicate) const;
+    std::vector<Triple> findByObject(const String& object) const;
+    std::vector<Triple> findBySP(const String& subject, const String& predicate) const;
+    std::vector<Triple> findByPO(const String& predicate, const String& object) const;
+    std::vector<Triple> getAllTriples() const;
+    std::vector<Triple> queryTriples(const TripleStore::TriplePattern& pattern) const;
+    std::vector<std::vector<String>> findPath(const String& from, const String& to, const String& predicate = "", int maxDepth = 5) const;
 
     /// 个体操作
-    std::optional<Individual> getIndividual(const String& id);
-    std::vector<Individual> getIndividualsByClass(const String& classId);
+    std::optional<Individual> getIndividual(const String& id) const;
+    std::vector<Individual> getIndividualsByClass(const String& classId) const;
     bool addIndividual(const Individual& ind);
     bool updateIndividual(const Individual& ind);
     bool removeIndividual(const String& id);
@@ -727,12 +727,12 @@ public:
     bool addClass(const Class& cls);
     bool updateClass(const Class& cls);
     bool removeClass(const String& id);
-    std::optional<Class> getClass(const String& id);
+    std::optional<Class> getClass(const String& id) const;
 
     bool addRelation(const Relation& rel);
     bool updateRelation(const Relation& rel);
     bool removeRelation(const String& id);
-    std::optional<Relation> getRelation(const String& id);
+    std::optional<Relation> getRelation(const String& id) const;
 
     /// 统计
     size_t classCount() const;
@@ -750,29 +750,32 @@ public:
         const std::vector<float>& queryEmbedding,
         float symbolWeight = 0.5f,
         float vectorWeight = 0.5f
-    );
+    ) const;
 
     /// 语义搜索
     std::vector<Individual> semanticSearch(
         const std::vector<float>& embedding,
         const String& classFilter = "",
         int topK = 10
-    );
+    ) const;
 
     /// 向量搜索
     std::vector<VectorDatabase::SearchResult> vectorSearch(
         const std::vector<float>& embedding,
         int topK = 10
-    );
+    ) const;
 
     /// 获取图数据库
     GraphDatabase* graphDB() { return graphDB_.get(); }
+    const GraphDatabase* graphDB() const { return graphDB_.get(); }
 
     /// 获取向量数据库
     VectorDatabase* vectorDB() { return vectorDB_.get(); }
+    const VectorDatabase* vectorDB() const { return vectorDB_.get(); }
 
     /// 获取三元组存储
     TripleStore* getTripleStore() { return &tripleStore_; }
+    const TripleStore* getTripleStore() const { return &tripleStore_; }
 
     /// 清空存储
     void clear();
@@ -782,13 +785,13 @@ public:
     size_t individualCount() const;
 
     /// 获取所有个体
-    std::vector<Individual> getAllIndividuals();
+    std::vector<Individual> getAllIndividuals() const;
 
     /// 获取所有类
-    std::vector<Class> getAllClasses();
+    std::vector<Class> getAllClasses() const;
 
     /// 获取所有关系
-    std::vector<Relation> getAllRelations();
+    std::vector<Relation> getAllRelations() const;
 
     /// 批量操作
     struct BatchResult {
