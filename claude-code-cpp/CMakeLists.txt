@@ -427,6 +427,9 @@ set(SERVICES_SOURCES
     src/core/ConversationFork.cpp
     src/core/PromptSuggestion.cpp
     src/bootstrap/AppState.cpp
+    src/bootstrap/SignalHandler.cpp
+    src/bootstrap/AgentRunner.cpp
+    src/bootstrap/ReadlineSupport.cpp
     src/services/RemoteSettings.cpp
     src/services/VCRFixture.cpp
     src/services/DiagnosticTracker.cpp

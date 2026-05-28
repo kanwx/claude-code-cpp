@@ -8,13 +8,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <clocale>
-#include <csignal>
-#include <atomic>
 #include <chrono>
-#include <iomanip>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#include <termios.h>
 
 #include <claude/core/AgentLoop.hpp>
 #include <claude/core/TokenTracker.hpp>
@@ -133,398 +127,33 @@
 #include <claude/constants/Prompts.hpp>
 #include <claude/services/OAuthService.hpp>
 
+// Extracted bootstrap modules
+#include <claude/bootstrap/SignalHandler.hpp>
+#include <claude/bootstrap/AgentRunner.hpp>
+
 // FTXUI support (optional)
 #ifdef HAS_FTXUI
 #include <claude/ui/FtxuiRepl.hpp>
 #include <claude/bootstrap/AppState.hpp>
 #endif
 
+// Session persistence (always available)
+namespace claude { namespace session { void saveSession(AgentLoop* loop); } }
+
+// Readline support functions (only when readline is available)
+#ifdef USE_READLINE
+namespace claude { namespace readline_support {
+    void initReadline(CommandRegistry* registry, Completer* completer);
+}}
+extern claude::CommandRegistry* g_commandRegistry;
+extern claude::Completer* g_completer;
+void saveHistory(const claude::String& entry);
+#endif
+
 using namespace claude;
 
 // Bring new formatters into scope
 using claude::MessageResponse;
-
-// Signal handler globals — context-aware Ctrl+C handling
-static std::atomic<bool> g_agentStreaming{false};
-static AgentLoop* g_agentLoop = nullptr;
-static std::atomic<bool> g_interruptRequested{false};  // Set by SIGINT, checked by agent loop
-static std::atomic<int> g_ctrlCCount{0};
-static std::chrono::steady_clock::time_point g_lastCtrlCTime{};
-
-/// Restore terminal to sane state — disables mouse tracking, restores cursor, resets attributes.
-/// MUST be called before _Exit() on every exit path to avoid leaving the terminal in
-/// a broken state (mouse tracking captures clicks, making copy impossible; raw mode
-/// echoes escape sequences as garbage characters).
-static void restoreTerminal() {
-    // Disable all mouse tracking modes (DECSET 1000/1002/1003/1006)
-    // These are the sequences FTXUI's TrackMouse() enables. Writing them
-    // directly ensures cleanup even when FTXUI's Uninstall() is bypassed.
-    write(STDOUT_FILENO, "\x1b[?1000l", 8);  // Disable basic mouse tracking
-    write(STDOUT_FILENO, "\x1b[?1002l", 8);  // Disable button-event tracking
-    write(STDOUT_FILENO, "\x1b[?1003l", 8);  // Disable any-event tracking
-    write(STDOUT_FILENO, "\x1b[?1006l", 8);  // Disable SGR mouse mode
-
-    // Restore cursor visibility and reset text attributes
-    write(STDOUT_FILENO, "\x1b[?25h", 6);    // Show cursor
-    write(STDOUT_FILENO, "\x1b[0m", 4);      // Reset all attributes
-
-    // Restore terminal from raw mode (tcsetattr with original settings)
-    // FTXUI's Install() sets raw mode; if we bypass Uninstall(), we need
-    // to restore canonical mode so the shell works normally after exit.
-    struct termios t;
-    if (tcgetattr(STDIN_FILENO, &t) == 0) {
-        t.c_lflag |= (ICANON | ECHO | ISIG);
-        t.c_lflag &= ~(VMIN | VTIME);
-        tcsetattr(STDIN_FILENO, TCSANOW, &t);
-    }
-}
-
-#ifdef USE_READLINE
-// readline 命令补全
-static CommandRegistry* g_commandRegistry = nullptr;
-static Completer* g_completer = nullptr;
-static int g_lastHintLines = 0;  // 记录上次显示了多少行提示
-
-// 历史文件路径
-static std::filesystem::path getHistoryFilePath() {
-    const char* home = std::getenv("HOME");
-    if (!home) return {};
-    auto path = std::filesystem::path(home) / ".claude";
-    std::filesystem::create_directories(path);
-    return path / "history.txt";
-}
-
-// 加载历史
-static void loadHistory() {
-    auto historyPath = getHistoryFilePath();
-    if (historyPath.empty()) return;
-
-    std::ifstream file(historyPath);
-    if (!file) return;
-
-    String line;
-    while (std::getline(file, line)) {
-        if (!line.empty()) {
-            add_history(line.c_str());
-        }
-    }
-}
-
-// 保存历史
-static void saveHistory(const String& entry) {
-    auto historyPath = getHistoryFilePath();
-    if (historyPath.empty()) return;
-
-    std::ofstream file(historyPath, std::ios::app);
-    if (file) {
-        file << entry << "\n";
-    }
-}
-
-// Save full conversation session to JSONL for /resume
-static void saveSession(AgentLoop* loop) {
-    if (!loop) return;
-
-    const char* home = std::getenv("HOME");
-    if (!home) return;
-
-    auto sessionDir = std::filesystem::path(home) / ".claude" / "sessions";
-    std::filesystem::create_directories(sessionDir);
-
-    // Generate session filename from timestamp
-    auto now = std::chrono::system_clock::now();
-    auto tt = std::chrono::system_clock::to_time_t(now);
-    std::ostringstream nameStream;
-    nameStream << "session_" << std::put_time(std::localtime(&tt), "%Y%m%d_%H%M%S");
-    auto sessionFile = sessionDir / (nameStream.str() + ".json");
-
-    const auto& messages = loop->getMessageHistory();
-    if (messages.empty()) return; // Don't save empty sessions
-
-    // Serialize messages to JSON
-    Json sessionJson = Json::object();
-    sessionJson["version"] = 1;
-    sessionJson["created_at"] = std::chrono::duration_cast<std::chrono::seconds>(
-        now.time_since_epoch()).count();
-
-    Json msgArray = Json::array();
-    for (const auto& msg : messages) {
-        Json jm;
-        switch (msg.role) {
-            case MessageRole::System:     jm["role"] = "system"; break;
-            case MessageRole::Assistant:  jm["role"] = "assistant"; break;
-            case MessageRole::ToolResult: jm["role"] = "tool"; break;
-            default:                      jm["role"] = "user"; break;
-        }
-
-        if (!msg.content.empty()) {
-            jm["content"] = msg.content;
-        }
-
-        if (!msg.toolCalls.empty()) {
-            Json tcs = Json::array();
-            for (const auto& tc : msg.toolCalls) {
-                Json tcj;
-                tcj["id"] = tc.id;
-                tcj["function"] = {{"name", tc.name}, {"arguments", tc.arguments}};
-                tcs.push_back(tcj);
-            }
-            jm["tool_calls"] = tcs;
-        }
-
-        if (!msg.toolResults.empty()) {
-            Json trs = Json::array();
-            for (const auto& tr : msg.toolResults) {
-                trs.push_back({
-                    {"tool_call_id", tr.callId},
-                    {"name", tr.toolName},
-                    {"content", tr.content},
-                    {"is_error", tr.isError}
-                });
-            }
-            jm["tool_results"] = trs;
-        }
-
-        if (msg.thinking) {
-            jm["thinking"] = *msg.thinking;
-        }
-
-        msgArray.push_back(jm);
-    }
-    sessionJson["messages"] = msgArray;
-
-    // Keep only the 50 most recent sessions
-    std::vector<std::filesystem::path> sessions;
-    for (const auto& entry : std::filesystem::directory_iterator(sessionDir)) {
-        if (entry.path().extension() == ".json") {
-            sessions.push_back(entry.path());
-        }
-    }
-    if (sessions.size() >= 50) {
-        std::sort(sessions.begin(), sessions.end(), [](const auto& a, const auto& b) {
-            return std::filesystem::last_write_time(a) < std::filesystem::last_write_time(b);
-        });
-        for (size_t i = 0; i < sessions.size() - 49; i++) {
-            std::filesystem::remove(sessions[i]);
-        }
-    }
-
-    std::ofstream file(sessionFile);
-    if (file) {
-        file << sessionJson.dump(2);
-        spdlog::info("Session saved to {}", sessionFile.string());
-    }
-}
-
-// 补全生成函数（Tab 补全用）— uses Completer for /commands, @file, and history
-static char* completionGenerator(const char* text, int state) {
-    static std::vector<String> matches;
-    static size_t matchIndex;
-
-    if (state == 0) {
-        matches.clear();
-        matchIndex = 0;
-
-        String prefix = text;
-
-        // Slash commands from CommandRegistry
-        if (prefix.starts_with("/") && g_commandRegistry) {
-            auto allCommands = g_commandRegistry->getCommands();
-            for (const auto* cmd : allCommands) {
-                if (cmd) {
-                    String cmdWithSlash = "/" + cmd->name();
-                    if (cmdWithSlash.find(prefix) == 0) {
-                        matches.push_back(cmdWithSlash);
-                    }
-                }
-            }
-        }
-
-        // File/command/history from Completer
-        if (g_completer && !prefix.empty()) {
-            auto result = g_completer->getSuggestions(prefix, static_cast<int>(prefix.size()));
-            for (const auto& suggestion : result.suggestions) {
-                String display = suggestion.displayText;
-                // Avoid duplicates with slash commands
-                if (!display.starts_with("/") || !prefix.starts_with("/")) {
-                    matches.push_back(display);
-                }
-            }
-        }
-
-        std::sort(matches.begin(), matches.end());
-        matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
-    }
-
-    if (matchIndex < matches.size()) {
-        return strdup(matches[matchIndex++].c_str());
-    }
-    return nullptr;
-}
-
-// Tab 补全函数 — delegates to Completer for /commands, @files, and history
-static char** commandCompletion(const char* text, int start, int /*end*/) {
-    rl_completion_append_character = '\0';
-    // Handle slash commands, @files, and history via Completer
-    if (text[0] == '/' || text[0] == '@' || start > 0) {
-        return rl_completion_matches(text, completionGenerator);
-    }
-    return nullptr;
-}
-
-// 计算字符串的显示宽度（考虑UTF-8多字节字符）
-static int displayWidth(const char* str, int len) {
-    int width = 0;
-    for (int i = 0; i < len && str[i]; ) {
-        unsigned char c = static_cast<unsigned char>(str[i]);
-        if (c < 0x80) {
-            // ASCII: 1 byte, 1 column
-            width += 1;
-            i += 1;
-        } else if ((c & 0xE0) == 0xC0) {
-            // 2-byte UTF-8: usually 2 columns for CJK, 1 for others
-            width += 2;  // Assume CJK for simplicity
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            // 3-byte UTF-8: usually 2 columns (CJK)
-            width += 2;
-            i += 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            // 4-byte UTF-8: 2 columns (emoji etc)
-            width += 2;
-            i += 4;
-        } else {
-            i += 1;
-        }
-    }
-    return width;
-}
-
-// 获取终端宽度
-static int getTerminalWidth() {
-    struct winsize w;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_col > 0) {
-        return w.ws_col;
-    }
-    return 80;  // Default
-}
-
-// 记录上次显示的行数，用于正确清除
-static int g_lastDisplayLines = 1;
-
-// 自定义 redisplay - 显示联想命令在下方
-static void hintRedisplay() {
-    // During streaming, skip redisplay entirely — streaming text writes
-    // to stdout and any cursor manipulation from readline would garble it.
-    if (g_agentStreaming.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    // 获取联想命令
-    std::vector<std::pair<String, String>> matches;
-    int count = 0;
-
-    if (rl_line_buffer && rl_end >= 1 && rl_line_buffer[0] == '/') {
-        String prefix(rl_line_buffer, rl_end);
-
-        if (g_commandRegistry) {
-            auto allCommands = g_commandRegistry->getCommands();
-            for (const auto* cmd : allCommands) {
-                if (cmd) {
-                    String cmdWithSlash = "/" + cmd->name();
-                    if (cmdWithSlash.find(prefix) == 0 && cmdWithSlash.length() > prefix.length()) {
-                        matches.push_back({cmdWithSlash, cmd->description()});
-                    }
-                }
-            }
-        }
-
-        std::sort(matches.begin(), matches.end());
-        count = std::min((int)matches.size(), 5);
-    }
-
-    // 计算输入行数（考虑换行）
-    int termWidth = getTerminalWidth();
-    int promptWidth = 2;  // "❯ " = 2 columns
-    int inputWidth = displayWidth(rl_line_buffer, rl_end);
-    int totalWidth = promptWidth + inputWidth;
-    int inputLines = (totalWidth + termWidth - 1) / termWidth;  // Ceiling division
-    if (inputLines < 1) inputLines = 1;
-
-    // Use the larger of current lines or last displayed lines to ensure we clear everything
-    int linesToClear = std::max(inputLines, g_lastDisplayLines);
-
-    // 清除所有输入行（移动到第一行，然后向下清除）
-    std::cout << "\r";  // Move to start of current line
-    for (int i = 1; i < linesToClear; i++) {
-        std::cout << "\033[A";  // Move up to first line
-    }
-    std::cout << "\r";  // Ensure at start of first line
-
-    // Clear all lines from top to bottom
-    for (int i = 0; i < linesToClear; i++) {
-        std::cout << "\033[2K";  // Clear entire line
-        if (i < linesToClear - 1) {
-            std::cout << "\033[B";  // Move down to next line
-        }
-    }
-
-    // Move back to top line
-    for (int i = 1; i < linesToClear; i++) {
-        std::cout << "\033[A";  // Move up
-    }
-    std::cout << "\r";  // Ensure at start
-
-    // 显示提示符 (与 readline prompt 一致)
-    std::cout << "\033[1;32m❯ \033[0m";
-
-    // 显示输入内容
-    std::cout.write(rl_line_buffer, rl_end);
-
-    // 清除下方所有内容
-    std::cout << "\033[J";
-
-    // Update last display lines for next call
-    g_lastDisplayLines = inputLines;
-
-    // 显示联想提示
-    if (count > 0) {
-        std::cout << "\n";
-        for (int i = 0; i < count; i++) {
-            std::cout << "  \033[36m" << matches[i].first << "\033[0m";
-            if (!matches[i].second.empty() && matches[i].second.length() < 40) {
-                std::cout << " \033[90m- " << matches[i].second << "\033[0m";
-            }
-            if (i < count - 1) std::cout << "\n";
-        }
-
-        // 将光标移回输入行
-        std::cout << "\033[" << count << "A";  // 上移 count 行
-    }
-
-    // 计算光标位置（考虑多行）
-    int cursorWidth = promptWidth + displayWidth(rl_line_buffer, rl_point);
-    int cursorLine = cursorWidth / termWidth;  // Which line (0-indexed)
-    int cursorCol = cursorWidth % termWidth;   // Column on that line
-    if (cursorCol == 0 && cursorWidth > 0) {
-        // At start of a new line - adjust
-        cursorCol = termWidth;
-        cursorLine--;
-    }
-
-    // 移到正确位置
-    std::cout << "\r";
-    if (inputLines > 1 && cursorLine < inputLines - 1) {
-        // Need to move up from bottom line
-        std::cout << "\033[" << (inputLines - 1 - cursorLine) << "A";
-    }
-    if (cursorCol > 0) {
-        std::cout << "\033[" << cursorCol << "C";
-    }
-
-    std::cout << std::flush;
-}
-#endif
 
 /// 主应用类
 class ClaudeCodeApp {
@@ -604,8 +233,6 @@ private:
 
     void init() {
         // Register terminal restore as FIRST cleanup (runs LAST due to reverse-order execution)
-        // This ensures mouse tracking is disabled and terminal mode is restored
-        // on every exit path, even when _Exit() bypasses FTXUI's Uninstall().
         CleanupRegistry::registerCleanup("restore-terminal", CleanupRegistry::Category::UI,
             []() { restoreTerminal(); });
 
@@ -698,14 +325,14 @@ private:
         // 初始化命令
         initCommands();
 
-        // 初始化 API 客户端
+        // 初始化 API 客户端 (via agent_runner)
         initApiClient();
 
-        // 初始化 AgentLoop
+        // 初始化 AgentLoop (via agent_runner)
         initAgentLoop();
 
-        // Auto-start MCP servers from config
-        initMcp();
+        // Auto-start MCP servers from config (via agent_runner)
+        mcpManager_ = agent_runner::initMcp(*toolRegistry_);
 
         spdlog::debug("Claude Code C++ initialized");
     }
@@ -898,489 +525,52 @@ private:
             spdlog::debug("No API key configured. Using empty key (for local models).");
         }
 
-        // Auto-detect provider type based on base URL
-        // Most self-hosted servers (vLLM, Ollama, LM Studio) use OpenAI-compatible format
-        bool isOpenAICompatible = false;
-        if (!baseUrl.empty()) {
-            // Check if it's the official Anthropic API
-            bool isAnthropicAPI = (baseUrl.find("api.anthropic.com") != String::npos);
-            // Custom base URLs typically use OpenAI format
-            isOpenAICompatible = !isAnthropicAPI;
+        // Create API client via agent_runner
+        agent_runner::ApiClientParams params;
+        params.provider = provider;
+        params.model = model;
+        params.apiKey = apiKey;
+        params.baseUrl = baseUrl;
+        params.maxTokens = config_->getMaxTokens();
 
-            if (isOpenAICompatible && provider == "anthropic") {
-                spdlog::debug("Custom base URL detected ({}), using OpenAI-compatible format", baseUrl);
-                provider = "openai";
-            }
-        }
-
-        // 创建客户端并设置所有配置
-        if (provider == "anthropic") {
-            auto client = std::make_unique<AnthropicClient>(apiKey);
-            client->setModel(model);
-            client->setMaxTokens(config_->getMaxTokens());
-            if (!baseUrl.empty()) {
-                client->setBaseUrl(baseUrl);
-            }
-            apiClient_ = client.get();
-            apiClientHolder_ = std::move(client);
-        } else {
-            auto client = std::make_unique<OpenAIClient>(apiKey);
-            client->setModel(model);
-            client->setMaxTokens(config_->getMaxTokens());
-            if (!baseUrl.empty()) {
-                client->setBaseUrl(baseUrl);
-            }
-            apiClient_ = client.get();
-            apiClientHolder_ = std::move(client);
-        }
-
-        spdlog::debug("Using {} provider with model {}", provider, model);
+        auto holder = agent_runner::createApiClient(params);
+        apiClient_ = holder.raw;
+        apiClientHolder_ = std::move(holder.owned);
     }
 
     void initAgentLoop() {
-        // --- Collect environment context ---
-        auto workDir = std::filesystem::current_path();
-        GitContext gitCtx = GitContext::collect(workDir);
+        agent_runner::AgentLoopParams params;
+        params.apiClient = apiClient_;
+        params.toolRegistry = toolRegistry_.get();
+        params.config = config_.get();
+        params.permissionSettings = permissionSettings_.get();
+        params.permissionEngine = permissionEngine_.get();
+        params.systemPromptOverride = systemPromptOverride_;
+        params.appendSystemPrompt = appendSystemPrompt_;
+        params.provider = provider_;
+        params.model = model_;
+        params.allowedTools = allowedToolsStr_;
+        params.disallowedTools = disallowedToolsStr_;
+        params.maxTurns = maxTurns_;
+        params.continueSession = continueSession_;
+        params.interactive = interactive_;
 
-        // Load CLAUDE.md hierarchy (all tiers: managed, user, project, local)
-        claudeMdLoader_ = std::make_unique<ClaudeMdLoader>();
-        claudeMdLoader_->setCwd(workDir);
-        auto claudeMdFiles = claudeMdLoader_->loadAll();
-        String claudeMdContent = claudeMdLoader_->formatAsInstructions(claudeMdFiles);
-
-        // Build system prompt using SystemPromptBuilder with full context
-        EnvironmentInfo envInfo;
-        envInfo.cwd = workDir.string();
-        envInfo.isGit = gitCtx.isGitRepo;
-        envInfo.platform =
-#ifdef __APPLE__
-            "macOS"
-#elif defined(__linux__)
-            "Linux"
-#else
-            "Unknown"
-#endif
-        ;
-        envInfo.shell = std::getenv("SHELL") ? std::getenv("SHELL") : "/bin/bash";
-#ifdef __APPLE__
-        envInfo.osVersion = "macOS Darwin";
-#elif defined(__linux__)
-        envInfo.osVersion = "Linux";
-#endif
-        if (apiClient_) {
-            envInfo.modelId = apiClient_->getModelName();
-        }
-
-        // Collect enabled tools info
-        std::vector<ToolInfo> enabledTools;
-        for (const auto* tool : toolRegistry_->getTools()) {
-            enabledTools.push_back({tool->name(), tool->description()});
-        }
-
-        // Build system prompt via builder (includes CLAUDE.md, git context, environment, tools)
-        SystemPromptBuilder builder;
-        builder.withClaudeMd(claudeMdContent)
-               .withGitContext(gitCtx)
-               .withWorkDir(workDir.string())
-               .withEnvironment(envInfo)
-               .withEnabledTools(enabledTools)
-               .withReplMode(interactive_);
-
-        // Apply CLI system prompt overrides via 5-tier resolution
-        String systemPrompt;
-        std::vector<TextBlockParam> systemBlocks;
-
-        if (!systemPromptOverride_.empty()) {
-            // Tier 0: complete replacement
-            systemPrompt = systemPromptOverride_;
-        } else {
-            systemBlocks = builder.buildBlocks();
-            systemPrompt = builder.build();
-
-            // Append additional system prompt if specified
-            if (!appendSystemPrompt_.empty()) {
-                systemPrompt += "\n\n" + appendSystemPrompt_;
-                // Also append to blocks
-                TextBlockParam appendBlock;
-                appendBlock.type = "text";
-                appendBlock.text = appendSystemPrompt_;
-                systemBlocks.push_back(appendBlock);
-            }
-        }
-
-        tokenTracker_ = std::make_unique<TokenTracker>();
-
-        agentLoop_ = std::make_unique<AgentLoop>(
-            *apiClient_,
-            *toolRegistry_,
-            systemPrompt,
-            *tokenTracker_
-        );
-
-        // Use block-based system prompt for proper prompt caching
-        if (!systemBlocks.empty()) {
-            agentLoop_->setSystemBlocks(std::move(systemBlocks));
-        }
-
-        // --- Setup ContextInjector for per-turn context injection ---
-        contextInjector_ = std::make_unique<ContextInjector>();
-
-        // Set git status
-        GitStatusAttachment gitStatusAtt;
-        gitStatusAtt.branch = gitCtx.branch;
-        gitStatusAtt.mainBranch = "main";
-        gitStatusAtt.status = gitCtx.status;
-        gitStatusAtt.recentCommits = gitCtx.recentCommits;
-        contextInjector_->setGitStatus(gitStatusAtt);
-
-        // Set CLAUDE.md content
-        if (!claudeMdContent.empty()) {
-            contextInjector_->setClaudeMd(claudeMdContent);
-        }
-
-        // Load skills
-        auto homeDir = std::getenv("HOME");
-        if (homeDir) {
-            auto skillsDir = std::filesystem::path(homeDir) / ".claude" / "skills";
-            if (std::filesystem::exists(skillsDir)) {
-                contextInjector_->loadSkills(skillsDir);
-            }
-        }
-
-        // Load memory files from project .claude/memory/
-        auto memDir = workDir / ".claude" / "memory";
-        if (std::filesystem::exists(memDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(memDir)) {
-                if (entry.path().extension() == ".md") {
-                    std::ifstream ifs(entry.path());
-                    if (ifs) {
-                        String content((std::istreambuf_iterator<char>(ifs)),
-                                       std::istreambuf_iterator<char>());
-                        contextInjector_->addMemory(entry.path().string(), content);
-                    }
-                }
-            }
-        }
-
-        // Add system reminders (current session info)
-        contextInjector_->addSystemReminder(
-            "This is a C++ implementation of Claude Code. The agent has access to "
-            "file operations, bash commands, and other tools through the ToolRegistry.");
-
-        // Wire ContextInjector into AgentLoop
-        agentLoop_->setContextInjector(contextInjector_.get());
-
-        // Wire up signal handler global for Ctrl+C cancel
-        g_agentLoop = agentLoop_.get();
-
-        agentLoop_->setPermissionEngine(permissionEngine_.get());
-
-        // Initialize auto-compact with context window size
-        // Default 200k tokens for Claude 3.5/4 models
-        int contextWindow = 200000;
-        if (apiClient_) {
-            String model = apiClient_->getModelName();
-            if (model.find("haiku") != String::npos) {
-                contextWindow = 200000;
-            } else if (model.find("opus") != String::npos) {
-                contextWindow = 200000;
-            }
-        }
-        agentLoop_->initAutoCompact(contextWindow);
-
-        // Apply CLI flags to AgentLoop
-        if (!allowedToolsStr_.empty()) {
-            agentLoop_->setAllowedTools(allowedToolsStr_);
-            spdlog::info("Tool allowlist: {} tools", allowedToolsStr_.size());
-        }
-        if (!disallowedToolsStr_.empty()) {
-            agentLoop_->setDisallowedTools(disallowedToolsStr_);
-            spdlog::info("Tool denylist: {} tools", disallowedToolsStr_.size());
-        }
-        if (maxTurns_ > 0) {
-            agentLoop_->setMaxIterations(maxTurns_);
-            spdlog::info("Max turns: {}", maxTurns_);
-        }
-
-        // Resume session if --continue flag is set
-        if (continueSession_) {
-            resumeLastSession();
-        }
+        auto holder = agent_runner::createAgentLoop(params);
+        agentLoop_ = std::move(holder.loop);
+        tokenTracker_ = std::move(holder.tokenTracker);
+        contextInjector_ = std::move(holder.contextInjector);
+        claudeMdLoader_ = std::move(holder.claudeMdLoader);
 
         // 设置回调
-        setupCallbacks();
-
-        spdlog::debug("AgentLoop initialized with context injection (git={}, CLAUDE.md={} chars, {} memories, {} tools)",
-                      gitCtx.isGitRepo ? "yes" : "no",
-                      claudeMdContent.size(),
-                      std::filesystem::exists(memDir) ? "loaded" : "none",
-                      enabledTools.size());
-    }
-
-    /// Resume the most recent session from ~/.claude/sessions/
-    void resumeLastSession() {
-        if (!agentLoop_) return;
-
-        const char* home = std::getenv("HOME");
-        if (!home) return;
-
-        auto sessionDir = std::filesystem::path(home) / ".claude" / "sessions";
-        if (!std::filesystem::exists(sessionDir)) return;
-
-        // Find the most recent session file
-        std::vector<std::filesystem::path> sessions;
-        for (const auto& entry : std::filesystem::directory_iterator(sessionDir)) {
-            if (entry.path().extension() == ".json") {
-                sessions.push_back(entry.path());
-            }
-        }
-        if (sessions.empty()) {
-            spdlog::info("No saved sessions found for --continue");
-            return;
-        }
-
-        std::sort(sessions.begin(), sessions.end(), [](const auto& a, const auto& b) {
-            return std::filesystem::last_write_time(a) > std::filesystem::last_write_time(b);
-        });
-
-        const auto& latestSession = sessions[0];
-        try {
-            std::ifstream ifs(latestSession);
-            if (!ifs) return;
-            auto sessionJson = Json::parse(ifs);
-
-            if (!sessionJson.contains("messages") || !sessionJson["messages"].is_array()) return;
-
-            std::vector<Message> loadedMessages;
-            for (const auto& jm : sessionJson["messages"]) {
-                if (!jm.is_object()) continue;
-                String roleStr = jm.value("role", "user");
-                MessageRole role = MessageRole::User;
-                if (roleStr == "system") role = MessageRole::System;
-                else if (roleStr == "assistant") role = MessageRole::Assistant;
-                else if (roleStr == "tool") role = MessageRole::ToolResult;
-
-                Message msg;
-                msg.role = role;
-                msg.content = jm.value("content", "");
-
-                if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
-                    for (const auto& tcj : jm["tool_calls"]) {
-                        if (!tcj.is_object()) continue;
-                        ToolCall tc;
-                        tc.id = tcj.value("id", "");
-                        if (tcj.contains("function") && tcj["function"].is_object()) {
-                            tc.name = tcj["function"].value("name", "");
-                            tc.arguments = tcj["function"].value("arguments", "");
-                        }
-                        msg.toolCalls.push_back(tc);
-                    }
-                }
-
-                if (jm.contains("tool_results") && jm["tool_results"].is_array()) {
-                    for (const auto& trj : jm["tool_results"]) {
-                        if (!trj.is_object()) continue;
-                        ToolResponse tr;
-                        tr.callId = trj.value("tool_call_id", "");
-                        tr.toolName = trj.value("name", "");
-                        tr.content = trj.value("content", "");
-                        tr.isError = trj.value("is_error", false);
-                        msg.toolResults.push_back(tr);
-                    }
-                }
-
-                if (jm.contains("thinking")) {
-                    msg.thinking = jm["thinking"].get<String>();
-                }
-
-                loadedMessages.push_back(std::move(msg));
-            }
-
-            if (!loadedMessages.empty()) {
-                // Replace history, preserving the system prompt
-                auto& currentHistory = agentLoop_->getMessageHistory();
-                String currentSystemPrompt;
-                for (const auto& m : currentHistory) {
-                    if (m.role == MessageRole::System) {
-                        currentSystemPrompt = m.content;
-                        break;
-                    }
-                }
-
-                loadedMessages.erase(
-                    std::remove_if(loadedMessages.begin(), loadedMessages.end(),
-                        [](const Message& m) { return m.role == MessageRole::System; }),
-                    loadedMessages.end());
-
-                // Prepend system prompt
-                loadedMessages.insert(loadedMessages.begin(),
-                    Message::system(currentSystemPrompt));
-
-                agentLoop_->replaceHistory(std::move(loadedMessages));
-                spdlog::info("Resumed session from {}", latestSession.filename().string());
-            }
-        } catch (const std::exception& e) {
-            spdlog::warn("Failed to resume session: {}", e.what());
-        }
-    }
-
-    void initMcp() {
-        // Read MCP server config from ~/.claude/mcp_settings.json
-        auto homeDir = std::getenv("HOME");
-        if (!homeDir) return;
-
-        auto mcpSettingsPath = std::filesystem::path(homeDir) / ".claude" / "mcp_settings.json";
-        if (!std::filesystem::exists(mcpSettingsPath)) return;
-
-        try {
-            std::ifstream ifs(mcpSettingsPath);
-            if (!ifs) return;
-            auto settings = Json::parse(ifs);
-
-            if (!settings.contains("mcpServers") || !settings["mcpServers"].is_object()) return;
-
-            mcpManager_ = std::make_shared<McpManager>();
-            int started = 0;
-
-            for (auto& [name, serverConfig] : settings["mcpServers"].items()) {
-                if (!serverConfig.is_object()) continue;
-
-                try {
-                    auto client = createMcpClientFromConfig(serverConfig);
-                    if (client) {
-                        mcpManager_->addServer(name, std::move(client));
-                        started++;
-                        spdlog::info("MCP server '{}' started", name);
-                    }
-                } catch (const std::exception& e) {
-                    spdlog::warn("MCP server '{}' failed to start: {}", name, e.what());
-                }
-            }
-
-            if (started > 0) {
-                toolRegistry_->registerMcpTools(mcpManager_);
-                spdlog::info("MCP: {} server(s) started, tools registered", started);
-            }
-        } catch (const std::exception& e) {
-            spdlog::warn("Failed to load MCP settings: {}", e.what());
-        }
-    }
-
-    void setupCallbacks() {
-        // 工具事件回调 - matches TS tool use display
-        agentLoop_->setOnToolEvent([this](const ToolEvent& event) {
-            if (event.phase == ToolEventPhase::Start) {
-                if (spinner_) spinner_->stop();
-                if (!useFtxui_) {
-                    // Show tool badge — ⎿ prefix with per-tool colored badge
-                    std::cout << "\n\033[s"
-                              << AnsiStyle::DIM << "  ⎿ "
-                              << AnsiStyle::RESET << MessageResponse::formatToolBadge(event.toolName)
-                              << " " << AnsiStyle::DIM << truncateToolInput(event.arguments, 60)
-                              << "\033[u" << std::flush;
-                } else if (ftxuiRepl_) {
-                    ftxuiRepl_->addToolMessage(event.toolName, event.arguments, "");
-                }
-            }
-        });
-
-        // 流式开始回调
-        agentLoop_->setOnStreamStart([this]() {
-            if (spinner_) spinner_->stop();
-            if (!useFtxui_) {
-                // Don't output anything — the first onToken will start the text
-            }
-        });
-
-        // Thinking callback — update thinking summary for FTXUI
-        agentLoop_->setOnThinking([this](const String& thinking) {
-            if (ftxuiRepl_ && useFtxui_) {
-                ftxuiRepl_->updateThinkingSummary(thinking);
-            }
-        });
-
-        // ========== 新增回调：流畅输出的关键 ==========
-
-        // content_block_stop 回调 — 每个内容块完成时触发
-        // 这是原版 TS 在 content_block_stop 时 yield AssistantMessage 的 C++ 等价物
-        agentLoop_->setOnContentBlockStop([this](const String& blockType, int index, const String& content) {
-            if (useFtxui_ && ftxuiRepl_) {
-                if (blockType == "tool_use") {
-                    spdlog::debug("Content block stop: tool_use at index {}", index);
-                } else if (blockType == "thinking") {
-                    // Thinking block complete — store for expand/collapse
-                    if (!content.empty()) {
-                        ftxuiRepl_->addThinkingMessage(content);
-                    }
-                }
-            }
-        });
-
-        // 工具结果流式回调 — 每个工具完成时立即显示结果
-        // 匹配原版 TS 的 StreamingToolExecutor.getCompletedResults() 行为
-        agentLoop_->setOnToolResult([this](const String& toolName, const String& result, bool isError) {
-            if (!useFtxui_) {
-                // readline模式：工具结果在流式文本之间插入
-                // 需要在正确的位置输出，避免与 readline 光标操作冲突
-                // 保存光标 → 新行 → 输出结果 → 恢复光标
-                if (!result.empty()) {
-                    // Save cursor position, move to new line, output, restore cursor
-                    std::cout << "\n\033[s";  // New line + save cursor
-                    std::cout << AnsiStyle::DIM << "  ⎿ " << AnsiStyle::RESET;
-                    if (isError) {
-                        std::cout << AnsiStyle::RED;
-                    }
-                    String display = result;
-                    if (display.length() > 500) {
-                        display = display.substr(0, 500) + "\n... (truncated)";
-                    }
-                    std::cout << display << AnsiStyle::RESET;
-                    std::cout << "\033[u";  // Restore cursor
-                    std::cout << std::flush;
-                }
-            } else if (ftxuiRepl_) {
-                ftxuiRepl_->addToolMessage(toolName, "", result);
-            }
-        });
-
-        // Tool chunk streaming callback — progressive output for streaming tools (e.g. FileReadTool)
-        agentLoop_->setOnStreamEvent([this](const StreamEvent& event) {
-            if (event.type == StreamEvent::Type::ToolChunkReady && !useFtxui_) {
-                // Progressive output in readline mode — show dots as chunks arrive
-                std::cout << AnsiStyle::DIM << "." << AnsiStyle::RESET << std::flush;
-            }
-        });
-
-        // TAOR循环继续回调 — 模型开始新一轮 Think 时触发
-        // In FTXUI mode: don't inject into streaming text (that clutters the output).
-        // The status bar already shows "Running" with elapsed time and turn counter.
-        agentLoop_->setOnLoopContinue([this](int iteration, int maxIterations) {
-            if (!useFtxui_) {
-                std::cout << "\n\033[s"
-                          << AnsiStyle::DIM << "  ⟳ Continuing... (turn "
-                          << iteration << ")" << AnsiStyle::RESET
-                          << "\033[u" << std::flush;
-            }
-        });
-
-        // 上下文压缩预警回调
-        agentLoop_->setOnCompactWarning([this](int level, long currentTokens, long maxTokens) {
-            double pct = static_cast<double>(currentTokens) / maxTokens * 100.0;
-            String msg = level >= 2
-                ? "Context window nearly full (" + std::to_string(static_cast<int>(pct)) + "%). Auto-compacting..."
-                : "Context window usage at " + std::to_string(static_cast<int>(pct)) + "%";
-            if (useFtxui_ && ftxuiRepl_) {
-                ftxuiRepl_->addSystemMessage(msg);
-            } else {
-                std::cout << "\n" << AnsiStyle::YELLOW << "⚠ " << msg
-                          << AnsiStyle::RESET << "\n";
-            }
-        });
-
-        // 权限确认回调
-        agentLoop_->setOnPermissionRequest([this](const PermissionRequest& req) {
-            return promptPermission(req);
-        });
+        agent_runner::setupCallbacks(*agentLoop_, useFtxui_, spinner_.get(),
+#ifdef HAS_FTXUI
+            ftxuiRepl_.get(),
+#else
+            nullptr,
+#endif
+            [this](const PermissionRequest& req) -> PermissionChoice {
+                return promptPermission(req);
+            });
     }
 
     void runRepl() {
@@ -1403,15 +593,6 @@ private:
         setlocale(LC_ALL, "en_US.UTF-8");
 
 #ifdef USE_READLINE
-        // GNU readline 配置
-        rl_variable_bind("input-meta", "on");
-        rl_variable_bind("output-meta", "on");
-        rl_variable_bind("convert-meta", "off");
-        rl_reset_terminal(nullptr);
-
-        // 设置命令补全
-        g_commandRegistry = commandRegistry_.get();
-
         // Setup Completer with commands, working dir, and history
         CompleterConfig completerConfig;
         if (commandRegistry_) {
@@ -1421,15 +602,9 @@ private:
         }
         completerConfig.workingDir = std::filesystem::current_path();
         completer_ = std::make_unique<Completer>(completerConfig);
-        g_completer = completer_.get();
 
-        rl_attempted_completion_function = commandCompletion;
-
-        // 设置实时联想显示
-        rl_redisplay_function = hintRedisplay;
-
-        // 加载历史
-        loadHistory();
+        // Initialize readline (sets up completion, hints, loads history)
+        readline_support::initReadline(commandRegistry_.get(), completer_.get());
 #endif
 
         // REPL 循环
@@ -1441,7 +616,7 @@ private:
             char* line = readline("\001\033[1;32m\002❯ \001\033[0m\002");
             if (!line) {
                 // EOF (Ctrl+D)
-                saveSession(agentLoop_.get());
+                session::saveSession(agentLoop_.get());
                 std::cout << "\nGoodbye!\n";
                 break;
             }
@@ -1463,7 +638,7 @@ private:
             std::getline(std::cin, input);
 
             if (std::cin.eof()) {
-                saveSession(agentLoop_.get());
+                session::saveSession(agentLoop_.get());
                 std::cout << "\nGoodbye!\n";
                 break;
             }
@@ -1608,7 +783,7 @@ private:
 
         // 内置命令
         if (cmd == "exit" || cmd == "quit" || cmd == "q") {
-            saveSession(agentLoop_.get());
+            session::saveSession(agentLoop_.get());
             std::cout << "Goodbye!\n";
             CleanupRegistry::runCleanupFunctions();  // includes restoreTerminal()
             _Exit(0);
@@ -1711,58 +886,9 @@ private:
     }
 };
 
-/// Signal handler — context-aware interrupt handling
-/// - During streaming: sets g_interruptRequested flag (async-signal-safe)
-/// - At idle prompt: double-press-to-exit (800ms window)
-/// - SIGTERM always exits immediately
-///
-/// IMPORTANT: Only async-signal-safe operations are used here.
-/// No spdlog, no mutex, no heap allocation, no non-atomic writes.
-static void signalHandler(int signal) {
-    if (signal == SIGTERM) {
-        restoreTerminal();
-        _Exit(143);
-    }
-
-    if (signal == SIGINT) {
-        // If agent is streaming, set the interrupt flag.
-        // The agent loop checks this flag and cancels itself.
-        if (g_agentStreaming.load(std::memory_order_acquire)) {
-            g_interruptRequested.store(true, std::memory_order_release);
-            // Also abort the API client's stream directly (atomic store, signal-safe)
-            if (g_agentLoop) {
-                g_agentLoop->cancel();
-            }
-            return;
-        }
-
-        // At idle prompt: double-press-to-exit
-        // write() is async-signal-safe
-        const char msg[] = "\nPress Ctrl+C again to exit\n";
-        write(STDERR_FILENO, msg, sizeof(msg) - 1);
-
-        auto now = std::chrono::steady_clock::now();
-        int count = g_ctrlCCount.fetch_add(1, std::memory_order_relaxed) + 1;
-
-        if (count >= 2) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - g_lastCtrlCTime).count();
-            if (elapsed < 800) {
-                restoreTerminal();
-                _Exit(0);
-            }
-            // Too slow — reset and treat as first press
-            g_ctrlCCount.store(1, std::memory_order_relaxed);
-        }
-
-        g_lastCtrlCTime = now;
-    }
-}
-
 int main(int argc, char* argv[]) {
     // Register signal handlers
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    installSignalHandlers();
 
     try {
         ClaudeCodeApp app;
