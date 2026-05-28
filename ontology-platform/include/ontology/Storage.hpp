@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <unordered_set>
 
 namespace ontology {
@@ -87,15 +88,26 @@ public:
     size_t count() const;
     void clear();
 
-    const std::vector<Triple>& all() const { return triples_; }
+    std::vector<Triple> all() const;
 
 private:
     std::vector<Triple> triples_;
     std::unordered_map<String, std::vector<size_t>> subjectIndex_;
     std::unordered_map<String, std::vector<size_t>> predicateIndex_;
     std::unordered_map<String, std::vector<size_t>> objectIndex_;
+    mutable std::shared_mutex mutex_;
 
-    void rebuildIndexes();
+    void rebuildIndexes();  // must be called while holding unique_lock
+
+    // Private unlocked implementations (called under lock by public methods or other _impl)
+    std::vector<Triple> findBySubjectImpl(const String& subject) const;
+    std::vector<Triple> findByPredicateImpl(const String& predicate) const;
+    std::vector<Triple> findByObjectImpl(const String& object) const;
+    std::vector<Triple> findBySPImpl(const String& subject, const String& predicate) const;
+    std::vector<Triple> findByPOImpl(const String& predicate, const String& object) const;
+    std::vector<Triple> findBySOImpl(const String& subject, const String& object) const;
+    std::optional<Triple> findImpl(const String& subject, const String& predicate, const String& object) const;
+    std::vector<Triple> queryImpl(const TriplePattern& pattern) const;
 };
 
 // ============================================================================
