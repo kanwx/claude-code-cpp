@@ -113,13 +113,20 @@ public:
     virtual void setEntityEmbedding(const String& entityId, const std::vector<float>& embedding) = 0;
     virtual void setRelationEmbedding(const String& relationId, const std::vector<float>& embedding) = 0;
 
-    virtual std::vector<std::pair<String, float>> predictTail(const String& subject, const String& relation, int topK) = 0;
-    virtual std::vector<std::pair<String, float>> predictHead(const String& object, const String& relation, int topK) = 0;
-    virtual std::vector<std::pair<String, float>> predictRelation(const String& subject, const String& object, int topK) = 0;
+    virtual std::vector<std::pair<String, float>> predictTail(const String& subject, const String& relation, int topK) const = 0;
+    virtual std::vector<std::pair<String, float>> predictHead(const String& object, const String& relation, int topK) const = 0;
+    virtual std::vector<std::pair<String, float>> predictRelation(const String& subject, const String& object, int topK) const = 0;
 
     virtual String modelName() const = 0;
     virtual int dimension() const = 0;
     virtual Json getStats() const = 0;
+
+    // Extended interface for unified embedding model access
+    virtual float scoreTriple(const Triple& triple) const = 0;
+    virtual std::vector<std::pair<String, float>> findSimilarEntities(
+        const String& entityId, int topK = 10) const = 0;
+    virtual bool save(const String& path) const = 0;
+    virtual bool load(const String& path) = 0;
 };
 
 using EmbeddingModelPtr = std::shared_ptr<EmbeddingModel>;
@@ -138,12 +145,16 @@ public:
     std::vector<float> getRelationEmbedding(const String& relationId) const override;
     void setEntityEmbedding(const String& entityId, const std::vector<float>& embedding) override;
     void setRelationEmbedding(const String& relationId, const std::vector<float>& embedding) override;
-    std::vector<std::pair<String, float>> predictTail(const String& subject, const String& relation, int topK) override;
-    std::vector<std::pair<String, float>> predictHead(const String& object, const String& relation, int topK) override;
-    std::vector<std::pair<String, float>> predictRelation(const String& subject, const String& object, int topK) override;
+    std::vector<std::pair<String, float>> predictTail(const String& subject, const String& relation, int topK) const override;
+    std::vector<std::pair<String, float>> predictHead(const String& object, const String& relation, int topK) const override;
+    std::vector<std::pair<String, float>> predictRelation(const String& subject, const String& object, int topK) const override;
     String modelName() const override { return "TransE"; }
     int dimension() const override { return dimension_; }
     Json getStats() const override;
+    float scoreTriple(const Triple& triple) const override;
+    std::vector<std::pair<String, float>> findSimilarEntities(const String& entityId, int topK = 10) const override;
+    bool save(const String& path) const override;
+    bool load(const String& path) override;
 
     // Legacy compatibility
     std::vector<float> getEmbedding(const String& entityId) { return getEntityEmbedding(entityId); }
@@ -155,8 +166,8 @@ private:
     std::unordered_map<String, std::vector<float>> entityEmbeddings_;
     std::unordered_map<String, std::vector<float>> relationEmbeddings_;
 
-    float distance(const std::vector<float>& h, const std::vector<float>& r, const std::vector<float>& t);
-    float l2Distance(const std::vector<float>& a, const std::vector<float>& b);
+    float distance(const std::vector<float>& h, const std::vector<float>& r, const std::vector<float>& t) const;
+    float l2Distance(const std::vector<float>& a, const std::vector<float>& b) const;
 };
 
 using EmbeddingPtr = std::shared_ptr<TransEEmbedding>;
