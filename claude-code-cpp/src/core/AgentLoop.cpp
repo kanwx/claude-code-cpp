@@ -1,4 +1,5 @@
 #include <claude/core/AgentLoop.hpp>
+#include <claude/core/StreamingToolExecutor.hpp>
 #include <claude/core/compact/CompactPrompt.hpp>
 #include <claude/core/compact/MicroCompact.hpp>
 #include <claude/core/compact/PostCompactCleanup.hpp>
@@ -7,24 +8,112 @@
 #include <claude/core/compact/ApiMicroCompact.hpp>
 #include <claude/tool/ResultTruncation.hpp>
 #include <claude/api/RetryableClient.hpp>
+#include <claude/core/compact/CompactService.hpp>
+#include <claude/core/compact/AutoCompact.hpp>
+#include <claude/core/compact/CompactWarningHook.hpp>
+#include <claude/tool/ToolRegistry.hpp>
+#include <claude/permission/RuleEngine.hpp>
+#include <claude/api/ApiClient.hpp>
+#include <claude/mcp/McpClient.hpp>
+#include <claude/context/ContextInjector.hpp>
 #include <spdlog/spdlog.h>
 
 namespace claude {
+
+// ============================================================================
+// pImpl — all private state lives here, breaking transitive includes
+// ============================================================================
+
+struct AgentLoop::Impl {
+    // Core dependencies
+    ApiClient& apiClient;
+    ToolRegistry& tools;
+    String systemPrompt;
+    std::optional<std::vector<TextBlockParam>> systemBlocks;
+    TokenTracker tokenTracker;
+    ToolContext toolContext;
+    HookManager hookManager;
+    compact::CompactService compactService;
+    std::optional<compact::AutoCompact> autoCompact;
+    compact::CompactWarningHook compactWarningHook;
+
+    // Cognitive backend
+    std::shared_ptr<McpClient> cognitiveMcpClient;
+
+    // Permission engine
+    RuleEngine* permissionEngine = nullptr;
+
+    // StreamingToolExecutor
+    std::optional<StreamingToolExecutor> toolExecutor;
+
+    // Message history
+    std::vector<Message> messageHistory;
+
+    // Callbacks
+    OnToolEvent onToolEvent;
+    std::function<PermissionChoice(const PermissionRequest&)> onPermissionRequest;
+    OnStreamStart onStreamStart;
+    OnThinking onThinking;
+    std::function<void(const String&)> onAssistantMessage;
+    std::function<void(const String& type, int index, const String& content)> onContentBlockStop;
+    std::function<void(const String& toolName, const String& result, bool isError)> onToolResult;
+    std::function<void(int iteration, int totalIterations)> onLoopContinue;
+    std::function<void()> onCancelled;
+    OnStopHook onStopHook;
+    std::function<void(const StreamEvent&)> onStreamEvent;
+
+    // Cancellation
+    std::atomic<bool> cancelled{false};
+
+    // Per-agent overrides
+    int maxIterations = AgentLoop::DEFAULT_MAX_ITERATIONS;
+    double temperature = -1;
+    int maxTokensOverride = -1;
+
+    // Reactive compact
+    int reactiveCompactAttempts = 0;
+
+    // Context injection
+    ContextInjector* contextInjector = nullptr;
+
+    // Tool filtering
+    std::vector<String> allowedTools;
+    std::vector<String> disallowedTools;
+    std::vector<String> pendingSkillTools;
+    String pendingSkillModel;
+
+    // Interleaved execution
+    bool interleaveToolExecution = false;
+
+    // Current user input
+    String currentUserInput;
+
+    // Synchronization
+    mutable std::mutex historyMutex;
+    mutable std::mutex callbackMutex;
+    mutable std::mutex toolFilterMutex;
+    mutable std::mutex stateMutex;
+
+    // Constructor
+    Impl(ApiClient& api, ToolRegistry& reg, const String& prompt)
+        : apiClient(api), tools(reg), systemPrompt(prompt) {}
+};
+
+// ============================================================================
+// Construction / Destruction
+// ============================================================================
 
 AgentLoop::AgentLoop(
     ApiClient& apiClient,
     ToolRegistry& tools,
     const String& systemPrompt
 )
-    : apiClient_(apiClient)
-    , tools_(tools)
-    , systemPrompt_(systemPrompt)
-    , tokenTracker_()
-    , toolContext_(ToolContext::create(std::filesystem::current_path()))
+    : impl_(std::make_unique<Impl>(apiClient, tools, systemPrompt))
 {
-    toolContext_.set("apiClient", static_cast<ApiClient*>(&apiClient_));
-    std::lock_guard lock(historyMutex_);
-    messageHistory_.push_back(Message::system(systemPrompt));
+    impl_->toolContext = ToolContext::create(std::filesystem::current_path());
+    impl_->toolContext.set("apiClient", static_cast<ApiClient*>(&impl_->apiClient));
+    std::lock_guard lock(impl_->historyMutex);
+    impl_->messageHistory.push_back(Message::system(systemPrompt));
 }
 
 AgentLoop::AgentLoop(
@@ -33,59 +122,156 @@ AgentLoop::AgentLoop(
     const String& systemPrompt,
     TokenTracker& tokenTracker
 )
-    : apiClient_(apiClient)
-    , tools_(tools)
-    , systemPrompt_(systemPrompt)
-    , tokenTracker_(std::move(tokenTracker))
-    , toolContext_(ToolContext::create(std::filesystem::current_path()))
+    : impl_(std::make_unique<Impl>(apiClient, tools, systemPrompt))
 {
-    toolContext_.set("apiClient", static_cast<ApiClient*>(&apiClient_));
-    std::lock_guard lock(historyMutex_);
-    messageHistory_.push_back(Message::system(systemPrompt));
+    impl_->tokenTracker = std::move(tokenTracker);
+    impl_->toolContext = ToolContext::create(std::filesystem::current_path());
+    impl_->toolContext.set("apiClient", static_cast<ApiClient*>(&impl_->apiClient));
+    std::lock_guard lock(impl_->historyMutex);
+    impl_->messageHistory.push_back(Message::system(systemPrompt));
 }
+
+AgentLoop::~AgentLoop() = default;
+
+// ============================================================================
+// Blocking mode
+// ============================================================================
 
 std::expected<String, String> AgentLoop::run(const String& userInput) {
     injectContext(userInput);
     {
-        std::lock_guard lock(stateMutex_);
-        currentUserInput_ = userInput;
+        std::lock_guard lock(impl_->stateMutex);
+        impl_->currentUserInput = userInput;
     }
     resetCancel();
     return executeLoop(false, nullptr);
 }
 
+// ============================================================================
+// Streaming mode
+// ============================================================================
+
 std::expected<String, String> AgentLoop::runStreaming(const String& userInput, OnToken onToken) {
     injectContext(userInput);
     {
-        std::lock_guard lock(stateMutex_);
-        currentUserInput_ = userInput;
+        std::lock_guard lock(impl_->stateMutex);
+        impl_->currentUserInput = userInput;
     }
     resetCancel();
     return executeLoop(true, onToken);
 }
 
-void AgentLoop::injectContext(const String& userInput) {
-    if (!contextInjector_) {
-        std::lock_guard lock(historyMutex_);
-        messageHistory_.push_back(Message::user(userInput));
-        return;
-    }
+// ============================================================================
+// Callback registration
+// ============================================================================
 
-    auto ctx = contextInjector_->buildContext(userInput);
-    String contextPrefix = contextInjector_->formatAsMessageContent(ctx);
+void AgentLoop::setOnToolEvent(OnToolEvent callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onToolEvent = std::move(callback);
+}
 
-    if (contextPrefix.empty()) {
-        std::lock_guard lock(historyMutex_);
-        messageHistory_.push_back(Message::user(userInput));
-    } else {
-        // Inject context as a system-reminder user message prefix, matching TS behavior
-        String fullContent = contextPrefix + userInput;
-        std::lock_guard lock(historyMutex_);
-        messageHistory_.push_back(Message::user(fullContent));
-    }
+void AgentLoop::setOnPermissionRequest(
+    std::function<PermissionChoice(const PermissionRequest&)> callback
+) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onPermissionRequest = std::move(callback);
+}
 
-    // Clear per-turn attachments (not system-level context like git/claudeMd)
-    contextInjector_->clearAttachments();
+void AgentLoop::setOnStreamStart(OnStreamStart callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onStreamStart = std::move(callback);
+}
+
+void AgentLoop::setOnThinking(OnThinking callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onThinking = std::move(callback);
+}
+
+void AgentLoop::setOnAssistantMessage(std::function<void(const String&)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onAssistantMessage = std::move(callback);
+}
+
+void AgentLoop::setOnContentBlockStop(std::function<void(const String& type, int index, const String& content)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onContentBlockStop = std::move(callback);
+}
+
+void AgentLoop::setOnToolResult(std::function<void(const String& toolName, const String& result, bool isError)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onToolResult = std::move(callback);
+}
+
+void AgentLoop::initAutoCompact(int contextWindow) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->autoCompact.emplace(impl_->apiClient, contextWindow);
+}
+
+void AgentLoop::setOnLoopContinue(std::function<void(int iteration, int totalIterations)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onLoopContinue = std::move(callback);
+}
+
+void AgentLoop::setOnStreamEvent(std::function<void(const StreamEvent&)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onStreamEvent = std::move(callback);
+}
+
+void AgentLoop::setOnStopHook(OnStopHook callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onStopHook = std::move(callback);
+}
+
+void AgentLoop::setOnCompactWarning(std::function<void(int level, long currentTokens, long maxTokens)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->compactWarningHook.setCallback(std::move(callback));
+}
+
+// ============================================================================
+// Per-agent overrides
+// ============================================================================
+
+void AgentLoop::setMaxIterations(int maxIter) { impl_->maxIterations = maxIter; }
+int AgentLoop::getMaxIterations() const { return impl_->maxIterations; }
+
+void AgentLoop::setTemperature(double temp) { impl_->temperature = temp; }
+double AgentLoop::getTemperature() const { return impl_->temperature; }
+
+void AgentLoop::setMaxTokensOverride(int maxTokens) { impl_->maxTokensOverride = maxTokens; }
+int AgentLoop::getMaxTokensOverride() const { return impl_->maxTokensOverride; }
+
+void AgentLoop::setTaskBudget(long budget) { impl_->tokenTracker.setTaskBudget(budget); }
+long AgentLoop::getTaskBudget() const { return impl_->tokenTracker.getTaskBudget(); }
+long AgentLoop::getTaskBudgetUsed() const { return impl_->tokenTracker.getTaskBudgetUsed(); }
+
+void AgentLoop::setAllowedTools(std::vector<String> tools) {
+    std::lock_guard lock(impl_->toolFilterMutex);
+    impl_->allowedTools = std::move(tools);
+}
+const std::vector<String>& AgentLoop::getAllowedTools() const {
+    std::lock_guard lock(impl_->toolFilterMutex);
+    return impl_->allowedTools;
+}
+
+void AgentLoop::setDisallowedTools(std::vector<String> tools) {
+    std::lock_guard lock(impl_->toolFilterMutex);
+    impl_->disallowedTools = std::move(tools);
+}
+const std::vector<String>& AgentLoop::getDisallowedTools() const {
+    std::lock_guard lock(impl_->toolFilterMutex);
+    return impl_->disallowedTools;
+}
+
+void AgentLoop::setSystemBlocks(std::vector<TextBlockParam> blocks) {
+    impl_->systemBlocks = std::move(blocks);
+}
+
+bool AgentLoop::hasSystemBlocks() const {
+    return impl_->systemBlocks.has_value() && !impl_->systemBlocks->empty();
+}
+
+void AgentLoop::setContextInjector(ContextInjector* injector) {
+    impl_->contextInjector = injector;
 }
 
 void AgentLoop::refreshContext() {
@@ -95,43 +281,141 @@ void AgentLoop::refreshContext() {
     // for the main loop to signal "a new turn is about to begin."
 }
 
+// ============================================================================
+// Permission engine
+// ============================================================================
+
+void AgentLoop::setPermissionEngine(RuleEngine* engine) {
+    impl_->permissionEngine = engine;
+    if (engine) {
+        impl_->toolContext.set("permissionEngine", engine);
+    }
+}
+
+RuleEngine* AgentLoop::getPermissionEngine() const {
+    return impl_->permissionEngine;
+}
+
+// ============================================================================
+// Cognitive backend
+// ============================================================================
+
+void AgentLoop::setCognitiveBackend(std::shared_ptr<McpClient> mcpClient) {
+    impl_->cognitiveMcpClient = std::move(mcpClient);
+    // Auto-register cognitive tools
+    impl_->tools.registerCognitiveTools(impl_->cognitiveMcpClient);
+}
+
+std::shared_ptr<McpClient> AgentLoop::getCognitiveBackend() const {
+    return impl_->cognitiveMcpClient;
+}
+
+bool AgentLoop::hasCognitiveBackend() const {
+    return impl_->cognitiveMcpClient != nullptr;
+}
+
+// ============================================================================
+// Cancellation
+// ============================================================================
+
 void AgentLoop::cancel() {
-    cancelled_.store(true, std::memory_order_release);
-    apiClient_.abort();
-    if (toolExecutor_) {
-        toolExecutor_->cancel();
+    impl_->cancelled.store(true, std::memory_order_release);
+    impl_->apiClient.abort();
+    if (impl_->toolExecutor) {
+        impl_->toolExecutor->cancel();
     }
     // Note: spdlog is NOT async-signal-safe, so we log from the
     // loop's cancel check point rather than here.
 }
 
+bool AgentLoop::isCancelled() const {
+    return impl_->cancelled.load(std::memory_order_acquire);
+}
+
 void AgentLoop::resetCancel() {
-    cancelled_.store(false, std::memory_order_release);
-    apiClient_.resetAbort();
-    if (toolExecutor_) {
+    impl_->cancelled.store(false, std::memory_order_release);
+    impl_->apiClient.resetAbort();
+    if (impl_->toolExecutor) {
         // StreamingToolExecutor resets cancelled_ at the start of each execute() batch
     }
 }
+
+// ============================================================================
+// State access
+// ============================================================================
+
+const std::vector<Message>& AgentLoop::getMessageHistory() const {
+    std::lock_guard lock(impl_->historyMutex);
+    return impl_->messageHistory;
+}
+
+TokenTracker& AgentLoop::getTokenTracker() {
+    return impl_->tokenTracker;
+}
+
+const TokenTracker& AgentLoop::getTokenTracker() const {
+    return impl_->tokenTracker;
+}
+
+const String& AgentLoop::getSystemPrompt() const {
+    return impl_->systemPrompt;
+}
+
+ApiClient& AgentLoop::getApiClient() {
+    return impl_->apiClient;
+}
+
+ToolContext& AgentLoop::getToolContext() {
+    return impl_->toolContext;
+}
+
+HookManager& AgentLoop::getHookManager() {
+    return impl_->hookManager;
+}
+
+// ============================================================================
+// History management
+// ============================================================================
+
+void AgentLoop::reset() {
+    std::lock_guard lock(impl_->historyMutex);
+    impl_->messageHistory.clear();
+    impl_->messageHistory.push_back(Message::system(impl_->systemPrompt));
+}
+
+void AgentLoop::replaceHistory(std::vector<Message> newHistory) {
+    std::lock_guard lock(impl_->historyMutex);
+    impl_->messageHistory = std::move(newHistory);
+}
+
+size_t AgentLoop::getMessageCount() const {
+    std::lock_guard lock(impl_->historyMutex);
+    return impl_->messageHistory.size();
+}
+
+// ============================================================================
+// Core loop — TAOR: Think-Act-Observe-Repeat
+// ============================================================================
 
 std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onToken) {
     int iteration = 0;
     String lastAssistantText;
     int maxOutputTokensRecoveryCount = 0;
     {
-        std::lock_guard lock(stateMutex_);
-        reactiveCompactAttempts_ = 0;
+        std::lock_guard lock(impl_->stateMutex);
+        impl_->reactiveCompactAttempts = 0;
     }
 
-    while (iteration < maxIterations_) {
+    while (iteration < impl_->maxIterations) {
         iteration++;
 
         // Check cancellation at start of each iteration
-        if (cancelled_.load(std::memory_order_acquire)) {
+        if (impl_->cancelled.load(std::memory_order_acquire)) {
             spdlog::debug("AgentLoop: cancelled at iteration {}", iteration);
             {
                 auto cb = [&] {
-                    std::lock_guard lock(callbackMutex_);
-                    return onCancelled_;
+                    std::lock_guard lock(impl_->callbackMutex);
+                    return impl_->onCancelled;
                 }();
                 if (cb) cb();
             }
@@ -144,13 +428,13 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 
         spdlog::debug("Agent loop iteration {} ({})", iteration, streaming ? "streaming" : "blocking");
 
-        // 通知循环继续 (TAOR Repeat阶段)
+        // Notify loop continue (TAOR Repeat phase)
         if (iteration > 1) {
             auto cb = [&] {
-                std::lock_guard lock(callbackMutex_);
-                return onLoopContinue_;
+                std::lock_guard lock(impl_->callbackMutex);
+                return impl_->onLoopContinue;
             }();
-            if (cb) cb(iteration, maxIterations_);
+            if (cb) cb(iteration, impl_->maxIterations);
         }
 
         // Emit StreamStart at beginning of each iteration
@@ -159,17 +443,17 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         // Apply skill model override for this iteration (save/restore pattern)
         String savedModelForSkill;
         {
-            std::lock_guard lock(toolFilterMutex_);
-            if (!pendingSkillModel_.empty()) {
-                savedModelForSkill = apiClient_.getModelName();
-                apiClient_.setModel(pendingSkillModel_);
+            std::lock_guard lock(impl_->toolFilterMutex);
+            if (!impl_->pendingSkillModel.empty()) {
+                savedModelForSkill = impl_->apiClient.getModelName();
+                impl_->apiClient.setModel(impl_->pendingSkillModel);
             }
         }
 
-        // 构建请求
+        // Build request
         Json request = buildApiRequest();
 
-        // 调用 API
+        // Call API
         IterationResult result;
         try {
             if (streaming && onToken) {
@@ -205,19 +489,19 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 
             // 4. Inject system warning message
             {
-                std::lock_guard lock(historyMutex_);
-                messageHistory_.push_back(Message::user(
+                std::lock_guard lock(impl_->historyMutex);
+                impl_->messageHistory.push_back(Message::user(
                     "[System: Switched to " + fb.toModel + " due to high demand for " +
                     (fb.fromModel.empty() ? String("primary model") : fb.fromModel) + "]"));
-                messageHistory_.push_back(Message::assistant(
+                impl_->messageHistory.push_back(Message::assistant(
                     "Understood. I'll continue with " + fb.toModel + "."));
             }
 
             // 5. Reset recovery counters
             maxOutputTokensRecoveryCount = 0;
             {
-                std::lock_guard lock(stateMutex_);
-                reactiveCompactAttempts_ = 0;
+                std::lock_guard lock(impl_->stateMutex);
+                impl_->reactiveCompactAttempts = 0;
             }
 
             continue;  // Retry with fallback model
@@ -226,45 +510,45 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             return std::unexpected("API call failed: " + String(e.what()));
         }
 
-        // 记录使用量
+        // Record usage
         if (result.usage.promptTokens > 0 || result.usage.completionTokens > 0) {
-            tokenTracker_.recordUsage(result.usage.promptTokens, result.usage.completionTokens);
-            tokenTracker_.recordTaskUsage(result.usage.promptTokens, result.usage.completionTokens);
+            impl_->tokenTracker.recordUsage(result.usage.promptTokens, result.usage.completionTokens);
+            impl_->tokenTracker.recordTaskUsage(result.usage.promptTokens, result.usage.completionTokens);
         }
 
         // Restore model after skill override (if applied for this iteration)
         if (!savedModelForSkill.empty()) {
-            apiClient_.setModel(savedModelForSkill);
-            std::lock_guard lock(toolFilterMutex_);
-            pendingSkillModel_.clear();
+            impl_->apiClient.setModel(savedModelForSkill);
+            std::lock_guard lock(impl_->toolFilterMutex);
+            impl_->pendingSkillModel.clear();
         }
         // Clear skill tool restriction after use (applied in buildApiRequest)
         {
-            std::lock_guard lock(toolFilterMutex_);
-            if (!pendingSkillTools_.empty()) {
-                pendingSkillTools_.clear();
+            std::lock_guard lock(impl_->toolFilterMutex);
+            if (!impl_->pendingSkillTools.empty()) {
+                impl_->pendingSkillTools.clear();
             }
         }
 
         // Check task budget
-        if (tokenTracker_.isTaskBudgetExceeded()) {
+        if (impl_->tokenTracker.isTaskBudgetExceeded()) {
             spdlog::info("Task budget exceeded: {}/{} tokens",
-                tokenTracker_.getTaskBudgetUsed(), tokenTracker_.getTaskBudget());
+                impl_->tokenTracker.getTaskBudgetUsed(), impl_->tokenTracker.getTaskBudget());
             lastAssistantText += "\n\n[Task budget exceeded: " +
-                std::to_string(tokenTracker_.getTaskBudgetUsed()) + "/" +
-                std::to_string(tokenTracker_.getTaskBudget()) + " tokens used]";
+                std::to_string(impl_->tokenTracker.getTaskBudgetUsed()) + "/" +
+                std::to_string(impl_->tokenTracker.getTaskBudget()) + " tokens used]";
             break;
         }
 
         // Check cancellation after API call returns
         // If cancelled mid-stream, the partial message may have incomplete content.
         // Don't add it to history — just return what we have.
-        if (cancelled_.load(std::memory_order_acquire)) {
+        if (impl_->cancelled.load(std::memory_order_acquire)) {
             spdlog::debug("AgentLoop: cancelled after API iteration {}", iteration);
             {
                 auto cb = [&] {
-                    std::lock_guard lock(callbackMutex_);
-                    return onCancelled_;
+                    std::lock_guard lock(impl_->callbackMutex);
+                    return impl_->onCancelled;
                 }();
                 if (cb) cb();
             }
@@ -274,11 +558,11 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             return std::unexpected("Cancelled by user");
         }
 
-        // 添加助手消息到历史
+        // Add assistant message to history
         result.message.apiRound = iteration;
         {
-            std::lock_guard lock(historyMutex_);
-            messageHistory_.push_back(result.message);
+            std::lock_guard lock(impl_->historyMutex);
+            impl_->messageHistory.push_back(result.message);
         }
 
         // ========== Stop Hook ==========
@@ -290,7 +574,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             hookCtx.toolName = "response";
             hookCtx.extras["stopReason"] = result.stopReason;
             hookCtx.extras["content"] = result.message.content;
-            auto hookResult = hookManager_.execute(HookType::PostResponse, hookCtx);
+            auto hookResult = impl_->hookManager.execute(HookType::PostResponse, hookCtx);
             if (hookResult.shouldAbort()) {
                 spdlog::info("PostResponse hook aborted the loop");
                 String reason = hookCtx.extras.count("reason") ? hookCtx.extras["reason"] : "Hook blocked continuation";
@@ -301,15 +585,15 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             // Then: run Stop hook (can force continuation)
             {
                 auto cb = [&] {
-                    std::lock_guard lock(callbackMutex_);
-                    return onStopHook_;
+                    std::lock_guard lock(impl_->callbackMutex);
+                    return impl_->onStopHook;
                 }();
                 if (cb) {
                     auto stopResult = cb();
                     if (stopResult.shouldContinue) {
                         spdlog::info("Stop hook forced continuation: {}", stopResult.reason);
-                        std::lock_guard lock(historyMutex_);
-                        messageHistory_.push_back(Message::user(
+                        std::lock_guard lock(impl_->historyMutex);
+                        impl_->messageHistory.push_back(Message::user(
                             "[System: Continue your work. " + stopResult.reason + "]"));
                         continue;
                     }
@@ -317,21 +601,21 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             }
         }
 
-        // 提取文本
+        // Extract text
         if (!result.message.content.empty()) {
             lastAssistantText = result.message.content;
             if (!streaming) {
                 auto cb = [&] {
-                    std::lock_guard lock(callbackMutex_);
-                    return onAssistantMessage_;
+                    std::lock_guard lock(impl_->callbackMutex);
+                    return impl_->onAssistantMessage;
                 }();
                 if (cb) cb(lastAssistantText);
             }
         }
 
-        // ========== max_output_tokens 恢复机制 ==========
-        // 当模型因 max_tokens 截断时，自动续写而不是终止
-        // 匹配原版 TS 的 recovery loop 行为
+        // ========== max_output_tokens recovery mechanism ==========
+        // When the model is truncated by max_tokens, auto-continue instead of terminating
+        // Matches original TS recovery loop behavior
         if (result.stopReason == "max_tokens" || result.stopReason == "length") {
             maxOutputTokensRecoveryCount++;
             if (maxOutputTokensRecoveryCount <= MAX_OUTPUT_TOKENS_RECOVERY) {
@@ -339,27 +623,27 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                     maxOutputTokensRecoveryCount, MAX_OUTPUT_TOKENS_RECOVERY);
 
                 // Escalate max_tokens on 2nd+ recovery attempt
-                if (maxOutputTokensRecoveryCount >= 2 && maxTokensOverride_ < ESCALATED_MAX_TOKENS) {
-                    maxTokensOverride_ = ESCALATED_MAX_TOKENS;
+                if (maxOutputTokensRecoveryCount >= 2 && impl_->maxTokensOverride < ESCALATED_MAX_TOKENS) {
+                    impl_->maxTokensOverride = ESCALATED_MAX_TOKENS;
                     spdlog::info("Escalating max_tokens to {} for recovery", ESCALATED_MAX_TOKENS);
                 }
 
-                // 添加续写指令 (匹配原版TS: "Resume directly — no apology, no recap")
+                // Add continuation instruction (matching original TS: "Resume directly — no apology, no recap")
                 {
-                    std::lock_guard lock(historyMutex_);
-                    messageHistory_.push_back(Message::assistant(
+                    std::lock_guard lock(impl_->historyMutex);
+                    impl_->messageHistory.push_back(Message::assistant(
                         "Continue from where you left off. Do not repeat what you already wrote. "
                         "Resume directly — no apology, no recap."
                     ));
                 }
                 continue;  // TAOR: Repeat
             }
-            // 超过恢复次数，添加截断警告并结束
+            // Exceeded recovery attempts, add truncation warning and end
             lastAssistantText += "\n\n[Output truncated: max tokens reached]";
             break;
         }
 
-        // 没有工具调用 → 结束
+        // No tool calls → end
         if (!result.message.hasToolCalls() && result.interleavedToolResults.empty()) {
             break;
         }
@@ -381,12 +665,12 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // Check cancellation after tool execution
-        if (cancelled_.load(std::memory_order_acquire)) {
+        if (impl_->cancelled.load(std::memory_order_acquire)) {
             spdlog::debug("AgentLoop: cancelled after tool execution at iteration {}", iteration);
             {
                 auto cb = [&] {
-                    std::lock_guard lock(callbackMutex_);
-                    return onCancelled_;
+                    std::lock_guard lock(impl_->callbackMutex);
+                    return impl_->onCancelled;
                 }();
                 if (cb) cb();
             }
@@ -441,64 +725,68 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                 pendingSkillModel, pendingSkillTools.size(), pendingSkillPrompt.size());
         }
 
-        // 添加工具结果到历史
+        // Add tool results to history
         {
             auto toolMsg = Message::toolResult(std::move(toolResponses));
             toolMsg.apiRound = iteration;
-            std::lock_guard lock(historyMutex_);
-            messageHistory_.push_back(std::move(toolMsg));
+            std::lock_guard lock(impl_->historyMutex);
+            impl_->messageHistory.push_back(std::move(toolMsg));
         }
 
         // Inject skill prompt as a new user message
         if (!pendingSkillPrompt.empty()) {
             {
-                std::lock_guard lock(historyMutex_);
-                messageHistory_.push_back(Message::user(pendingSkillPrompt));
+                std::lock_guard lock(impl_->historyMutex);
+                impl_->messageHistory.push_back(Message::user(pendingSkillPrompt));
             }
 
             // Store skill model override — will be applied in the next executeLoop iteration
             if (!pendingSkillModel.empty()) {
-                std::lock_guard lock(toolFilterMutex_);
-                pendingSkillModel_ = std::move(pendingSkillModel);
-                spdlog::info("Skill model override: {}", pendingSkillModel_);
+                std::lock_guard lock(impl_->toolFilterMutex);
+                impl_->pendingSkillModel = std::move(pendingSkillModel);
+                spdlog::info("Skill model override: {}", impl_->pendingSkillModel);
             }
 
             // Store skill tool restriction — will be applied in buildApiRequest()
             if (!pendingSkillTools.empty()) {
-                std::lock_guard lock(toolFilterMutex_);
-                pendingSkillTools_ = std::move(pendingSkillTools);
-                spdlog::info("Skill tool restriction: {} tools", pendingSkillTools_.size());
+                std::lock_guard lock(impl_->toolFilterMutex);
+                impl_->pendingSkillTools = std::move(pendingSkillTools);
+                spdlog::info("Skill tool restriction: {} tools", impl_->pendingSkillTools.size());
             }
 
             spdlog::debug("Skill prompt injected as user message");
         }
 
-        // ========== 微压缩：清除过期工具结果 ==========
+        // ========== Micro-compact: clear expired tool results ==========
         applyMicrocompact();
 
-        // ========== 自动压缩：上下文窗口超 93% 时压缩 ==========
+        // ========== Auto-compact: compact when context window exceeds 93% ==========
         applyAutoCompact();
 
-        // TAOR: 循环继续 — 下一轮 Think
+        // TAOR: loop continue — next Think round
     }
 
-    if (iteration >= maxIterations_) {
-        spdlog::warn("Agent loop reached max iterations {}", maxIterations_);
+    if (iteration >= impl_->maxIterations) {
+        spdlog::warn("Agent loop reached max iterations {}", impl_->maxIterations);
         lastAssistantText += "\n\n[WARNING: Maximum loop iteration limit reached]";
     }
 
     // Reset escalated max_tokens to default — only reset if we escalated
     // (don't reset user-set overrides that weren't from recovery escalation)
-    if (maxTokensOverride_ > 0 && maxTokensOverride_ == ESCALATED_MAX_TOKENS) {
-        apiClient_.setMaxTokens(16384);
-        maxTokensOverride_ = -1;  // Reset override
+    if (impl_->maxTokensOverride > 0 && impl_->maxTokensOverride == ESCALATED_MAX_TOKENS) {
+        impl_->apiClient.setMaxTokens(16384);
+        impl_->maxTokensOverride = -1;  // Reset override
     }
 
     return lastAssistantText;
 }
 
+// ============================================================================
+// Blocking iteration
+// ============================================================================
+
 AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
-    auto response = apiClient_.call(request["messages"], request["tools"]);
+    auto response = impl_->apiClient.call(request["messages"], request["tools"]);
 
     if (!response) {
         throw std::runtime_error(response.error());
@@ -506,7 +794,7 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
 
     Json& res = *response;
 
-    // 解析使用量
+    // Parse usage
     Usage usage;
     if (res.contains("usage") && res["usage"].is_object()) {
         const auto& u = res["usage"];
@@ -521,10 +809,10 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
         }
     }
 
-    // 解析 stop_reason
+    // Parse stop_reason
     String stopReason = res.is_object() ? res.value("stop_reason", res.value("finish_reason", "end_turn")) : "end_turn";
 
-    // 解析消息
+    // Parse message
     Message msg = Message::assistant("");
 
     if (res.contains("content")) {
@@ -546,7 +834,7 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
         }
     }
 
-    // OpenAI 格式
+    // OpenAI format
     if (res.contains("message")) {
         if (res["message"].contains("content") && res["message"]["content"].is_string()) {
             msg.content = res["message"]["content"].get<String>();
@@ -569,6 +857,10 @@ AgentLoop::IterationResult AgentLoop::blockingIteration(const Json& request) {
     return {msg, usage, stopReason};
 }
 
+// ============================================================================
+// Streaming iteration
+// ============================================================================
+
 AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, OnToken onToken) {
     String textBuffer;
     std::vector<ToolCall> toolCalls;
@@ -581,17 +873,17 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     {
         bool shouldInterleave = false;
         {
-            std::lock_guard lock(stateMutex_);
-            shouldInterleave = interleaveToolExecution_;
+            std::lock_guard lock(impl_->stateMutex);
+            shouldInterleave = impl_->interleaveToolExecution;
         }
-        if (shouldInterleave && !toolExecutor_) {
+        if (shouldInterleave && !impl_->toolExecutor) {
             auto permCb = [&] {
-                std::lock_guard lock2(callbackMutex_);
-                return onPermissionRequest_;
+                std::lock_guard lock2(impl_->callbackMutex);
+                return impl_->onPermissionRequest;
             }();
-            toolExecutor_.emplace(tools_, toolContext_, hookManager_, permissionEngine_);
-            toolExecutor_->setOnPermissionRequest(permCb);
-            toolExecutor_->setTranscript(&messageHistory_);
+            impl_->toolExecutor.emplace(impl_->tools, impl_->toolContext, impl_->hookManager, impl_->permissionEngine);
+            impl_->toolExecutor->setOnPermissionRequest(permCb);
+            impl_->toolExecutor->setTranscript(&impl_->messageHistory);
         }
     }
 
@@ -616,7 +908,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         }
         long estimatedInputTokens = allText.length() / 4;
         if (estimatedInputTokens > 0) {
-            tokenTracker_.recordUsage(estimatedInputTokens, 0);
+            impl_->tokenTracker.recordUsage(estimatedInputTokens, 0);
         }
     }
 
@@ -630,8 +922,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     std::map<int, std::pair<String, String>> thinkingBlocks;
     std::vector<Json> redactedThinkingBlocks;  // Preserve for re-emission in API requests
 
-    apiClient_.stream(request["messages"], request["tools"], [&](const Json& chunk) {
-        // 处理使用量 (包括缓存 tokens)
+    impl_->apiClient.stream(request["messages"], request["tools"], [&](const Json& chunk) {
+        // Handle usage (including cache tokens)
         if (chunk.contains("usage") && chunk["usage"].is_object()) {
             const auto& u = chunk["usage"];
             if (u.contains("prompt_tokens") && u["prompt_tokens"].is_number()) {
@@ -648,11 +940,11 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 usage.promptTokens, usage.completionTokens, usage.totalTokens);
 
             if (usage.promptTokens > 0 || usage.completionTokens > 0) {
-                tokenTracker_.recordUsage(usage.promptTokens, usage.completionTokens);
+                impl_->tokenTracker.recordUsage(usage.promptTokens, usage.completionTokens);
             }
         }
 
-        // Anthropic 格式
+        // Anthropic format
         String type = chunk.value("type", "");
 
         // Handle content_block_start for tool_use and thinking
@@ -704,8 +996,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     if (firstToken) {
                         firstToken = false;
                         auto cb = [&] {
-                            std::lock_guard lock2(callbackMutex_);
-                            return onStreamStart_;
+                            std::lock_guard lock2(impl_->callbackMutex);
+                            return impl_->onStreamStart;
                         }();
                         if (cb) cb();
                     }
@@ -727,8 +1019,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                         thinkingBlocks[index].first += thinking;
                     }
                     auto cb = [&] {
-                        std::lock_guard lock2(callbackMutex_);
-                        return onThinking_;
+                        std::lock_guard lock2(impl_->callbackMutex);
+                        return impl_->onThinking;
                     }();
                     if (cb) cb(thinking);
                 }
@@ -741,9 +1033,9 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             }
         }
 
-        // ========== content_block_stop: 关键的 block 级 yield ==========
-        // 匹配原版 TS 在每个 content_block_stop 时 yield 一个 AssistantMessage
-        // 这是流畅输出的核心：不等整个 response 完成，每个块完成即通知UI
+        // ========== content_block_stop: key block-level yield ==========
+        // Matches original TS yielding an AssistantMessage at each content_block_stop
+        // Core of smooth output: notify UI as each block completes, not the entire response
         if (type == "content_block_stop") {
             int index = chunk.contains("index") && chunk["index"].is_number() ? chunk["index"].get<int>() : 0;
             String blockType = "unknown";
@@ -754,17 +1046,17 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 // Interleaved execution: dispatch this tool call immediately
                 bool shouldInterleave = false;
                 {
-                    std::lock_guard lock2(stateMutex_);
-                    shouldInterleave = interleaveToolExecution_;
+                    std::lock_guard lock2(impl_->stateMutex);
+                    shouldInterleave = impl_->interleaveToolExecution;
                 }
-                if (shouldInterleave && toolExecutor_) {
+                if (shouldInterleave && impl_->toolExecutor) {
                     auto it = anthropicToolCalls.find(index);
                     if (it != anthropicToolCalls.end()) {
                         // Validate JSON before dispatching
                         try {
                             auto parsed = Json::parse(it->second.arguments);
                             (void)parsed;
-                            toolExecutor_->enqueue(std::move(it->second), index);
+                            impl_->toolExecutor->enqueue(std::move(it->second), index);
                             anthropicToolCalls.erase(it);
                         } catch (...) {
                             // Invalid JSON — leave in map, will be filtered later
@@ -787,8 +1079,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 // Already captured in redactedThinkingBlocks at content_block_start
             } else {
                 auto cb = [&] {
-                    std::lock_guard lock2(callbackMutex_);
-                    return onContentBlockStop_;
+                    std::lock_guard lock2(impl_->callbackMutex);
+                    return impl_->onContentBlockStop;
                 }();
                 if (cb) {
                     String content;
@@ -829,7 +1121,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             }
         }
 
-        // OpenAI 格式
+        // OpenAI format
         if (chunk.contains("choices") && chunk["choices"].is_array()) {
             for (const auto& choice : chunk["choices"]) {
                 if (!choice.is_object()) continue;
@@ -837,15 +1129,15 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 if (choice.contains("delta") && choice["delta"].is_object()) {
                     const auto& delta = choice["delta"];
 
-                    // 文本内容
+                    // Text content
                     if (delta.contains("content") && delta["content"].is_string()) {
                         String text = delta["content"].get<String>();
                         if (!text.empty()) {
                             if (firstToken) {
                                 firstToken = false;
                                 auto streamStartCb = [&] {
-                                    std::lock_guard lock2(callbackMutex_);
-                                    return onStreamStart_;
+                                    std::lock_guard lock2(impl_->callbackMutex);
+                                    return impl_->onStreamStart;
                                 }();
                                 if (streamStartCb) streamStartCb();
                             }
@@ -854,12 +1146,12 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
 
                             estimatedOutputTokens = textBuffer.length() / 4;
                             if (estimatedOutputTokens > 0) {
-                                tokenTracker_.setOutputTokens(estimatedOutputTokens);
+                                impl_->tokenTracker.setOutputTokens(estimatedOutputTokens);
                             }
                         }
                     }
 
-                    // 工具调用 (OpenAI 流式格式)
+                    // Tool calls (OpenAI streaming format)
                     if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
                         for (const auto& tc : delta["tool_calls"]) {
                             if (!tc.is_object()) continue;
@@ -903,8 +1195,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     // content_block_stop equivalent for OpenAI format
                     {
                         auto cb = [&] {
-                            std::lock_guard lock2(callbackMutex_);
-                            return onContentBlockStop_;
+                            std::lock_guard lock2(impl_->callbackMutex);
+                            return impl_->onContentBlockStop;
                         }();
                         if (cb) {
                             cb(finish == "tool_calls" ? "tool_use" : "text", 0, "");
@@ -919,11 +1211,11 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     std::vector<ToolResponse> interleavedToolResponses;
     bool shouldCollect = false;
     {
-        std::lock_guard lock(stateMutex_);
-        shouldCollect = interleaveToolExecution_;
+        std::lock_guard lock(impl_->stateMutex);
+        shouldCollect = impl_->interleaveToolExecution;
     }
-    if (shouldCollect && toolExecutor_ && toolExecutor_->hasPending()) {
-        auto interleaveExecResults = toolExecutor_->collectResults();
+    if (shouldCollect && impl_->toolExecutor && impl_->toolExecutor->hasPending()) {
+        auto interleaveExecResults = impl_->toolExecutor->collectResults();
         interleavedToolResponses.reserve(interleaveExecResults.size());
         for (auto& ier : interleaveExecResults) {
             StreamEvent toolResultEvent;
@@ -976,7 +1268,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
 
     // If cancelled during streaming and no valid tool calls remain,
     // treat as end of turn rather than tool_use
-    if (cancelled_.load(std::memory_order_acquire) && toolCalls.empty()) {
+    if (impl_->cancelled.load(std::memory_order_acquire) && toolCalls.empty()) {
         stopReason = "end_turn";
     }
 
@@ -1005,31 +1297,35 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     return {msg, usage, stopReason, std::move(interleavedToolResponses)};
 }
 
+// ============================================================================
+// Tool execution
+// ============================================================================
+
 std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall>& calls) {
-    // ========== 初始化 StreamingToolExecutor (lazy) ==========
-    if (!toolExecutor_) {
-        toolExecutor_.emplace(tools_, toolContext_, hookManager_, permissionEngine_);
+    // ========== Initialize StreamingToolExecutor (lazy) ==========
+    if (!impl_->toolExecutor) {
+        impl_->toolExecutor.emplace(impl_->tools, impl_->toolContext, impl_->hookManager, impl_->permissionEngine);
     }
 
-    auto& executor = *toolExecutor_;
+    auto& executor = *impl_->toolExecutor;
 
     // Wire callbacks from AgentLoop into the executor — copy under lock
     auto permCb = [&] {
-        std::lock_guard lock(callbackMutex_);
-        return onPermissionRequest_;
+        std::lock_guard lock(impl_->callbackMutex);
+        return impl_->onPermissionRequest;
     }();
     executor.setOnPermissionRequest(permCb);
-    executor.setTranscript(&messageHistory_);
+    executor.setTranscript(&impl_->messageHistory);
 
     // Store parent permission callback in ToolContext for sub-agent delegation
-    toolContext_.set("parentPermissionCallback", permCb);
+    impl_->toolContext.set("parentPermissionCallback", permCb);
 
     executor.setOnToolStart([this](const String& toolName, const String& description) {
         notifyToolEvent(ToolEventPhase::Start, toolName, description);
     });
 
     executor.setOnToolComplete([this](const String& toolName, bool success) {
-        // Tool end notification is handled via onToolResult_ below,
+        // Tool end notification is handled via onToolResult below,
         // but we fire the general event here for completeness
         if (!success) {
             notifyToolEvent(ToolEventPhase::End, toolName, "", "Error");
@@ -1054,8 +1350,8 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
         bool isError = er.response.isError;
 
         // Emit tool result — goes through emitStreamEvent which dispatches
-        // to onStreamEvent_ if set, or falls back to onToolResult_.
-        // Do NOT call onToolResult_ directly here or it fires twice.
+        // to onStreamEvent if set, or falls back to onToolResult.
+        // Do NOT call onToolResult directly here or it fires twice.
         StreamEvent toolResultEvent;
         toolResultEvent.type = StreamEvent::Type::ToolResultReady;
         toolResultEvent.toolName = er.response.toolName;
@@ -1081,13 +1377,13 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
 }
 
 String AgentLoop::executeTool(const ToolCall& call) {
-    // 查找工具
-    Tool* tool = tools_.findByName(call.name);
+    // Find tool
+    Tool* tool = impl_->tools.findByName(call.name);
     if (!tool) {
         return "Error: Unknown tool '" + call.name + "'";
     }
 
-    // 解析参数
+    // Parse arguments
     Json input;
     try {
         input = Json::parse(call.arguments);
@@ -1095,29 +1391,29 @@ String AgentLoop::executeTool(const ToolCall& call) {
         return "Error: Invalid JSON arguments: " + String(e.what());
     }
 
-    // 通知开始
+    // Notify start
     notifyToolEvent(ToolEventPhase::Start, call.name, call.arguments);
 
     // ========== PreToolUse Hook ==========
     HookContext preCtx;
     preCtx.toolName = call.name;
     preCtx.input = input;
-    if (hookManager_.execute(HookType::PreToolUse, preCtx) .shouldAbort()) {
+    if (impl_->hookManager.execute(HookType::PreToolUse, preCtx) .shouldAbort()) {
         notifyToolEvent(ToolEventPhase::End, call.name, call.arguments, "Hook blocked");
         return "Error: Tool blocked by pre-tool hook";
     }
 
-    // 权限检查 (考虑 hook 的权限覆盖)
+    // Permission check (consider hook permission override)
     auto permOverride = preCtx.getPermissionOverride();
     if (permOverride && *permOverride) {
-        // Hook 强制允许：跳过权限检查
+        // Hook force-allow: skip permission check
         spdlog::debug("Permission overridden by hook: allowing {}", call.name);
     } else if (permOverride && !*permOverride) {
-        // Hook 强制拒绝
+        // Hook force-deny
         notifyToolEvent(ToolEventPhase::End, call.name, call.arguments, "Hook denied");
         return "Permission denied";
-    } else if (permissionEngine_) {
-        auto decision = permissionEngine_->evaluate(call.name, input, tool->isReadOnly(), messageHistory_);
+    } else if (impl_->permissionEngine) {
+        auto decision = impl_->permissionEngine->evaluate(call.name, input, tool->isReadOnly(), impl_->messageHistory);
 
         if (decision.isDenied()) {
             notifyToolEvent(ToolEventPhase::End, call.name, call.arguments, "Permission denied");
@@ -1126,8 +1422,8 @@ String AgentLoop::executeTool(const ToolCall& call) {
 
         if (decision.needsAsk()) {
             auto permCb = [&] {
-                std::lock_guard lock(callbackMutex_);
-                return onPermissionRequest_;
+                std::lock_guard lock(impl_->callbackMutex);
+                return impl_->onPermissionRequest;
             }();
             if (permCb) {
                 PermissionRequest req{call.name, call.arguments, tool->activityDescription(input)};
@@ -1138,22 +1434,22 @@ String AgentLoop::executeTool(const ToolCall& call) {
                     return "Permission denied";
                 }
 
-                // 应用选择
+                // Apply choice
                 String command = input.is_object() ? input.value("command", input.value("file_path", "")) : "";
-                permissionEngine_->applyChoice(choice, call.name, command);
+                impl_->permissionEngine->applyChoice(choice, call.name, command);
             }
         }
     }
 
-    // 执行
+    // Execute
     String result;
     try {
-        result = tool->execute(input, toolContext_);
+        result = tool->execute(input, impl_->toolContext);
     } catch (const std::exception& e) {
         result = "Error: " + String(e.what());
     }
 
-    // ========== 工具结果预算截断 ==========
+    // ========== Tool result budget truncation ==========
     if (result.size() > tool->maxResultSizeChars()) {
         spdlog::info("Tool [{}] result size {} exceeds budget {}, truncating",
             call.name, result.size(), tool->maxResultSizeChars());
@@ -1165,7 +1461,7 @@ String AgentLoop::executeTool(const ToolCall& call) {
     postCtx.toolName = call.name;
     postCtx.input = input;
     postCtx.result = result;
-    if (hookManager_.execute(HookType::PostToolUse, postCtx) .shouldAbort()) {
+    if (impl_->hookManager.execute(HookType::PostToolUse, postCtx) .shouldAbort()) {
         return "Error: Tool execution blocked by post-tool hook";
     }
     // Hook may have modified the result
@@ -1173,8 +1469,8 @@ String AgentLoop::executeTool(const ToolCall& call) {
         result = *postCtx.result;
     }
 
-    // 通知结束 (注意: 对于并发执行的工具，End通知在executeToolCalls中统一处理)
-    // 对于串行执行的工具，这里直接通知
+    // Notify end (note: for concurrent tools, End notification is handled in executeToolCalls)
+    // For sequential tools, notify directly here
     if (!isToolReadOnly(call.name)) {
         notifyToolEvent(ToolEventPhase::End, call.name, call.arguments, result);
     }
@@ -1183,19 +1479,23 @@ String AgentLoop::executeTool(const ToolCall& call) {
 }
 
 bool AgentLoop::isToolReadOnly(const String& toolName) const {
-    Tool* tool = tools_.findByName(toolName);
+    Tool* tool = impl_->tools.findByName(toolName);
     if (!tool) return false;
     return tool->isReadOnly();
 }
+
+// ============================================================================
+// API request building
+// ============================================================================
 
 Json AgentLoop::buildApiRequest() {
     Json messages = Json::array();
 
     {
-        // Snapshot messageHistory_ under lock to iterate safely.
+        // Snapshot messageHistory under lock to iterate safely.
         // vector can be reallocated by concurrent push_back.
-        std::lock_guard lock(historyMutex_);
-        for (const auto& msg : messageHistory_) {
+        std::lock_guard lock(impl_->historyMutex);
+        for (const auto& msg : impl_->messageHistory) {
             Json m;
 
             switch (msg.role) {
@@ -1204,9 +1504,9 @@ Json AgentLoop::buildApiRequest() {
                     // If we have pre-built system blocks with cache_control,
                     // serialize them as a JSON array so AnthropicClient can
                     // detect and use them directly (instead of the flat string).
-                    if (systemBlocks_.has_value() && !systemBlocks_->empty()) {
+                    if (impl_->systemBlocks.has_value() && !impl_->systemBlocks->empty()) {
                         Json contentArray = Json::array();
-                        for (const auto& block : *systemBlocks_) {
+                        for (const auto& block : *impl_->systemBlocks) {
                             contentArray.push_back(block.toJson());
                         }
                         m["content"] = contentArray;
@@ -1267,8 +1567,8 @@ Json AgentLoop::buildApiRequest() {
     Json req;
     req["messages"] = messages;
 
-    // 转换工具定义为 JSON 数组 (根据 provider 格式)
-    String provider = apiClient_.getProviderName();
+    // Convert tool definitions to JSON array (per provider format)
+    String provider = impl_->apiClient.getProviderName();
     Json toolsJson = Json::array();
 
     // Snapshot tool filter lists under lock
@@ -1276,13 +1576,13 @@ Json AgentLoop::buildApiRequest() {
     std::vector<String> localAllowedTools;
     std::vector<String> localDisallowedTools;
     {
-        std::lock_guard lock(toolFilterMutex_);
-        localPendingSkillTools = pendingSkillTools_;
-        localAllowedTools = allowedTools_;
-        localDisallowedTools = disallowedTools_;
+        std::lock_guard lock(impl_->toolFilterMutex);
+        localPendingSkillTools = impl_->pendingSkillTools;
+        localAllowedTools = impl_->allowedTools;
+        localDisallowedTools = impl_->disallowedTools;
     }
 
-    for (const auto& def : tools_.toToolDefinitions()) {
+    for (const auto& def : impl_->tools.toToolDefinitions()) {
         String toolName = def.name;
 
         // Apply tool filtering: allowedTools, disallowedTools, and skill-restricted tools
@@ -1320,63 +1620,101 @@ Json AgentLoop::buildApiRequest() {
     req["tools"] = toolsJson;
 
     // Apply per-agent overrides if set
-    if (temperature_ >= 0) {
-        apiClient_.setTemperature(temperature_);
+    if (impl_->temperature >= 0) {
+        impl_->apiClient.setTemperature(impl_->temperature);
     }
-    if (maxTokensOverride_ > 0) {
-        apiClient_.setMaxTokens(maxTokensOverride_);
+    if (impl_->maxTokensOverride > 0) {
+        impl_->apiClient.setMaxTokens(impl_->maxTokensOverride);
     }
 
     return req;
 }
 
+// ============================================================================
+// Context injection
+// ============================================================================
+
+void AgentLoop::injectContext(const String& userInput) {
+    if (!impl_->contextInjector) {
+        std::lock_guard lock(impl_->historyMutex);
+        impl_->messageHistory.push_back(Message::user(userInput));
+        return;
+    }
+
+    auto ctx = impl_->contextInjector->buildContext(userInput);
+    String contextPrefix = impl_->contextInjector->formatAsMessageContent(ctx);
+
+    if (contextPrefix.empty()) {
+        std::lock_guard lock(impl_->historyMutex);
+        impl_->messageHistory.push_back(Message::user(userInput));
+    } else {
+        // Inject context as a system-reminder user message prefix, matching TS behavior
+        String fullContent = contextPrefix + userInput;
+        std::lock_guard lock(impl_->historyMutex);
+        impl_->messageHistory.push_back(Message::user(fullContent));
+    }
+
+    // Clear per-turn attachments (not system-level context like git/claudeMd)
+    impl_->contextInjector->clearAttachments();
+}
+
+// ============================================================================
+// Helper methods
+// ============================================================================
+
 void AgentLoop::notifyToolEvent(ToolEventPhase phase, const String& name,
                                 const String& args, const String& result) {
     auto cb = [&] {
-        std::lock_guard lock(callbackMutex_);
-        return onToolEvent_;
+        std::lock_guard lock(impl_->callbackMutex);
+        return impl_->onToolEvent;
     }();
     if (cb) {
         cb({phase, name, args, result});
     }
 }
 
-void AgentLoop::reset() {
-    std::lock_guard lock(historyMutex_);
-    messageHistory_.clear();
-    messageHistory_.push_back(Message::system(systemPrompt_));
+// ============================================================================
+// Interleaved tool execution (private)
+// ============================================================================
+
+void AgentLoop::setInterleaveToolExecution(bool enable) {
+    std::lock_guard lock(impl_->stateMutex);
+    impl_->interleaveToolExecution = enable;
+}
+bool AgentLoop::isInterleaveToolExecution() const {
+    std::lock_guard lock(impl_->stateMutex);
+    return impl_->interleaveToolExecution;
 }
 
-void AgentLoop::replaceHistory(std::vector<Message> newHistory) {
-    std::lock_guard lock(historyMutex_);
-    messageHistory_ = std::move(newHistory);
-}
+// ============================================================================
+// Compact operations
+// ============================================================================
 
 void AgentLoop::applyMicrocompact() {
-    std::lock_guard lock(historyMutex_);
+    std::lock_guard lock(impl_->historyMutex);
     // Use MicroCompact for age-based tool result clearing
-    int compacted = compact::MicroCompact::apply(messageHistory_);
+    int compacted = compact::MicroCompact::apply(impl_->messageHistory);
     if (compacted > 0) {
         spdlog::info("Microcompact: cleared {} old tool result content fields", compacted);
     }
 
     // Context-pressure-based micro-compact: compact large results when window is filling
-    double usageRatio = tokenTracker_.getUsagePercentage();
+    double usageRatio = impl_->tokenTracker.getUsagePercentage();
     if (usageRatio >= 0.70) {
-        int pressureCompacted = compact::MicroCompact::applyByPressure(messageHistory_, usageRatio);
+        int pressureCompacted = compact::MicroCompact::applyByPressure(impl_->messageHistory, usageRatio);
         if (pressureCompacted > 0) {
             compacted += pressureCompacted;
         }
     }
 
     // Also check for API streaming micro-compact (prompt >85% of context window)
-    long promptTokens = tokenTracker_.getInputTokens();
-    long apiContextWindow = tokenTracker_.getUsagePercentage() > 0
-        ? static_cast<long>(tokenTracker_.getTotalTokens() / tokenTracker_.getUsagePercentage())
+    long promptTokens = impl_->tokenTracker.getInputTokens();
+    long apiContextWindow = impl_->tokenTracker.getUsagePercentage() > 0
+        ? static_cast<long>(impl_->tokenTracker.getTotalTokens() / impl_->tokenTracker.getUsagePercentage())
         : TokenTracker::DEFAULT_CONTEXT_WINDOW;
     if (apiContextWindow > 0 && compact::ApiMicroCompact::shouldTrigger(
             Usage{promptTokens, 0, 0}, static_cast<int>(apiContextWindow))) {
-        long reclaimed = compact::ApiMicroCompact::compact(messageHistory_);
+        long reclaimed = compact::ApiMicroCompact::compact(impl_->messageHistory);
         if (reclaimed > 0) {
             spdlog::info("ApiMicroCompact: reclaimed ~{} tokens", reclaimed);
         }
@@ -1385,31 +1723,31 @@ void AgentLoop::applyMicrocompact() {
 
 bool AgentLoop::applyAutoCompact() {
     // ========== Compact warning hook ==========
-    long currentTokens = tokenTracker_.getInputTokens();
-    long contextWindow = tokenTracker_.getUsagePercentage() > 0
-        ? static_cast<long>(tokenTracker_.getTotalTokens() / tokenTracker_.getUsagePercentage())
+    long currentTokens = impl_->tokenTracker.getInputTokens();
+    long contextWindow = impl_->tokenTracker.getUsagePercentage() > 0
+        ? static_cast<long>(impl_->tokenTracker.getTotalTokens() / impl_->tokenTracker.getUsagePercentage())
         : TokenTracker::DEFAULT_CONTEXT_WINDOW;
-    compactWarningHook_.check(currentTokens, contextWindow);
+    impl_->compactWarningHook.check(currentTokens, contextWindow);
 
     // ========== Auto-compact: use AutoCompact class if initialized ==========
-    // autoCompact_ is set once via initAutoCompact() before the loop starts,
-    // so reading it without lock is safe. We guard the check under callbackMutex_
+    // autoCompact is set once via initAutoCompact() before the loop starts,
+    // so reading it without lock is safe. We guard the check under callbackMutex
     // to be formally correct with respect to concurrent initAutoCompact() calls.
     bool hasAutoCompact = false;
     {
-        std::lock_guard lock(callbackMutex_);
-        hasAutoCompact = autoCompact_.has_value();
+        std::lock_guard lock(impl_->callbackMutex);
+        hasAutoCompact = impl_->autoCompact.has_value();
     }
-    if (hasAutoCompact && autoCompact_->shouldTrigger(currentTokens)) {
+    if (hasAutoCompact && impl_->autoCompact->shouldTrigger(currentTokens)) {
         spdlog::info("Auto-compact triggered: usage at {:.1f}% of context window",
             static_cast<double>(currentTokens) / contextWindow * 100.0);
 
         std::vector<Message> historySnapshot;
         {
-            std::lock_guard lock(historyMutex_);
-            historySnapshot = messageHistory_;
+            std::lock_guard lock(impl_->historyMutex);
+            historySnapshot = impl_->messageHistory;
         }
-        auto newHistory = autoCompact_->compact(historySnapshot);
+        auto newHistory = impl_->autoCompact->compact(historySnapshot);
         if (newHistory) {
             // Post-compact cleanup
             compact::PostCompactCleanup::cleanup(*newHistory);
@@ -1425,12 +1763,12 @@ bool AgentLoop::applyAutoCompact() {
                 }
             }
 
-            std::lock_guard lock(historyMutex_);
-            size_t oldSize = messageHistory_.size();
-            messageHistory_ = std::move(*newHistory);
+            std::lock_guard lock(impl_->historyMutex);
+            size_t oldSize = impl_->messageHistory.size();
+            impl_->messageHistory = std::move(*newHistory);
 
             long estimatedNewTokens = 0;
-            for (const auto& msg : messageHistory_) {
+            for (const auto& msg : impl_->messageHistory) {
                 estimatedNewTokens += static_cast<long>(msg.content.size()) / 4;
                 for (const auto& tc : msg.toolCalls) {
                     estimatedNewTokens += static_cast<long>(tc.arguments.size()) / 4;
@@ -1439,16 +1777,16 @@ bool AgentLoop::applyAutoCompact() {
                     estimatedNewTokens += static_cast<long>(tr.content.size()) / 4;
                 }
             }
-            tokenTracker_.adjustAfterCompaction(estimatedNewTokens);
+            impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
 
             spdlog::info("Auto-compact completed: {} messages -> {} messages",
-                oldSize, messageHistory_.size());
+                oldSize, impl_->messageHistory.size());
             return true;
         }
     }
 
-    // ========== Fallback: use LLM-based compaction when autoCompact_ is not initialized ==========
-    if (!tokenTracker_.shouldAutoCompact()) {
+    // ========== Fallback: use LLM-based compaction when autoCompact is not initialized ==========
+    if (!impl_->tokenTracker.shouldAutoCompact()) {
         return false;
     }
 
@@ -1457,23 +1795,23 @@ bool AgentLoop::applyAutoCompact() {
     std::vector<Message> recentMsgsSnapshot;
     Message systemPromptMsg;
     {
-        std::lock_guard lock(historyMutex_);
-        if (messageHistory_.size() <= 3) {
+        std::lock_guard lock(impl_->historyMutex);
+        if (impl_->messageHistory.size() <= 3) {
             spdlog::debug("Auto-compact: too few messages to compress");
             return false;
         }
 
         size_t keepRecent = 5;
-        if (messageHistory_.size() <= keepRecent + 1) {
+        if (impl_->messageHistory.size() <= keepRecent + 1) {
             spdlog::debug("Auto-compact: not enough messages beyond recent to compress");
             return false;
         }
 
-        systemPromptMsg = messageHistory_[0];
-        toCompressSnapshot.assign(messageHistory_.begin() + 1,
-            messageHistory_.end() - keepRecent);
-        recentMsgsSnapshot.assign(messageHistory_.end() - keepRecent,
-            messageHistory_.end());
+        systemPromptMsg = impl_->messageHistory[0];
+        toCompressSnapshot.assign(impl_->messageHistory.begin() + 1,
+            impl_->messageHistory.end() - keepRecent);
+        recentMsgsSnapshot.assign(impl_->messageHistory.end() - keepRecent,
+            impl_->messageHistory.end());
     }
 
     // Build compression prompt from snapshot (no lock needed)
@@ -1503,7 +1841,7 @@ bool AgentLoop::applyAutoCompact() {
 
     Json noTools = Json::array();
 
-    auto llmResult = apiClient_.call(summaryMessages, noTools);
+    auto llmResult = impl_->apiClient.call(summaryMessages, noTools);
     if (!llmResult) {
         spdlog::warn("Auto-compact LLM call failed: {}", llmResult.error());
         return false;
@@ -1559,19 +1897,19 @@ bool AgentLoop::applyAutoCompact() {
     compact::PostCompactCleanup::cleanup(newHistory);
 
     {
-        std::lock_guard lock(historyMutex_);
-        size_t oldSize = messageHistory_.size();
-        messageHistory_ = std::move(newHistory);
+        std::lock_guard lock(impl_->historyMutex);
+        size_t oldSize = impl_->messageHistory.size();
+        impl_->messageHistory = std::move(newHistory);
 
         // Adjust token tracker
         long estimatedNewTokens = 0;
-        for (const auto& msg : messageHistory_) {
+        for (const auto& msg : impl_->messageHistory) {
             estimatedNewTokens += static_cast<long>(msg.content.size()) / 4;
         }
-        tokenTracker_.adjustAfterCompaction(estimatedNewTokens);
+        impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
 
         spdlog::info("Auto-compact (fallback) completed: {} messages -> {} messages",
-            oldSize, messageHistory_.size());
+            oldSize, impl_->messageHistory.size());
     }
 
     return true;
@@ -1579,44 +1917,44 @@ bool AgentLoop::applyAutoCompact() {
 
 bool AgentLoop::attemptReactiveCompact(long tokenGap) {
     {
-        std::lock_guard lock(stateMutex_);
-        if (reactiveCompactAttempts_ >= MAX_REACTIVE_COMPACT_ATTEMPTS) {
+        std::lock_guard lock(impl_->stateMutex);
+        if (impl_->reactiveCompactAttempts >= MAX_REACTIVE_COMPACT_ATTEMPTS) {
             spdlog::warn("Reactive compact: max attempts ({}) reached", MAX_REACTIVE_COMPACT_ATTEMPTS);
             return false;
         }
 
-        reactiveCompactAttempts_++;
+        impl_->reactiveCompactAttempts++;
         spdlog::info("Reactive compact: attempt {}/{} (413 prompt-too-long recovery, token gap: {})",
-            reactiveCompactAttempts_, MAX_REACTIVE_COMPACT_ATTEMPTS, tokenGap);
+            impl_->reactiveCompactAttempts, MAX_REACTIVE_COMPACT_ATTEMPTS, tokenGap);
     }
 
     // Force compact regardless of threshold
-    if (autoCompact_) {
+    if (impl_->autoCompact) {
         std::vector<Message> historySnapshot;
         {
-            std::lock_guard lock(historyMutex_);
-            historySnapshot = messageHistory_;
+            std::lock_guard lock(impl_->historyMutex);
+            historySnapshot = impl_->messageHistory;
         }
-        auto newHistory = autoCompact_->compact(historySnapshot);
+        auto newHistory = impl_->autoCompact->compact(historySnapshot);
         if (newHistory) {
             compact::PostCompactCleanup::cleanup(*newHistory);
-            std::lock_guard lock(historyMutex_);
-            messageHistory_ = std::move(*newHistory);
+            std::lock_guard lock(impl_->historyMutex);
+            impl_->messageHistory = std::move(*newHistory);
 
             // Adjust token tracker
             long estimatedNewTokens = 0;
-            for (const auto& msg : messageHistory_) {
+            for (const auto& msg : impl_->messageHistory) {
                 estimatedNewTokens += static_cast<long>(msg.content.size()) / 4;
             }
-            tokenTracker_.adjustAfterCompaction(estimatedNewTokens);
+            impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
             return true;
         }
     }
 
     // Fallback: aggressive micro-compact
     {
-        std::lock_guard lock(historyMutex_);
-        int compacted = compact::MicroCompact::applyByPressure(messageHistory_, 0.50);
+        std::lock_guard lock(impl_->historyMutex);
+        int compacted = compact::MicroCompact::applyByPressure(impl_->messageHistory, 0.50);
         if (compacted > 0) {
             spdlog::info("Reactive compact (micro): cleared {} tool results", compacted);
             return true;
@@ -1627,23 +1965,23 @@ bool AgentLoop::attemptReactiveCompact(long tokenGap) {
 }
 
 void AgentLoop::addMissingToolResults() {
-    std::lock_guard lock(historyMutex_);
-    if (messageHistory_.empty()) return;
+    std::lock_guard lock(impl_->historyMutex);
+    if (impl_->messageHistory.empty()) return;
 
     // Find the last assistant message with tool calls
-    auto it = messageHistory_.rbegin();
-    for (; it != messageHistory_.rend(); ++it) {
+    auto it = impl_->messageHistory.rbegin();
+    for (; it != impl_->messageHistory.rend(); ++it) {
         if (it->role == MessageRole::Assistant && it->hasToolCalls()) {
             break;
         }
     }
-    if (it == messageHistory_.rend()) return;
+    if (it == impl_->messageHistory.rend()) return;
 
     // Check if the message after this assistant message is a tool_result
-    auto assistantIdx = std::distance(messageHistory_.begin(), it.base()) - 1;
+    auto assistantIdx = std::distance(impl_->messageHistory.begin(), it.base()) - 1;
     bool hasToolResult = false;
-    if (assistantIdx + 1 < static_cast<long>(messageHistory_.size())) {
-        hasToolResult = (messageHistory_[assistantIdx + 1].role == MessageRole::ToolResult);
+    if (assistantIdx + 1 < static_cast<long>(impl_->messageHistory.size())) {
+        hasToolResult = (impl_->messageHistory[assistantIdx + 1].role == MessageRole::ToolResult);
     }
 
     if (!hasToolResult) {
@@ -1658,22 +1996,28 @@ void AgentLoop::addMissingToolResults() {
             errorResults.push_back(std::move(resp));
         }
         if (!errorResults.empty()) {
-            messageHistory_.push_back(Message::toolResult(std::move(errorResults)));
+            impl_->messageHistory.push_back(Message::toolResult(std::move(errorResults)));
             spdlog::info("Added {} synthetic error tool_results for unmatched tool_uses", errorResults.size());
         }
     }
 }
 
 void AgentLoop::stripThinkingFromHistory() {
-    std::lock_guard lock(historyMutex_);
-    for (auto& msg : messageHistory_) {
+    std::lock_guard lock(impl_->historyMutex);
+    for (auto& msg : impl_->messageHistory) {
         msg.thinking.reset();
         msg.signature.reset();
     }
     spdlog::debug("Stripped thinking/signature blocks from message history");
 }
 
-// ========== Stream Event Emission ==========
+void AgentLoop::extractThinkingContent(const Json& /*response*/) {
+    // Placeholder — thinking extraction is handled inline in streamingIteration
+}
+
+// ============================================================================
+// Stream Event Emission
+// ============================================================================
 
 void AgentLoop::emitStreamEvent(StreamEvent event) {
     // Copy all relevant callbacks under one lock, then invoke outside lock
@@ -1682,13 +2026,13 @@ void AgentLoop::emitStreamEvent(StreamEvent event) {
     std::function<void(const String&)> localThinking;
     std::function<void(const String&, const String&, bool)> localToolResult;
     {
-        std::lock_guard lock(callbackMutex_);
-        localStreamEvent = onStreamEvent_;
+        std::lock_guard lock(impl_->callbackMutex);
+        localStreamEvent = impl_->onStreamEvent;
         if (!localStreamEvent) {
             // Snapshot individual callbacks for fallback dispatch
-            localStreamStart = onStreamStart_;
-            localThinking = onThinking_;
-            localToolResult = onToolResult_;
+            localStreamStart = impl_->onStreamStart;
+            localThinking = impl_->onThinking;
+            localToolResult = impl_->onToolResult;
         }
     }
 
@@ -1711,14 +2055,14 @@ void AgentLoop::emitStreamEvent(StreamEvent event) {
             break;
         case StreamEvent::Type::ToolUseStart:
         case StreamEvent::Type::ToolUseComplete:
-            // Tool events go through onToolEvent_ and onContentBlockStop_
+            // Tool events go through onToolEvent and onContentBlockStop
             break;
         case StreamEvent::Type::ToolResultReady:
             if (localToolResult) localToolResult(event.toolName, event.toolResult, event.toolIsError);
             break;
         case StreamEvent::Type::Tombstone:
             // Tombstone events notify the UI that previous content is invalidated
-            // No individual callback equivalent — only via onStreamEvent_
+            // No individual callback equivalent — only via onStreamEvent
             break;
         case StreamEvent::Type::StreamEnd:
         case StreamEvent::Type::StreamError:
@@ -1729,7 +2073,7 @@ void AgentLoop::emitStreamEvent(StreamEvent event) {
         case StreamEvent::Type::CompactBoundary:
         case StreamEvent::Type::HookSummary:
         case StreamEvent::Type::ToolChunkReady:
-            // These have no individual callback equivalents — only via onStreamEvent_
+            // These have no individual callback equivalents — only via onStreamEvent
             break;
     }
 }

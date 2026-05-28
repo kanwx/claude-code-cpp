@@ -2,45 +2,49 @@
 
 #include "Types.hpp"
 #include "TokenTracker.hpp"
-#include "HookManager.hpp"
-#include "StreamingToolExecutor.hpp"
-#include "compact/CompactService.hpp"
-#include "compact/AutoCompact.hpp"
-#include "compact/CompactWarningHook.hpp"
-#include "../tool/ToolRegistry.hpp"
-#include "../tool/ToolContext.hpp"
-#include "../permission/RuleEngine.hpp"
-#include "../api/ApiClient.hpp"
-#include "../mcp/McpClient.hpp"
 #include "../ui/MessagePipeline.hpp"
-#include "../context/ContextInjector.hpp"
+#include "../permission/PermissionTypes.hpp"
+#include "../tool/ToolContext.hpp"
+#include "HookManager.hpp"
 #include <functional>
 #include <vector>
 #include <memory>
-#include <optional>
 #include <expected>
-#include <atomic>
-#include <mutex>
 
 namespace claude {
 
-/// Agent 循环 —— 借鉴 Java AgentLoop 设计
+// Forward declarations — full definitions only needed in AgentLoop.cpp
+class ToolRegistry;
+class ToolContext;
+class RuleEngine;
+class ContextInjector;
+class McpClient;
+class ApiClient;
+class HookManager;
+
+namespace compact {
+class CompactService;
+class AutoCompact;
+class CompactWarningHook;
+} // namespace compact
+
+/// Agent loop — inspired by Java AgentLoop design
 ///
-/// 核心对话管理，支持两种模式：
-/// - run() —— 阻塞模式，等待完整响应
-/// - runStreaming() —— 流式模式，逐 token 实时输出
+/// Core conversation management, supporting two modes:
+/// - run() — blocking mode, waits for complete response
+/// - runStreaming() — streaming mode, real-time per-token output
 ///
-/// 流式输出采用 Think-Act-Observe-Repeat (TAOR) 循环：
-/// - Think: 模型流式输出文本 + 思考
-/// - Act: 执行工具调用（只读工具并发）
-/// - Observe: 工具结果实时回传
-/// - Repeat: 将结果追加到历史，继续循环
+/// Streaming output uses Think-Act-Observe-Repeat (TAOR) loop:
+/// - Think: model streams text + thinking
+/// - Act: execute tool calls (read-only tools concurrent)
+/// - Observe: tool results sent back in real time
+/// - Repeat: append results to history, continue loop
 class AgentLoop {
 public:
-    /// 单轮最大迭代次数，防止无限循环
+    /// Maximum iterations per turn, prevents infinite loops
     static constexpr int DEFAULT_MAX_ITERATIONS = 50;
 
-    /// max_output_tokens 恢复最大重试次数
+    /// max_output_tokens recovery max retry count
     static constexpr int MAX_OUTPUT_TOKENS_RECOVERY = 3;
 
     /// Escalated max_tokens for recovery (when default is too small)
@@ -60,7 +64,7 @@ public:
     /// Called when the model stops with end_turn (not max_tokens).
     using OnStopHook = std::function<StopHookResult()>;
 
-    // ========== 构造 ==========
+    // ========== Construction ==========
 
     AgentLoop(
         ApiClient& apiClient,
@@ -75,267 +79,185 @@ public:
         TokenTracker& tokenTracker
     );
 
-    ~AgentLoop() = default;
+    /// Destructor must be defined in .cpp (Impl is incomplete type in header)
+    ~AgentLoop();
 
-    // ========== 阻塞模式 ==========
+    // Non-copyable, non-movable (holds references and unique_ptr)
+    AgentLoop(const AgentLoop&) = delete;
+    AgentLoop& operator=(const AgentLoop&) = delete;
+    AgentLoop(AgentLoop&&) = delete;
+    AgentLoop& operator=(AgentLoop&&) = delete;
 
-    /// 阻塞执行一轮用户输入的完整 Agent 循环
-    /// 等待完整响应后才返回
+    // ========== Blocking mode ==========
+
+    /// Execute a complete Agent loop for one user input (blocking)
+    /// Waits for complete response before returning
     std::expected<String, String> run(const String& userInput);
 
-    // ========== 流式模式 ==========
+    // ========== Streaming mode ==========
 
-    /// 流式执行一轮用户输入的完整 Agent 循环
-    /// 文本逐 token 通过 onToken 回调实时输出
+    /// Execute a streaming Agent loop for one user input
+    /// Text is delivered per-token via onToken callback in real time
     std::expected<String, String> runStreaming(
         const String& userInput,
         OnToken onToken
     );
 
-    // ========== 回调注册 (借鉴 Java 函数式设计) ==========
+    // ========== Callback registration (inspired by Java functional design) ==========
 
-    /// 设置工具事件回调
-    void setOnToolEvent(OnToolEvent callback) {
-        std::lock_guard lock(callbackMutex_);
-        onToolEvent_ = std::move(callback);
-    }
+    /// Set tool event callback
+    void setOnToolEvent(OnToolEvent callback);
 
-    /// 设置权限确认回调
+    /// Set permission confirmation callback
     void setOnPermissionRequest(
         std::function<PermissionChoice(const PermissionRequest&)> callback
-    ) {
-        std::lock_guard lock(callbackMutex_);
-        onPermissionRequest_ = std::move(callback);
-    }
+    );
 
-    /// 设置流式开始回调
-    void setOnStreamStart(OnStreamStart callback) {
-        std::lock_guard lock(callbackMutex_);
-        onStreamStart_ = std::move(callback);
-    }
+    /// Set stream start callback
+    void setOnStreamStart(OnStreamStart callback);
 
-    /// 设置思考内容回调
-    void setOnThinking(OnThinking callback) {
-        std::lock_guard lock(callbackMutex_);
-        onThinking_ = std::move(callback);
-    }
+    /// Set thinking content callback
+    void setOnThinking(OnThinking callback);
 
-    /// 设置助手消息回调
-    void setOnAssistantMessage(std::function<void(const String&)> callback) {
-        std::lock_guard lock(callbackMutex_);
-        onAssistantMessage_ = std::move(callback);
-    }
+    /// Set assistant message callback
+    void setOnAssistantMessage(std::function<void(const String&)> callback);
 
-    /// 设置内容块完成回调 — 每个 content_block_stop 时触发
-    /// 这是流畅输出的关键：每个文本块/工具块完成时立即通知UI，
-    /// 而不是等待整个 response 完成
-    void setOnContentBlockStop(std::function<void(const String& type, int index, const String& content)> callback) {
-        std::lock_guard lock(callbackMutex_);
-        onContentBlockStop_ = std::move(callback);
-    }
+    /// Set content block stop callback — fires on each content_block_stop
+    /// Key to smooth output: notifies UI as each block completes,
+    /// rather than waiting for the entire response
+    void setOnContentBlockStop(std::function<void(const String& type, int index, const String& content)> callback);
 
-    /// 设置工具结果流式回调 — 每个工具完成时立即触发
-    /// 允许UI在工具执行过程中逐步显示结果，而非等待所有工具完成
-    void setOnToolResult(std::function<void(const String& toolName, const String& result, bool isError)> callback) {
-        std::lock_guard lock(callbackMutex_);
-        onToolResult_ = std::move(callback);
-    }
+    /// Set tool result streaming callback — fires as each tool completes
+    /// Allows UI to display results progressively during tool execution
+    void setOnToolResult(std::function<void(const String& toolName, const String& result, bool isError)> callback);
 
-    /// 初始化 AutoCompact (需要 ApiClient 和上下文窗口大小)
-    void initAutoCompact(int contextWindow) {
-        std::lock_guard lock(callbackMutex_);
-        autoCompact_.emplace(apiClient_, contextWindow);
-    }
+    /// Initialize AutoCompact (needs ApiClient and context window size)
+    void initAutoCompact(int contextWindow);
 
-    /// 设置循环继续回调 — 当TAOR循环继续下一轮时触发
-    /// 让UI知道模型正在继续思考/行动
-    void setOnLoopContinue(std::function<void(int iteration, int totalIterations)> callback) {
-        std::lock_guard lock(callbackMutex_);
-        onLoopContinue_ = std::move(callback);
-    }
+    /// Set loop continue callback — fires when TAOR loop continues to next iteration
+    /// Lets UI know the model is continuing to think/act
+    void setOnLoopContinue(std::function<void(int iteration, int totalIterations)> callback);
 
-    /// 设置统一流事件回调 — 替代5个独立回调的新接口
-    /// 当设置后，AgentLoop 通过此回调发送 StreamEvent 事件
-    /// 向后兼容：现有独立回调仍然生效（作为回退）
-    void setOnStreamEvent(std::function<void(const StreamEvent&)> callback) {
-        std::lock_guard lock(callbackMutex_);
-        onStreamEvent_ = std::move(callback);
-    }
+    /// Set unified stream event callback — new interface replacing 5 independent callbacks
+    /// When set, AgentLoop sends StreamEvent events through this callback
+    /// Backward compatible: existing independent callbacks still work (as fallback)
+    void setOnStreamEvent(std::function<void(const StreamEvent&)> callback);
 
     /// Set the stop hook callback.
     /// When the model stops (end_turn), this hook runs and can force continuation.
-    void setOnStopHook(OnStopHook callback) {
-        std::lock_guard lock(callbackMutex_);
-        onStopHook_ = std::move(callback);
-    }
+    void setOnStopHook(OnStopHook callback);
 
-    /// 设置上下文压缩预警回调 — 当 token 使用量接近上下文窗口上限时触发
+    /// Set context compact warning callback — fires when token usage approaches context window limit
     /// level 1: 80% (warning), level 2: 93% (critical)
-    void setOnCompactWarning(std::function<void(int level, long currentTokens, long maxTokens)> callback) {
-        std::lock_guard lock(callbackMutex_);
-        compactWarningHook_.setCallback(std::move(callback));
-    }
+    void setOnCompactWarning(std::function<void(int level, long currentTokens, long maxTokens)> callback);
 
     // ========== Per-agent overrides ==========
 
     /// Set max iterations (overrides default 50). Used by sub-agents.
-    void setMaxIterations(int maxIter) { maxIterations_ = maxIter; }
-    int getMaxIterations() const { return maxIterations_; }
+    void setMaxIterations(int maxIter);
+    int getMaxIterations() const;
 
     /// Set temperature for API calls (-1 = use API default). Used by sub-agents.
-    void setTemperature(double temp) { temperature_ = temp; }
-    double getTemperature() const { return temperature_; }
+    void setTemperature(double temp);
+    double getTemperature() const;
 
     /// Set max_tokens override for API calls (-1 = use ApiClient default). Used by sub-agents.
-    void setMaxTokensOverride(int maxTokens) { maxTokensOverride_ = maxTokens; }
-    int getMaxTokensOverride() const { return maxTokensOverride_; }
+    void setMaxTokensOverride(int maxTokens);
+    int getMaxTokensOverride() const;
 
     /// Set per-task token budget (0 = unlimited). Loop stops when exceeded.
-    void setTaskBudget(long budget) { tokenTracker_.setTaskBudget(budget); }
-    long getTaskBudget() const { return tokenTracker_.getTaskBudget(); }
-    long getTaskBudgetUsed() const { return tokenTracker_.getTaskBudgetUsed(); }
+    void setTaskBudget(long budget);
+    long getTaskBudget() const;
+    long getTaskBudgetUsed() const;
 
     /// Set allowed tools filter — only these tools will be sent in API requests.
     /// Empty means all registered tools are available (default).
-    void setAllowedTools(std::vector<String> tools) {
-        std::lock_guard lock(toolFilterMutex_);
-        allowedTools_ = std::move(tools);
-    }
-    const std::vector<String>& getAllowedTools() const {
-        std::lock_guard lock(toolFilterMutex_);
-        return allowedTools_;
-    }
+    void setAllowedTools(std::vector<String> tools);
+    const std::vector<String>& getAllowedTools() const;
 
     /// Set disallowed tools — these tools will be excluded from API requests.
-    void setDisallowedTools(std::vector<String> tools) {
-        std::lock_guard lock(toolFilterMutex_);
-        disallowedTools_ = std::move(tools);
-    }
-    const std::vector<String>& getDisallowedTools() const {
-        std::lock_guard lock(toolFilterMutex_);
-        return disallowedTools_;
-    }
+    void setDisallowedTools(std::vector<String> tools);
+    const std::vector<String>& getDisallowedTools() const;
 
     /// Set pre-built system prompt blocks with cache_control markers.
     /// When set, buildApiRequest() serializes these blocks instead of
     /// the flat systemPrompt_ string, enabling proper prompt caching
     /// (global cache on static sections, org cache on the last block).
-    void setSystemBlocks(std::vector<TextBlockParam> blocks) {
-        systemBlocks_ = std::move(blocks);
-    }
+    void setSystemBlocks(std::vector<TextBlockParam> blocks);
 
     /// Check if system prompt blocks are available
-    bool hasSystemBlocks() const {
-        return systemBlocks_.has_value() && !systemBlocks_->empty();
-    }
+    bool hasSystemBlocks() const;
 
     /// Set context injector for per-turn context injection.
     /// When set, buildContext() is called before each user turn to inject
     /// git status, CLAUDE.md, system reminders, skills, memories, and attachments.
-    void setContextInjector(ContextInjector* injector) {
-        contextInjector_ = injector;
-    }
+    void setContextInjector(ContextInjector* injector);
 
     /// Refresh dynamic context (git status, etc.) before a new turn.
     /// Called by the main loop between turns.
     void refreshContext();
 
-    // ========== 权限引擎 ==========
+    // ========== Permission engine ==========
 
-    void setPermissionEngine(RuleEngine* engine) {
-        permissionEngine_ = engine;
-        if (engine) {
-            toolContext_.set("permissionEngine", engine);
-        }
-    }
+    void setPermissionEngine(RuleEngine* engine);
+    RuleEngine* getPermissionEngine() const;
 
-    RuleEngine* getPermissionEngine() const {
-        return permissionEngine_;
-    }
+    // ========== Cognitive backend ==========
 
-    // ========== 认知后端 ==========
+    /// Set cognitive backend MCP client and register cognitive tools
+    void setCognitiveBackend(std::shared_ptr<McpClient> mcpClient);
 
-    /// 设置认知后端 MCP 客户端并注册认知工具
-    void setCognitiveBackend(std::shared_ptr<McpClient> mcpClient) {
-        cognitiveMcpClient_ = std::move(mcpClient);
-        // 自动注册认知工具
-        tools_.registerCognitiveTools(cognitiveMcpClient_);
-    }
+    /// Get cognitive backend client
+    std::shared_ptr<McpClient> getCognitiveBackend() const;
 
-    /// 获取认知后端客户端
-    std::shared_ptr<McpClient> getCognitiveBackend() const {
-        return cognitiveMcpClient_;
-    }
+    /// Check if cognitive backend is enabled
+    bool hasCognitiveBackend() const;
 
-    /// 检查是否启用认知后端
-    bool hasCognitiveBackend() const {
-        return cognitiveMcpClient_ != nullptr;
-    }
-
-    // ========== 中断 ==========
+    // ========== Cancellation ==========
 
     /// Cancel the running agent loop and any in-flight API stream.
     /// Thread-safe: may be called from the UI thread or signal handler.
     void cancel();
 
     /// Check if cancel was requested
-    bool isCancelled() const { return cancelled_.load(std::memory_order_acquire); }
+    bool isCancelled() const;
 
     /// Reset cancellation state for a new turn
     void resetCancel();
 
-    // ========== 状态访问 ==========
+    // ========== State access ==========
 
     /// Thread-safety: caller must not hold the returned reference across
     /// mutation points (push_back, clear, replaceHistory). If concurrent
     /// access is possible, copy under historyMutex_ or use getMessageCount().
-    const std::vector<Message>& getMessageHistory() const {
-        std::lock_guard lock(historyMutex_);
-        return messageHistory_;
-    }
+    const std::vector<Message>& getMessageHistory() const;
 
-    TokenTracker& getTokenTracker() {
-        return tokenTracker_;
-    }
+    TokenTracker& getTokenTracker();
+    const TokenTracker& getTokenTracker() const;
 
-    const TokenTracker& getTokenTracker() const {
-        return tokenTracker_;
-    }
+    const String& getSystemPrompt() const;
 
-    const String& getSystemPrompt() const {
-        return systemPrompt_;
-    }
+    ApiClient& getApiClient();
 
-    ApiClient& getApiClient() {
-        return apiClient_;
-    }
+    ToolContext& getToolContext();
 
-    ToolContext& getToolContext() {
-        return toolContext_;
-    }
+    HookManager& getHookManager();
 
-    HookManager& getHookManager() {
-        return hookManager_;
-    }
+    // ========== History management ==========
 
-    // ========== 历史管理 ==========
-
-    /// 重置历史 (保留系统提示词)
+    /// Reset history (preserves system prompt)
     void reset();
 
-    /// 替换消息历史 (用于上下文压缩后替换)
+    /// Replace message history (used after context compaction)
     void replaceHistory(std::vector<Message> newHistory);
 
-    /// 获取消息数量
-    size_t getMessageCount() const {
-        std::lock_guard lock(historyMutex_);
-        return messageHistory_.size();
-    }
+    /// Get message count
+    size_t getMessageCount() const;
 
 private:
-    // ========== 核心循环 ==========
+    // ========== Core loop ==========
 
-    /// 统一执行循环 (TAOR: Think-Act-Observe-Repeat)
+    /// Unified execution loop (TAOR: Think-Act-Observe-Repeat)
     std::expected<String, String> executeLoop(
         bool streaming,
         OnToken onToken
@@ -344,16 +266,10 @@ private:
     /// Enable or disable interleaved tool execution during streaming.
     /// When enabled, tool calls are dispatched at content_block_stop time
     /// instead of waiting for the entire stream to complete.
-    void setInterleaveToolExecution(bool enable) {
-        std::lock_guard lock(stateMutex_);
-        interleaveToolExecution_ = enable;
-    }
-    bool isInterleaveToolExecution() const {
-        std::lock_guard lock(stateMutex_);
-        return interleaveToolExecution_;
-    }
+    void setInterleaveToolExecution(bool enable);
+    bool isInterleaveToolExecution() const;
 
-    /// 阻塞迭代
+    /// Blocking iteration result
     struct IterationResult {
         Message message;
         Usage usage;
@@ -363,29 +279,29 @@ private:
     };
     IterationResult blockingIteration(const Json& prompt);
 
-    /// 流式迭代
+    /// Streaming iteration
     IterationResult streamingIteration(const Json& prompt, OnToken onToken);
 
-    // ========== 工具执行 ==========
+    // ========== Tool execution ==========
 
-    /// 执行工具调用列表（只读工具并发执行）
+    /// Execute tool call list (read-only tools concurrent)
     std::vector<ToolResponse> executeToolCalls(const std::vector<ToolCall>& calls);
 
-    /// 执行单个工具
+    /// Execute single tool
     String executeTool(const ToolCall& call);
 
-    /// 检查工具是否为只读（可并发执行）
+    /// Check if tool is read-only (can be executed concurrently)
     bool isToolReadOnly(const String& toolName) const;
 
-    /// 微压缩：清除过期的工具结果内容
-    /// 匹配原版 TS 的 microcompact 行为：
-    /// - 工具结果超过 60 分钟且不紧邻当前用户消息 → 替换为 [Old tool result content cleared]
-    /// - 保留最后 N 个工具结果不压缩
+    /// Micro-compact: clear expired tool result content
+    /// Matches original TS microcompact behavior:
+    /// - Tool results older than 60 minutes and not adjacent to current user message → replace with [Old tool result content cleared]
+    /// - Preserve last N tool results from compaction
     void applyMicrocompact();
 
-    /// 自动压缩：当 token 使用量超过 93% 上下文窗口时
-    /// 使用 LLM 摘要对话历史，保留最近 N 条消息
-    /// 匹配原版 TS 的 auto-compact 行为
+    /// Auto-compact: when token usage exceeds 93% of context window,
+    /// use LLM to summarize conversation history, keeping last N messages
+    /// Matches original TS auto-compact behavior
     bool applyAutoCompact();
 
     /// Reactive compact: attempt compact on 413 (prompt too long) errors.
@@ -401,97 +317,28 @@ private:
     /// Called before retrying with a fallback model to prevent 400 errors.
     void stripThinkingFromHistory();
 
-    // ========== 辅助方法 ==========
+    // ========== Helper methods ==========
 
-    /// 构建 API 请求
+    /// Build API request
     Json buildApiRequest();
 
     /// Inject context into the user message via ContextInjector
     void injectContext(const String& userInput);
 
-    /// 提取思考内容
+    /// Extract thinking content
     void extractThinkingContent(const Json& response);
 
-    /// 通知工具事件
+    /// Notify tool event
     void notifyToolEvent(ToolEventPhase phase, const String& name,
                          const String& args, const String& result = {});
 
-private:
-    // 核心依赖
-    ApiClient& apiClient_;
-    ToolRegistry& tools_;
-    String systemPrompt_;
-    std::optional<std::vector<TextBlockParam>> systemBlocks_;  // Pre-built blocks with cache_control
-    TokenTracker tokenTracker_;
-    ToolContext toolContext_;
-    HookManager hookManager_;
-    compact::CompactService compactService_;
-    std::optional<compact::AutoCompact> autoCompact_;
-    compact::CompactWarningHook compactWarningHook_;
-
-    // 认知后端 (可选)
-    std::shared_ptr<McpClient> cognitiveMcpClient_;
-
-    // 权限引擎 (可选)
-    RuleEngine* permissionEngine_ = nullptr;
-
-    // Streaming tool executor (lazy-initialized)
-    std::optional<StreamingToolExecutor> toolExecutor_;
-
-    // 消息历史
-    std::vector<Message> messageHistory_;
-
-    // 回调
-    OnToolEvent onToolEvent_;
-    std::function<PermissionChoice(const PermissionRequest&)> onPermissionRequest_;
-    OnStreamStart onStreamStart_;
-    OnThinking onThinking_;
-    std::function<void(const String&)> onAssistantMessage_;
-
-    // 新增回调：流畅输出的关键
-    std::function<void(const String& type, int index, const String& content)> onContentBlockStop_;   // content_block_stop
-    std::function<void(const String& toolName, const String& result, bool isError)> onToolResult_;  // 单工具完成
-    std::function<void(int iteration, int totalIterations)> onLoopContinue_;  // TAOR循环继续
-    std::function<void()> onCancelled_;  // Cancelled callback for UI notification
-    OnStopHook onStopHook_;
-
-    // 统一事件回调 (优先于独立回调)
-    std::function<void(const StreamEvent&)> onStreamEvent_;
-
-    /// 发射流事件 — 如果 onStreamEvent_ 已设置则使用它，否则回退到独立回调
+    /// Emit stream event — if onStreamEvent_ is set, use it; otherwise fall back to individual callbacks
     void emitStreamEvent(StreamEvent event);
 
-    // Cancellation
-    std::atomic<bool> cancelled_{false};
-
-    // Thread-safety: mutex guards for shared mutation points
-    mutable std::mutex historyMutex_;     // guards messageHistory_
-    mutable std::mutex callbackMutex_;    // guards all callback setters and invocations
-    mutable std::mutex toolFilterMutex_;  // guards allowedTools_, disallowedTools_, pendingSkillTools_, pendingSkillModel_
-    mutable std::mutex stateMutex_;       // guards interleaveToolExecution_, currentUserInput_, reactiveCompactAttempts_
-
-    // Per-agent overrides
-    int maxIterations_ = DEFAULT_MAX_ITERATIONS;
-    double temperature_ = -1;      // -1 = use API default
-    int maxTokensOverride_ = -1;   // -1 = use ApiClient default
-
-    // Reactive compact state
-    int reactiveCompactAttempts_ = 0;
-
-    // Context injection
-    ContextInjector* contextInjector_ = nullptr;
-
-    // Tool filtering
-    std::vector<String> allowedTools_;     // If non-empty, only these tools are sent to API
-    std::vector<String> disallowedTools_;  // These tools are excluded from API requests
-    std::vector<String> pendingSkillTools_; // Tools restricted by skill (per-turn, cleared after use)
-    String pendingSkillModel_;              // Model override from skill (per-turn, cleared after use)
-
-    // Interleaved tool execution
-    bool interleaveToolExecution_ = false;
-
-    // 当前用户输入 (用于回调)
-    String currentUserInput_;
+private:
+    /// pImpl — all private state lives in Impl, defined in AgentLoop.cpp
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace claude
