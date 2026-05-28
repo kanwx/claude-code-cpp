@@ -430,6 +430,10 @@ set(SERVICES_SOURCES
     src/core/ConversationFork.cpp
     src/core/PromptSuggestion.cpp
     src/bootstrap/AppState.cpp
+    src/bootstrap/MetricsState.cpp
+    src/bootstrap/PermissionState.cpp
+    src/bootstrap/UIState.cpp
+    src/bootstrap/SessionState.cpp
     src/bootstrap/SignalHandler.cpp
     src/bootstrap/AgentRunner.cpp
     src/bootstrap/ReadlineSupport.cpp
