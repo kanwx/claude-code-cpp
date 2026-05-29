@@ -573,9 +573,6 @@ private:
     }
 
     void runRepl() {
-        // 打印横幅
-        BannerPrinter banner(std::cout);
-        banner.printWelcome();
 
         // Enable status line at bottom of terminal
         if (tokenTracker_) {

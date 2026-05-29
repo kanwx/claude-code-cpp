@@ -679,20 +679,9 @@ public:
             }));
         }
 
-        // Welcome
+        // Show empty content area until first message arrives — no welcome screen
         if (elems.empty() && !r->isStreaming_ && !r->isThinking_) {
-            elems.push_back(vbox({
-                text(""),
-                hbox({text("  ╭"), filler(), text("╮")}) | color(MacPeach),
-                hbox({text("  │"), text("  Claude Code C++  ") | bold | color(MacPeach), filler(), text("│")}) | color(MacPeach),
-                hbox({text("  │"), text("  AI Coding Assistant  ") | dim | color(MacCream), filler(), text("│")}) | color(MacPeach),
-                hbox({text("  ╰"), filler(), text("╯")}) | color(MacPeach),
-                text(""),
-                text("  Type your message and press Enter to chat.") | dim | color(MacCream),
-                text("  Type /help for available commands.") | dim | color(MacCream),
-                text("  ESC to cancel · Ctrl+C twice to exit · Ctrl+Y copy selection.") | dim | color(MacShadow),
-                text(""),
-            }));
+            // Intentionally blank — match official Claude Code
         }
 
         // --- Scroll ---
