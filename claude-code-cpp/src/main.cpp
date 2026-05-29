@@ -271,19 +271,20 @@ private:
         config_ = std::make_unique<AppConfig>();
         config_->load();
 
-        // 设置日志级别 — 日志输出到 stderr，避免与 stdout 上的流式内容混合
-        auto stderrLogger = spdlog::stderr_color_mt("stderr");
-        spdlog::set_default_logger(stderrLogger);
-
-        // Log file sink for diagnostics
+        // 设置日志级别 — dual-sink: stderr (errors only) + file (debug level)
         auto logDir = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.claude/logs";
         std::filesystem::create_directories(logDir);
-        auto fileLogger = spdlog::basic_logger_mt("file", logDir + "/claude-cli.log");
-        fileLogger->set_level(spdlog::level::debug);
-        fileLogger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
 
-        // Terminal: only errors. File: debug level for diagnostics
-        spdlog::set_level(verbose_ ? spdlog::level::debug : spdlog::level::err);
+        auto stderrSink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+        stderrSink->set_level(verbose_ ? spdlog::level::debug : spdlog::level::err);
+
+        auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logDir + "/claude-cli.log", true);
+        fileSink->set_level(spdlog::level::debug);
+        fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+
+        auto logger = std::make_shared<spdlog::logger>("default", spdlog::sinks_init_list{stderrSink, fileSink});
+        logger->set_level(spdlog::level::debug);
+        spdlog::set_default_logger(logger);
 
         // 初始化 HTTP 代理 (从环境变量)
         auto proxyConfig = Http::loadProxyFromEnv();
