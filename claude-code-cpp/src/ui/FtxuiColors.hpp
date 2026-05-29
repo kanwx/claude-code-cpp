@@ -23,6 +23,11 @@ inline const auto MacCream      = ftxui::Color::RGB(200, 195, 180);  // Dim text
 inline const auto MacShadow     = ftxui::Color::RGB(80, 80, 95);     // Very dim
 inline const auto MacBgDark     = ftxui::Color::RGB(30, 30, 42);     // Background
 
+// Context bar threshold colors
+inline const auto MacContextOk   = ftxui::Color::RGB(160, 210, 180);  // <70% — matches MacMint
+inline const auto MacContextWarn = ftxui::Color::RGB(210, 186, 140);  // 70-85% — matches MacGold
+inline const auto MacContextCrit = ftxui::Color::RGB(210, 150, 150);  // >=85% — matches MacRose
+
 // Per-tool colors — delegates to shared AnsiStyle mapping
 inline ftxui::Color toolFgColor(const String& toolName) {
     int r, g, b;

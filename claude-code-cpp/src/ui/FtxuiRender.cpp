@@ -6,6 +6,8 @@
 #include "claude/core/ReactiveState.hpp"
 #include <ftxui/component/mouse.hpp>
 #include "FtxuiColors.hpp"
+#include "claude/console/ActivityDescription.hpp"
+#include <algorithm>
 
 namespace claude {
 
@@ -30,11 +32,30 @@ public:
         auto orange = MacPeach;
 
         // --- Header ---
+        // Context usage progress bar
+        int ctxPct = (r->contextMaxTokens_ > 0)
+            ? static_cast<int>(100 * r->contextUsedTokens_ / r->contextMaxTokens_)
+            : 0;
+        int barWidth = 10;
+        int filled = std::clamp((ctxPct * barWidth + 50) / 100, 0, barWidth);
+
+        auto barColor = (ctxPct >= 85) ? MacContextCrit
+                      : (ctxPct >= 70) ? MacContextWarn
+                      :                  MacContextOk;
+
+        String barStr;
+        for (int i = 0; i < filled; ++i) barStr += "█";
+        for (int i = filled; i < barWidth; ++i) barStr += "░";
+        String pctStr = std::to_string(ctxPct) + "% ctx";
+
         auto header = hbox({
             text(" ╭─") | color(MacPeach),
             text(" Claude Code C++ ") | bold | color(MacPeach),
             text("│ ") | color(MacShadow),
             text(r->modelInfo_) | dim | color(MacCream),
+            text(" │ ") | color(MacShadow),
+            text(barStr) | color(barColor),
+            text(" " + pctStr) | color(barColor) | dim,
             filler(),
             text(r->isStreaming_ ? "● Running" : "○ Idle")
                 | color(r->isStreaming_ ? MacMint : MacShadow),
@@ -137,29 +158,16 @@ public:
                         if (idx >= totalMessages) continue;
                         const auto& tmsg = r->messages_[idx];
                         if (tmsg.type != DisplayMessage::Type::AssistantToolUse) continue;
-                        String inputSummary = FtxuiRepl::truncate(tmsg.toolUse.input, 80);
-                        String toolLine = tmsg.toolUse.toolName;
-                        if (!inputSummary.empty()) toolLine += " " + inputSummary;
+                        String activity = getActivityDescription(tmsg.toolUse.toolName, tmsg.toolUse.input, true);
+                        if (activity.size() > 80) activity = activity.substr(0, 77) + "...";
                         elems.push_back(hbox({
                             text("  ⎿ "),
-                            text(" " + toolLine + " ") | bold | color(toolFgColor(tmsg.toolUse.toolName)) | bgcolor(toolBgColor(tmsg.toolUse.toolName)),
+                            text(" " + tmsg.toolUse.toolName + " ") | bold | color(toolFgColor(tmsg.toolUse.toolName)) | bgcolor(toolBgColor(tmsg.toolUse.toolName)),
+                            text(activity) | dim | color(MacCream),
                         }));
                     }
                 } else {
-                    std::vector<String> parts;
-                    if (msg.collapsedGroup.searchCount > 0)
-                        parts.push_back("Searched " + std::to_string(msg.collapsedGroup.searchCount) + " pattern" + (msg.collapsedGroup.searchCount > 1 ? "s" : ""));
-                    if (msg.collapsedGroup.readCount > 0)
-                        parts.push_back("read " + std::to_string(msg.collapsedGroup.readCount) + " file" + (msg.collapsedGroup.readCount > 1 ? "s" : ""));
-                    if (msg.collapsedGroup.listCount > 0)
-                        parts.push_back("listed " + std::to_string(msg.collapsedGroup.listCount) + " director" + (msg.collapsedGroup.listCount > 1 ? "ies" : "y"));
-                    if (msg.collapsedGroup.bashCount > 0)
-                        parts.push_back("ran " + std::to_string(msg.collapsedGroup.bashCount) + " command" + (msg.collapsedGroup.bashCount > 1 ? "s" : ""));
-                    String summary;
-                    for (size_t pi = 0; pi < parts.size(); ++pi) {
-                        if (pi > 0) summary += ", ";
-                        summary += parts[pi];
-                    }
+                    String summary = msg.collapsedGroup.summaryText();
                     elems.push_back(hbox({
                         text("  ⎿ ") | color(MacSky),
                         text(summary) | color(MacSky),
@@ -346,12 +354,12 @@ public:
                         if (r->verboseTools_) {
                             for (size_t idx : group.toolIndices) {
                                 const auto& tmsg = r->messages_[idx];
-                                String inputSummary = FtxuiRepl::truncate(tmsg.toolUse.input, 80);
-                                String toolLine = tmsg.toolUse.toolName;
-                                if (!inputSummary.empty()) toolLine += " " + inputSummary;
+                                String activity = getActivityDescription(tmsg.toolUse.toolName, tmsg.toolUse.input, true);
+                                if (activity.size() > 80) activity = activity.substr(0, 77) + "...";
                                 blockElems.push_back(hbox({
                                     text("  ⎿ "),
-                                    text(" " + toolLine + " ") | bold | color(toolFgColor(tmsg.toolUse.toolName)) | bgcolor(toolBgColor(tmsg.toolUse.toolName)),
+                                    text(" " + tmsg.toolUse.toolName + " ") | bold | color(toolFgColor(tmsg.toolUse.toolName)) | bgcolor(toolBgColor(tmsg.toolUse.toolName)),
+                                    text(activity) | dim | color(MacCream),
                                 }));
                                 // Check for paired result
                                 if (idx + 1 < totalMessages &&
@@ -367,34 +375,7 @@ public:
                                 }
                             }
                         } else {
-                            std::vector<String> parts;
-                            if (group.searchCount > 0) {
-                                parts.push_back((group.active ? "Searching for " : "Searched for ") +
-                                    std::to_string(group.searchCount) + " pattern" +
-                                    (group.searchCount > 1 ? "s" : ""));
-                            }
-                            if (group.readCount > 0) {
-                                parts.push_back((group.active ? "reading " : "read ") +
-                                    std::to_string(group.readCount) + " file" +
-                                    (group.readCount > 1 ? "s" : ""));
-                            }
-                            if (group.listCount > 0) {
-                                parts.push_back((group.active ? "listing " : "listed ") +
-                                    std::to_string(group.listCount) + " director" +
-                                    (group.listCount > 1 ? "ies" : "y"));
-                            }
-                            if (group.bashCount > 0) {
-                                parts.push_back((group.active ? "running " : "ran ") +
-                                    std::to_string(group.bashCount) + " command" +
-                                    (group.bashCount > 1 ? "s" : ""));
-                            }
-
-                            String summary;
-                            for (size_t pi = 0; pi < parts.size(); ++pi) {
-                                if (pi > 0) summary += ", ";
-                                summary += parts[pi];
-                            }
-                            if (group.active) summary += "...";
+                            String summary = group.summaryText();
 
                             blockElems.push_back(hbox({
                                 text("  ⎿ ") | color(MacSky),
@@ -414,16 +395,13 @@ public:
                         }
                     } else {
                         // Non-collapsible tool (Edit, Write, LSP, WebFetch, etc.)
-                        // Show tool name + brief input. Result shown only in verbose mode.
-                        String inputSummary = FtxuiRepl::truncate(bmsg.toolUse.input, 60);
-                        String toolLine = bmsg.toolUse.toolName;
-                        if (!inputSummary.empty()) {
-                            toolLine += " " + inputSummary;
-                        }
+                        // Show tool name + human-readable activity. Result shown only in verbose mode.
+                        String activity = getActivityDescription(bmsg.toolUse.toolName, bmsg.toolUse.input, true);
+                        if (activity.size() > 60) activity = activity.substr(0, 57) + "...";
                         blockElems.push_back(hbox({
                             text("  ⎿ "),
                             text(" " + bmsg.toolUse.toolName + " ") | bold | color(toolFgColor(bmsg.toolUse.toolName)) | bgcolor(toolBgColor(bmsg.toolUse.toolName)),
-                            inputSummary.empty() ? text("") : text(inputSummary) | dim | color(MacCream),
+                            activity.empty() ? text("") : text(activity) | dim | color(MacCream),
                         }));
 
                         // Check for paired result message next
