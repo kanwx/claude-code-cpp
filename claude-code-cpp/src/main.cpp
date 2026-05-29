@@ -683,6 +683,29 @@ private:
         // Link AppState for reactive state accessors
         ftxuiRepl_->setAppState(&AppState::instance());
 
+        // Set initial permission mode
+        replPtr->setCurrentMode(AppState::instance().permissionMode());
+
+        // Set auth status — check config, env vars, and fd
+        {
+            auto apiConfig = config_->getApiConfig();
+            bool hasAuth = !apiConfig.apiKey.empty()
+                        || std::getenv("ANTHROPIC_API_KEY") != nullptr
+                        || std::getenv("CLAUDE_API_KEY") != nullptr
+                        || std::getenv("OPENAI_API_KEY") != nullptr
+                        || AppState::instance().apiKeyFromFd().has_value();
+            replPtr->setAuthStatus(hasAuth);
+        }
+
+        // Set cwd
+        replPtr->setCwd(AppState::instance().cwd());
+
+        // Set git branch
+        auto gitCtx = GitContext::collect(std::filesystem::current_path());
+        if (gitCtx.isGitRepo && !gitCtx.branch.empty()) {
+            replPtr->setGitBranch(gitCtx.branch);
+        }
+
         // Show model info in header — prefer display name from ModelStrings
         if (agentLoop_) {
             auto ms = AppState::instance().modelStrings();

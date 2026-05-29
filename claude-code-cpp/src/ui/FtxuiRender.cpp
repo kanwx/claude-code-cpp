@@ -8,6 +8,7 @@
 #include <ftxui/component/mouse.hpp>
 #include "FtxuiColors.hpp"
 #include "claude/console/ActivityDescription.hpp"
+#include "claude/bootstrap/AppState.hpp"
 #include <algorithm>
 
 namespace claude {
@@ -1200,6 +1201,20 @@ public:
                     r->onSubmit_(current);
                 }
             }
+            return true;
+        }
+        // Shift+Tab: cycle permission mode
+        if (event == Event::TabReverse) {
+            const char* modes[] = {"default", "acceptEdits", "auto", "bypass", "dontAsk", "plan"};
+            String current = r->currentMode_;
+            int idx = 0;
+            for (int i = 0; i < 6; ++i) {
+                if (modes[i] == current) { idx = i; break; }
+            }
+            idx = (idx + 1) % 6;
+            r->currentMode_ = modes[idx];
+            r->modeHintDismissed_ = false;
+            AppState::instance().setPermissionMode(modes[idx]);
             return true;
         }
         // Tab completion: accept common prefix or cycle through completions
