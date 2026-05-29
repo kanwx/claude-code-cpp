@@ -131,10 +131,12 @@
 #include <claude/bootstrap/SignalHandler.hpp>
 #include <claude/bootstrap/AgentRunner.hpp>
 
+// AppState needed for modelStrings() in both FTXUI and readline paths
+#include <claude/bootstrap/AppState.hpp>
+
 // FTXUI support (optional)
 #ifdef HAS_FTXUI
 #include <claude/ui/FtxuiRepl.hpp>
-#include <claude/bootstrap/AppState.hpp>
 #endif
 
 // Session persistence (always available)
@@ -593,12 +595,14 @@ private:
 
     void runRepl() {
 
-        // Enable status line at bottom of terminal
+        // Enable status line at bottom of terminal — prefer display name from ModelStrings
         if (tokenTracker_) {
             statusLine_ = std::make_unique<StatusLine>(std::cout);
-            String model = config_->getModel();
-            if (model.empty()) model = "glm-5";
-            statusLine_->enable(model, *tokenTracker_);
+            String rawModel = config_->getModel();
+            if (rawModel.empty()) rawModel = "glm-5";
+            statusLine_->enable(rawModel, *tokenTracker_);
+            auto ms = AppState::instance().modelStrings();
+            statusLine_->setModelName(ms.has_value() ? ms->displayName : rawModel);
         }
 
         std::cout << "Type your message and press Enter. Type /help for commands.\n\n";
@@ -679,10 +683,10 @@ private:
         // Link AppState for reactive state accessors
         ftxuiRepl_->setAppState(&AppState::instance());
 
-        // Show model info in header
+        // Show model info in header — prefer display name from ModelStrings
         if (agentLoop_) {
-            String info = config_->getModel();
-            if (info.empty()) info = "glm-5";
+            auto ms = AppState::instance().modelStrings();
+            String info = ms.has_value() ? ms->displayName : (config_->getModel().empty() ? "glm-5" : config_->getModel());
             ftxuiRepl_->setModelInfo(info);
         }
 
