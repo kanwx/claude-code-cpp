@@ -175,3 +175,7 @@ catch_discover_tests(test_rule_engine)
 add_executable(test_activity_description test_activity_description.cpp)
 target_link_libraries(test_activity_description PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_activity_description)
+
+add_executable(test_ui_alignment test_ui_alignment.cpp)
+target_link_libraries(test_ui_alignment PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ui_alignment)
