@@ -979,7 +979,6 @@ public:
             separatorLight(),
             contentArea | flex,
             separatorLight(),
-            statusBar,
             completionArea,
             inputLine | (r->isStreaming_ ? dim : bold),
             footer,
