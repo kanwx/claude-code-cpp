@@ -135,13 +135,13 @@ std::expected<Json, String> RetryableClient::callWithRetry(
                 auto& oauthManager = oauth::OAuthManager::instance();
                 auto& anthropicClient = oauthManager.getClient("anthropic");
                 if (anthropicClient.isAuthenticated()) {
-                    spdlog::info("401 received, attempting OAuth token refresh");
+                    spdlog::debug("401 received, attempting OAuth token refresh");
                     bool refreshed = anthropicClient.ensureValidToken();
                     if (refreshed) {
                         auto tokenOpt = anthropicClient.getCurrentToken();
                         if (tokenOpt) {
                             client_->setApiKey(tokenOpt->accessToken);
-                            spdlog::info("OAuth token refreshed, retrying with new token");
+                            spdlog::debug("OAuth token refreshed, retrying with new token");
                             continue;
                         }
                     }
@@ -160,7 +160,7 @@ std::expected<Json, String> RetryableClient::callWithRetry(
                     onKeepAlive_("Still waiting for API availability... (attempt " +
                         std::to_string(attempt + 1) + ")");
                 }
-                spdlog::info("Unattended mode: persistent retry on status {}", statusCode);
+                spdlog::debug("Unattended mode: persistent retry on status {}", statusCode);
                 // Fall through to delay calculation and continue retrying
             } else {
                 SPDLOG_ERROR("API call failed (attempt {}): {} - {}",
@@ -273,13 +273,13 @@ void RetryableClient::streamWithRetry(
                 auto& oauthManager = oauth::OAuthManager::instance();
                 auto& anthropicClient = oauthManager.getClient("anthropic");
                 if (anthropicClient.isAuthenticated()) {
-                    spdlog::info("401 received on stream, attempting OAuth token refresh");
+                    spdlog::debug("401 received on stream, attempting OAuth token refresh");
                     bool refreshed = anthropicClient.ensureValidToken();
                     if (refreshed) {
                         auto tokenOpt = anthropicClient.getCurrentToken();
                         if (tokenOpt) {
                             client_->setApiKey(tokenOpt->accessToken);
-                            spdlog::info("OAuth token refreshed, retrying stream with new token");
+                            spdlog::debug("OAuth token refreshed, retrying stream with new token");
                             continue;
                         }
                     }
@@ -303,7 +303,7 @@ void RetryableClient::streamWithRetry(
                     onKeepAlive_("Still waiting for API availability... (attempt " +
                         std::to_string(attempt + 1) + ")");
                 }
-                spdlog::info("Unattended mode: persistent retry on status {}", streamStatus);
+                spdlog::debug("Unattended mode: persistent retry on status {}", streamStatus);
                 // Fall through to delay calculation and continue retrying
             } else {
                 SPDLOG_ERROR("Stream failed (attempt {}): {}", attempt, errorMsg);

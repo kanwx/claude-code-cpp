@@ -40,7 +40,7 @@ int AutoDream::dream(const std::vector<Message>& recentMessages) {
     lastDreamTime_ = std::chrono::steady_clock::now();
 
     if (consolidated > 0) {
-        spdlog::info("Auto-dream: consolidated {} memory items (total: {})",
+        spdlog::debug("Auto-dream: consolidated {} memory items (total: {})",
             consolidated, totalConsolidated_);
     }
 
@@ -258,7 +258,7 @@ int AutoDream::extractPreferencesWithLLM(
             memoryService_->save(entry);
             extracted++;
 
-            spdlog::info("Auto-dream LLM: extracted {} memory '{}' — {}",
+            spdlog::debug("Auto-dream LLM: extracted {} memory '{}' — {}",
                 type, name, entry.description);
         }
 
@@ -288,7 +288,7 @@ int AutoDream::dreamWithLLM(const std::vector<Message>& recentMessages, ApiClien
     lastDreamTime_ = std::chrono::steady_clock::now();
 
     if (consolidated > 0) {
-        spdlog::info("Auto-dream (LLM): consolidated {} memory items (total: {})",
+        spdlog::debug("Auto-dream (LLM): consolidated {} memory items (total: {})",
             consolidated, totalConsolidated_);
     }
 

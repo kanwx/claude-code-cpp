@@ -17,7 +17,7 @@ void AgentLoop::applyMicrocompact() {
     // Use MicroCompact for age-based tool result clearing
     int compacted = compact::MicroCompact::apply(impl_->messageHistory);
     if (compacted > 0) {
-        spdlog::info("Microcompact: cleared {} old tool result content fields", compacted);
+        spdlog::debug("Microcompact: cleared {} old tool result content fields", compacted);
     }
 
     // Context-pressure-based micro-compact: compact large results when window is filling
@@ -38,7 +38,7 @@ void AgentLoop::applyMicrocompact() {
             Usage{promptTokens, 0, 0}, static_cast<int>(apiContextWindow))) {
         long reclaimed = compact::ApiMicroCompact::compact(impl_->messageHistory);
         if (reclaimed > 0) {
-            spdlog::info("ApiMicroCompact: reclaimed ~{} tokens", reclaimed);
+            spdlog::debug("ApiMicroCompact: reclaimed ~{} tokens", reclaimed);
         }
     }
 }
@@ -61,7 +61,7 @@ bool AgentLoop::applyAutoCompact() {
         hasAutoCompact = impl_->autoCompact.has_value();
     }
     if (hasAutoCompact && impl_->autoCompact->shouldTrigger(currentTokens)) {
-        spdlog::info("Auto-compact triggered: usage at {:.1f}% of context window",
+        spdlog::debug("Auto-compact triggered: usage at {:.1f}% of context window",
             static_cast<double>(currentTokens) / contextWindow * 100.0);
 
         std::vector<Message> historySnapshot;
@@ -101,7 +101,7 @@ bool AgentLoop::applyAutoCompact() {
             }
             impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
 
-            spdlog::info("Auto-compact completed: {} messages -> {} messages",
+            spdlog::debug("Auto-compact completed: {} messages -> {} messages",
                 oldSize, impl_->messageHistory.size());
             return true;
         }
@@ -230,7 +230,7 @@ bool AgentLoop::applyAutoCompact() {
         }
         impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
 
-        spdlog::info("Auto-compact (fallback) completed: {} messages -> {} messages",
+        spdlog::debug("Auto-compact (fallback) completed: {} messages -> {} messages",
             oldSize, impl_->messageHistory.size());
     }
 
@@ -246,7 +246,7 @@ bool AgentLoop::attemptReactiveCompact(long tokenGap) {
         }
 
         impl_->reactiveCompactAttempts++;
-        spdlog::info("Reactive compact: attempt {}/{} (413 prompt-too-long recovery, token gap: {})",
+        spdlog::debug("Reactive compact: attempt {}/{} (413 prompt-too-long recovery, token gap: {})",
             impl_->reactiveCompactAttempts, MAX_REACTIVE_COMPACT_ATTEMPTS, tokenGap);
     }
 
@@ -278,7 +278,7 @@ bool AgentLoop::attemptReactiveCompact(long tokenGap) {
         std::lock_guard lock(impl_->historyMutex);
         int compacted = compact::MicroCompact::applyByPressure(impl_->messageHistory, 0.50);
         if (compacted > 0) {
-            spdlog::info("Reactive compact (micro): cleared {} tool results", compacted);
+            spdlog::debug("Reactive compact (micro): cleared {} tool results", compacted);
             return true;
         }
     }

@@ -417,7 +417,7 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
 
     // ====== Per-tool result truncation ======
     if (result.size() > tool->maxResultSizeChars()) {
-        spdlog::info("StreamingToolExecutor: tool [{}] result size {} exceeds budget {}, truncating",
+        spdlog::debug("StreamingToolExecutor: tool [{}] result size {} exceeds budget {}, truncating",
             call.name, result.size(), tool->maxResultSizeChars());
         result = ResultTruncation::truncate(result, tool->maxResultSizeChars(), call.name);
     }
@@ -559,7 +559,7 @@ void StreamingToolExecutor::applyAggregateTruncation(std::vector<ToolExecutionRe
         return;
     }
 
-    spdlog::info("StreamingToolExecutor: aggregate tool result size {} exceeds budget {}, truncating oldest",
+    spdlog::debug("StreamingToolExecutor: aggregate tool result size {} exceeds budget {}, truncating oldest",
         totalSize, ResultTruncation::AGGREGATE_BUDGET);
 
     // Truncate from oldest (lowest index) first

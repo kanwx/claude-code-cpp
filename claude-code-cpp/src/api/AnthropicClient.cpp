@@ -58,7 +58,7 @@ void AnthropicClient::setBaseUrl(const String& url) {
     isCustomBaseUrl_ = (url.find("api.anthropic.com") == String::npos);
 
     if (isCustomBaseUrl_) {
-        spdlog::info("Using custom base URL {} - will use OpenAI-compatible format", url);
+        spdlog::debug("Using custom base URL {} - will use OpenAI-compatible format", url);
     }
 }
 
@@ -812,7 +812,7 @@ Result<StreamingState> AnthropicClient::fallbackToNonStreaming(
     const Json& tools,
     std::function<void(const Json& chunk)> onChunk
 ) {
-    spdlog::info("Falling back to non-streaming request after streaming failure");
+    spdlog::debug("Falling back to non-streaming request after streaming failure");
 
     auto callResult = call(messages, tools);
     if (!callResult.has_value()) {

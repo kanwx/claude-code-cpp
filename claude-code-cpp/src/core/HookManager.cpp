@@ -175,7 +175,7 @@ std::expected<void, String> HookManager::loadFromConfig(const Json& config) {
         }
     }
 
-    spdlog::info("HookManager: loaded {} declarative hooks", declarativeHooks_.size());
+    spdlog::debug("HookManager: loaded {} declarative hooks", declarativeHooks_.size());
     return {};
 }
 

@@ -21,7 +21,7 @@ void ProactiveScheduler::start(int initialDelaySeconds) {
     tickCount_ = 0;
 
     thread_ = std::thread(&ProactiveScheduler::schedulerLoop, this);
-    spdlog::info("ProactiveScheduler: started (initial delay: {}s, default interval: {}s)",
+    spdlog::debug("ProactiveScheduler: started (initial delay: {}s, default interval: {}s)",
                  initialDelaySeconds, defaultIntervalSeconds_);
 }
 
@@ -35,7 +35,7 @@ void ProactiveScheduler::stop() {
         thread_.join();
     }
 
-    spdlog::info("ProactiveScheduler: stopped after {} ticks", tickCount_);
+    spdlog::debug("ProactiveScheduler: stopped after {} ticks", tickCount_);
 }
 
 void ProactiveScheduler::setNextWakeUp(int seconds) {

@@ -72,7 +72,7 @@ void PermissionStore::load(const std::filesystem::path& configDir) {
             decisions_[key] = choice;
         }
 
-        spdlog::info("PermissionStore: loaded {} decisions from {}",
+        spdlog::debug("PermissionStore: loaded {} decisions from {}",
                      decisions_.size(), filePath_.string());
 
     } catch (const std::exception& e) {
@@ -145,7 +145,7 @@ void PermissionStore::recordDecision(const String& toolName, const String& patte
     // Auto-save after each recorded decision
     save();
 
-    spdlog::info("PermissionStore: recorded {} for {}",
+    spdlog::debug("PermissionStore: recorded {} for {}",
                  permissionChoiceToString(choice), key);
 }
 
@@ -184,7 +184,7 @@ void PermissionStore::clear() {
         }
     }
 
-    spdlog::info("PermissionStore: cleared all decisions");
+    spdlog::debug("PermissionStore: cleared all decisions");
 }
 
 std::map<String, PermissionChoice> PermissionStore::getAll() const {

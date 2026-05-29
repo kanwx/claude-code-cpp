@@ -29,7 +29,7 @@ long ApiMicroCompact::compact(std::vector<Message>& history) {
     }
 
     if (reclaimed > 0) {
-        spdlog::info("ApiMicroCompact: reclaimed ~{} tokens", reclaimed);
+        spdlog::debug("ApiMicroCompact: reclaimed ~{} tokens", reclaimed);
     }
     return reclaimed;
 }

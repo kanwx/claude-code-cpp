@@ -163,7 +163,7 @@ std::optional<std::vector<Message>> AutoCompact::compressAndRebuild(
                     newHistory.push_back(std::move(toKeep[i]));
                 }
 
-                spdlog::info("AutoCompact: compressed {} messages into summary", toCompress.size());
+                spdlog::debug("AutoCompact: compressed {} messages into summary", toCompress.size());
                 recordSuccess();
                 return newHistory;
             }

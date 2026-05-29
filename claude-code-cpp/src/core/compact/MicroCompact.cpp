@@ -125,7 +125,7 @@ int MicroCompact::applyByPressure(std::vector<Message>& history, double usageRat
     }
 
     if (compacted > 0) {
-        spdlog::info("MicroCompact (pressure): compacted {} large tool results (ratio={}%, threshold={} chars)",
+        spdlog::debug("MicroCompact (pressure): compacted {} large tool results (ratio={}%, threshold={} chars)",
             compacted, static_cast<int>(usageRatio * 100), sizeThreshold);
     }
     return compacted;
@@ -201,10 +201,10 @@ int MicroCompact::applyByToolName(std::vector<Message>& history, const std::vect
 
     if (compacted > 0) {
         if (filterByTool) {
-            spdlog::info("MicroCompact (tool): compacted {} tool results for targeted tools",
+            spdlog::debug("MicroCompact (tool): compacted {} tool results for targeted tools",
                 compacted);
         } else {
-            spdlog::info("MicroCompact (tool): compacted {} tool results (all tools)",
+            spdlog::debug("MicroCompact (tool): compacted {} tool results (all tools)",
                 compacted);
         }
     }
@@ -303,7 +303,7 @@ int MicroCompact::applyByImportance(std::vector<Message>& history, double usageR
     }
 
     if (compacted > 0) {
-        spdlog::info("MicroCompact (importance): compacted {} results (pressure={}%, scored by importance)",
+        spdlog::debug("MicroCompact (importance): compacted {} results (pressure={}%, scored by importance)",
             compacted, static_cast<int>(usageRatio * 100));
     }
     return compacted;

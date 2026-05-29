@@ -142,14 +142,14 @@ void FtxuiRepl::run() {
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
 
-    spdlog::info("FTXUI: Building component...");
+    spdlog::debug("FTXUI: Building component...");
     auto component = BuildMainComponent();
-    spdlog::info("FTXUI: Creating screen...");
+    spdlog::debug("FTXUI: Creating screen...");
     auto screen = ScreenInteractive::Fullscreen();
     screen_ = &screen;
-    spdlog::info("FTXUI: Enabling mouse tracking...");
+    spdlog::debug("FTXUI: Enabling mouse tracking...");
     screen.TrackMouse();
-    spdlog::info("FTXUI: Starting loop...");
+    spdlog::debug("FTXUI: Starting loop...");
 
     try {
         screen.Loop(component);
@@ -159,7 +159,7 @@ void FtxuiRepl::run() {
 
     screen_ = nullptr;
     stopRefreshThread();
-    spdlog::info("FTXUI: Loop ended");
+    spdlog::debug("FTXUI: Loop ended");
 }
 
 void FtxuiRepl::exit() {

@@ -437,7 +437,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 
         // Check task budget
         if (impl_->tokenTracker.isTaskBudgetExceeded()) {
-            spdlog::info("Task budget exceeded: {}/{} tokens",
+            spdlog::debug("Task budget exceeded: {}/{} tokens",
                 impl_->tokenTracker.getTaskBudgetUsed(), impl_->tokenTracker.getTaskBudget());
             lastAssistantText += "\n\n[Task budget exceeded: " +
                 std::to_string(impl_->tokenTracker.getTaskBudgetUsed()) + "/" +
@@ -481,7 +481,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             hookCtx.extras["content"] = result.message.content;
             auto hookResult = impl_->hookManager.execute(HookType::PostResponse, hookCtx);
             if (hookResult.shouldAbort()) {
-                spdlog::info("PostResponse hook aborted the loop");
+                spdlog::debug("PostResponse hook aborted the loop");
                 String reason = hookCtx.extras.count("reason") ? hookCtx.extras["reason"] : "Hook blocked continuation";
                 lastAssistantText += "\n\n[Stopped by hook: " + reason + "]";
                 break;
@@ -496,7 +496,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                 if (cb) {
                     auto stopResult = cb();
                     if (stopResult.shouldContinue) {
-                        spdlog::info("Stop hook forced continuation: {}", stopResult.reason);
+                        spdlog::debug("Stop hook forced continuation: {}", stopResult.reason);
                         std::lock_guard lock(impl_->historyMutex);
                         impl_->messageHistory.push_back(Message::user(
                             "[System: Continue your work. " + stopResult.reason + "]"));
@@ -524,13 +524,13 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         if (result.stopReason == "max_tokens" || result.stopReason == "length") {
             maxOutputTokensRecoveryCount++;
             if (maxOutputTokensRecoveryCount <= MAX_OUTPUT_TOKENS_RECOVERY) {
-                spdlog::info("max_output_tokens reached, recovery iteration {}/{}",
+                spdlog::debug("max_output_tokens reached, recovery iteration {}/{}",
                     maxOutputTokensRecoveryCount, MAX_OUTPUT_TOKENS_RECOVERY);
 
                 // Escalate max_tokens on 2nd+ recovery attempt
                 if (maxOutputTokensRecoveryCount >= 2 && impl_->maxTokensOverride < ESCALATED_MAX_TOKENS) {
                     impl_->maxTokensOverride = ESCALATED_MAX_TOKENS;
-                    spdlog::info("Escalating max_tokens to {} for recovery", ESCALATED_MAX_TOKENS);
+                    spdlog::debug("Escalating max_tokens to {} for recovery", ESCALATED_MAX_TOKENS);
                 }
 
                 // Add continuation instruction (matching original TS: "Resume directly — no apology, no recap")
@@ -626,7 +626,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 
             resp.content = displayInfo;
             pendingSkillPrompt = std::move(promptBody);
-            spdlog::info("SkillTool detected: model='{}', tools={}, prompt={} chars",
+            spdlog::debug("SkillTool detected: model='{}', tools={}, prompt={} chars",
                 pendingSkillModel, pendingSkillTools.size(), pendingSkillPrompt.size());
         }
 
@@ -649,14 +649,14 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             if (!pendingSkillModel.empty()) {
                 std::lock_guard lock(impl_->toolFilterMutex);
                 impl_->pendingSkillModel = std::move(pendingSkillModel);
-                spdlog::info("Skill model override: {}", impl_->pendingSkillModel);
+                spdlog::debug("Skill model override: {}", impl_->pendingSkillModel);
             }
 
             // Store skill tool restriction — will be applied in buildApiRequest()
             if (!pendingSkillTools.empty()) {
                 std::lock_guard lock(impl_->toolFilterMutex);
                 impl_->pendingSkillTools = std::move(pendingSkillTools);
-                spdlog::info("Skill tool restriction: {} tools", impl_->pendingSkillTools.size());
+                spdlog::debug("Skill tool restriction: {} tools", impl_->pendingSkillTools.size());
             }
 
             spdlog::debug("Skill prompt injected as user message");

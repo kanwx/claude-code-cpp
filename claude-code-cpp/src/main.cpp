@@ -7,6 +7,7 @@
 #include <CLI/CLI.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <clocale>
 #include <chrono>
 
@@ -273,17 +274,26 @@ private:
         // 设置日志级别 — 日志输出到 stderr，避免与 stdout 上的流式内容混合
         auto stderrLogger = spdlog::stderr_color_mt("stderr");
         spdlog::set_default_logger(stderrLogger);
-        spdlog::set_level(verbose_ ? spdlog::level::debug : spdlog::level::info);
+
+        // Log file sink for diagnostics
+        auto logDir = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.claude/logs";
+        std::filesystem::create_directories(logDir);
+        auto fileLogger = spdlog::basic_logger_mt("file", logDir + "/claude-cli.log");
+        fileLogger->set_level(spdlog::level::debug);
+        fileLogger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+
+        // Terminal: only errors. File: debug level for diagnostics
+        spdlog::set_level(verbose_ ? spdlog::level::debug : spdlog::level::err);
 
         // 初始化 HTTP 代理 (从环境变量)
         auto proxyConfig = Http::loadProxyFromEnv();
         if (proxyConfig.enabled()) {
             Http::setProxy(proxyConfig);
-            spdlog::info("HTTP proxy configured: {}:{}", proxyConfig.host, proxyConfig.port);
+            spdlog::debug("HTTP proxy configured: {}:{}", proxyConfig.host, proxyConfig.port);
 
             auto caCert = Http::getCaCertPath();
             if (caCert) {
-                spdlog::info("CA certificate: {}", *caCert);
+                spdlog::debug("CA certificate: {}", *caCert);
             }
         }
 
@@ -302,14 +312,14 @@ private:
         } else if (autoMode_ || permissionModeStr_ == "auto") {
             permissionSettings_->setMode(PermissionMode::Auto);
             permissionEngine_->yoloClassifier().setEnabled(true);
-            spdlog::info("Auto mode enabled (AI classifier will decide permissions)");
+            spdlog::debug("Auto mode enabled (AI classifier will decide permissions)");
         } else if (!permissionModeStr_.empty()) {
             auto mode = parsePermissionMode(permissionModeStr_);
             if (mode) {
                 permissionSettings_->setMode(*mode);
                 if (*mode == PermissionMode::Auto) {
                     permissionEngine_->yoloClassifier().setEnabled(true);
-                    spdlog::info("Auto mode enabled (AI classifier will decide permissions)");
+                    spdlog::debug("Auto mode enabled (AI classifier will decide permissions)");
                 }
             } else {
                 spdlog::warn("Unknown permission mode: {}", permissionModeStr_);
@@ -515,13 +525,13 @@ private:
                 auto token = client.getCurrentToken();
                 if (token && !token->isExpired()) {
                     apiKey = token->accessToken;
-                    spdlog::info("Using OAuth token from /login for {}", oauthProvider);
+                    spdlog::debug("Using OAuth token from /login for {}", oauthProvider);
                 } else if (token && token->isExpired() && !token->refreshToken.empty()) {
                     // Attempt refresh
                     auto refreshed = client.refreshToken(token->refreshToken);
                     if (refreshed) {
                         apiKey = refreshed->accessToken;
-                        spdlog::info("Refreshed and using OAuth token for {}", oauthProvider);
+                        spdlog::debug("Refreshed and using OAuth token for {}", oauthProvider);
                     }
                 }
             }

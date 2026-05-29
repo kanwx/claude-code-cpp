@@ -184,7 +184,7 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
             }
             pos = normalizedContent.find(normalizedOld);
             if (pos != String::npos) {
-                spdlog::info("FileEditTool: matched via quote normalization at pos {}", pos);
+                spdlog::debug("FileEditTool: matched via quote normalization at pos {}", pos);
             } else {
                 return "Error: String not found in file:\n" + oldString +
                        "\n\nThe exact string was not found, and no similar string was found "

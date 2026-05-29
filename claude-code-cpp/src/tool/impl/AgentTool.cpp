@@ -221,7 +221,7 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
             worktreeResult = wm.createWorktree(slug, gitRoot);
             if (worktreeResult) {
                 isolatedAgent->getToolContext().workDir = worktreeResult->path.string();
-                spdlog::info("AgentTool: created worktree at {}", worktreeResult->path.string());
+                spdlog::debug("AgentTool: created worktree at {}", worktreeResult->path.string());
             } else {
                 spdlog::warn("AgentTool: failed to create worktree, running in current directory");
             }
@@ -285,7 +285,7 @@ String AgentTool::execute(const Json& input, ToolContext& context) {
     if (worktreeResult) {
         WorktreeManager wm;
         wm.exitWorktree(false);
-        spdlog::info("AgentTool: cleaned up worktree");
+        spdlog::debug("AgentTool: cleaned up worktree");
     }
 
     if (result) {

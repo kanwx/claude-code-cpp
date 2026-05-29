@@ -74,7 +74,7 @@ String BashTool::execute(const Json& input, ToolContext& context) {
 
     auto sandbox = bash_security::detectSandbox();
     if (sandbox != bash_security::SandboxType::None) {
-        spdlog::info("BashTool: running in sandbox mode");
+        spdlog::debug("BashTool: running in sandbox mode");
     }
 
     auto result = Process::execute(command, context.workDir, timeout);

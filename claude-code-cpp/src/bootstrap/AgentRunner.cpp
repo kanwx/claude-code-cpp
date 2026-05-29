@@ -225,15 +225,15 @@ AgentLoopHolder createAgentLoop(const AgentLoopParams& params) {
     // Apply CLI flags to AgentLoop
     if (!params.allowedTools.empty()) {
         holder.loop->setAllowedTools(params.allowedTools);
-        spdlog::info("Tool allowlist: {} tools", params.allowedTools.size());
+        spdlog::debug("Tool allowlist: {} tools", params.allowedTools.size());
     }
     if (!params.disallowedTools.empty()) {
         holder.loop->setDisallowedTools(params.disallowedTools);
-        spdlog::info("Tool denylist: {} tools", params.disallowedTools.size());
+        spdlog::debug("Tool denylist: {} tools", params.disallowedTools.size());
     }
     if (params.maxTurns > 0) {
         holder.loop->setMaxIterations(params.maxTurns);
-        spdlog::info("Max turns: {}", params.maxTurns);
+        spdlog::debug("Max turns: {}", params.maxTurns);
     }
 
     // Resume session if --continue flag is set
@@ -385,7 +385,7 @@ bool resumeLastSession(AgentLoop& loop) {
         }
     }
     if (sessions.empty()) {
-        spdlog::info("No saved sessions found for --continue");
+        spdlog::debug("No saved sessions found for --continue");
         return false;
     }
 
@@ -467,7 +467,7 @@ bool resumeLastSession(AgentLoop& loop) {
                 Message::system(currentSystemPrompt));
 
             loop.replaceHistory(std::move(loadedMessages));
-            spdlog::info("Resumed session from {}", latestSession.filename().string());
+            spdlog::debug("Resumed session from {}", latestSession.filename().string());
             return true;
         }
     } catch (const std::exception& e) {
@@ -501,7 +501,7 @@ std::shared_ptr<McpManager> initMcp(ToolRegistry& tools) {
                 if (client) {
                     mcpManager->addServer(name, std::move(client));
                     started++;
-                    spdlog::info("MCP server '{}' started", name);
+                    spdlog::debug("MCP server '{}' started", name);
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("MCP server '{}' failed to start: {}", name, e.what());
@@ -510,7 +510,7 @@ std::shared_ptr<McpManager> initMcp(ToolRegistry& tools) {
 
         if (started > 0) {
             tools.registerMcpTools(mcpManager);
-            spdlog::info("MCP: {} server(s) started, tools registered", started);
+            spdlog::debug("MCP: {} server(s) started, tools registered", started);
             return mcpManager;
         }
     } catch (const std::exception& e) {

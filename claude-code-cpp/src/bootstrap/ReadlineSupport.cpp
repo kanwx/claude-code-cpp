@@ -111,7 +111,7 @@ void saveSession(AgentLoop* loop) {
     std::ofstream file(sessionFile);
     if (file) {
         file << sessionJson.dump(2);
-        spdlog::info("Session saved to {}", sessionFile.string());
+        spdlog::debug("Session saved to {}", sessionFile.string());
     }
 }
 

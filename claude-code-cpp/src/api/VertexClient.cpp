@@ -71,7 +71,7 @@ bool VertexClient::loadCredentials() {
         if (file.is_open()) {
             try {
                 Json creds = Json::parse(file);
-                spdlog::info("VertexClient: loaded service account from {}", credsPath);
+                spdlog::debug("VertexClient: loaded service account from {}", credsPath);
                 // Service account token refresh requires JWT signing (not yet implemented)
                 // For now, just note that we found valid credentials
                 return true;
@@ -91,11 +91,11 @@ bool VertexClient::loadCredentials() {
                 Json creds = Json::parse(file);
                 if (creds.contains("access_token") && creds["access_token"].is_string()) {
                     accessToken_ = creds["access_token"].get<String>();
-                    spdlog::info("VertexClient: loaded ADC access token");
+                    spdlog::debug("VertexClient: loaded ADC access token");
                     return true;
                 }
                 // ADC file exists but may need refresh (not yet implemented)
-                spdlog::info("VertexClient: found ADC file (token refresh not yet implemented)");
+                spdlog::debug("VertexClient: found ADC file (token refresh not yet implemented)");
                 return true;
             } catch (...) {
                 spdlog::debug("VertexClient: failed to parse ADC file");

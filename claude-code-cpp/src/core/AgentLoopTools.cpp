@@ -158,7 +158,7 @@ String AgentLoop::executeTool(const ToolCall& call) {
 
     // ========== Tool result budget truncation ==========
     if (result.size() > tool->maxResultSizeChars()) {
-        spdlog::info("Tool [{}] result size {} exceeds budget {}, truncating",
+        spdlog::debug("Tool [{}] result size {} exceeds budget {}, truncating",
             call.name, result.size(), tool->maxResultSizeChars());
         result = ResultTruncation::truncate(result, tool->maxResultSizeChars(), call.name);
     }
@@ -224,7 +224,7 @@ void AgentLoop::addMissingToolResults() {
         }
         if (!errorResults.empty()) {
             impl_->messageHistory.push_back(Message::toolResult(std::move(errorResults)));
-            spdlog::info("Added {} synthetic error tool_results for unmatched tool_uses", errorResults.size());
+            spdlog::debug("Added {} synthetic error tool_results for unmatched tool_uses", errorResults.size());
         }
     }
 }

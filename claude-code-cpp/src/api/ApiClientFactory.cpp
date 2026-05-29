@@ -39,14 +39,14 @@ std::unique_ptr<ApiClient> ApiClientFactory::createForProvider(
     switch (provider) {
         case APIProvider::FirstParty: {
             auto client = std::make_unique<AnthropicClient>(effectiveKey);
-            spdlog::info("Created Anthropic first-party client");
+            spdlog::debug("Created Anthropic first-party client");
             return client;
         }
         case APIProvider::Bedrock: {
             String region = getBedrockRegion();
             auto client = std::make_unique<BedrockClient>(region);
             client->setModel(getDefaultSonnetModel(APIProvider::Bedrock));
-            spdlog::info("Created Bedrock client (region: {})", region);
+            spdlog::debug("Created Bedrock client (region: {})", region);
             return client;
         }
         case APIProvider::Vertex: {
@@ -56,13 +56,13 @@ std::unique_ptr<ApiClient> ApiClientFactory::createForProvider(
             String project = (envProject && envProject[0]) ? envProject : "";
             auto client = std::make_unique<VertexClient>(region, project);
             client->setModel(getDefaultSonnetModel(APIProvider::Vertex));
-            spdlog::info("Created Vertex client (region: {}, project: {})",
+            spdlog::debug("Created Vertex client (region: {}, project: {})",
                           region, project.empty() ? "not set" : project);
             return client;
         }
         case APIProvider::Foundry: {
             auto client = std::make_unique<AnthropicClient>(effectiveKey);
-            spdlog::info("Created Foundry client (placeholder, using AnthropicClient)");
+            spdlog::debug("Created Foundry client (placeholder, using AnthropicClient)");
             return client;
         }
     }
