@@ -111,3 +111,18 @@ add_test(NAME distributed COMMAND test_distributed)
 add_executable(test_thread_safety test_thread_safety.cpp)
 target_link_libraries(test_thread_safety PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME thread_safety COMMAND test_thread_safety)
+
+# Unit test: HybridStorage CRUD
+add_executable(test_hybrid_storage test_hybrid_storage.cpp)
+target_link_libraries(test_hybrid_storage PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME hybrid_storage COMMAND test_hybrid_storage)
+
+# Unit test: WAL Persistence
+add_executable(test_wal_persistence test_wal_persistence.cpp)
+target_link_libraries(test_wal_persistence PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME wal_persistence COMMAND test_wal_persistence)
+
+# Unit test: Service Context (lifecycle, CRUD via context)
+add_executable(test_api_handlers test_api_handlers.cpp)
+target_link_libraries(test_api_handlers PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME service_context COMMAND test_api_handlers)

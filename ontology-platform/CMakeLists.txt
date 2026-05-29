@@ -139,6 +139,12 @@ set(API_SOURCES
 
 set(BOOTSTRAP_SOURCES
     src/bootstrap/Bootstrap.cpp
+)
+
+# ServiceContext.cpp must be in ontology_core (not just the server)
+# because its ~ServiceContext() = default requires complete types that
+# are only forward-declared in ServiceContext.hpp
+set(CONTEXT_SOURCES
     src/bootstrap/ServiceContext.cpp
 )
 
@@ -154,6 +160,7 @@ add_library(ontology_core STATIC
     ${NEURAL_SOURCES}
     ${MCP_SOURCES}
     ${RAG_SOURCES}
+    ${CONTEXT_SOURCES}
 )
 
 target_include_directories(ontology_core
