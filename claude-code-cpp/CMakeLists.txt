@@ -286,6 +286,7 @@ set(CONSOLE_SOURCES
     src/console/PromptRenderer.cpp
     src/console/TurnDurationRenderer.cpp
     src/console/CollapsedToolRenderer.cpp
+    src/console/ActivityDescription.cpp
 )
 
 # 上下文源文件

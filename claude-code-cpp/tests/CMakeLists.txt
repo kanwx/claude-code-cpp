@@ -171,3 +171,7 @@ catch_discover_tests(test_mcp_client)
 add_executable(test_rule_engine test_rule_engine.cpp)
 target_link_libraries(test_rule_engine PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_rule_engine)
+
+add_executable(test_activity_description test_activity_description.cpp)
+target_link_libraries(test_activity_description PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_activity_description)
