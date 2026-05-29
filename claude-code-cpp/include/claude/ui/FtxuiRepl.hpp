@@ -91,6 +91,13 @@ public:
     const std::vector<DisplayMessage>& messages() const { return messages_; }
     std::vector<DisplayMessage>& messages() { return messages_; }
 
+    // State setters (called from main.cpp during setup)
+    void setCurrentMode(const String& mode) { currentMode_ = mode; modeHintDismissed_ = false; }
+    void setAuthStatus(bool authenticated) { isAuthenticated_ = authenticated; }
+    void setCwd(const String& cwd) { cwd_ = cwd; }
+    void setGitBranch(const String& branch) { gitBranch_ = branch; }
+    void dismissModeHint() { modeHintDismissed_ = true; }
+
 private:
     friend class detail::MainComponent;  // extracted render component needs private access
 
@@ -192,12 +199,6 @@ private:
     // Cwd/git state
     String cwd_;
     String gitBranch_;
-
-    void setCurrentMode(const String& mode) { currentMode_ = mode; modeHintDismissed_ = false; }
-    void setAuthStatus(bool authenticated) { isAuthenticated_ = authenticated; }
-    void setCwd(const String& cwd) { cwd_ = cwd; }
-    void setGitBranch(const String& branch) { gitBranch_ = branch; }
-    void dismissModeHint() { modeHintDismissed_ = true; }
 
     // Optional AppState link for reactive state accessors
     AppState* appState_ = nullptr;
