@@ -165,9 +165,10 @@ private:
 
     // ========== Permission prompt state ==========
     bool permissionPromptActive_ = false;   // UI is showing permission prompt
-    int permissionFocusedIndex_ = 0;         // Currently focused option (0=Yes, 1=Yes always, 2=No, 3=No always)
+    int permissionFocusedIndex_ = 0;         // Currently focused option (0-4: 5 options)
     String permissionToolName_;              // Tool name being asked about
     String permissionActivity_;              // Activity description
+    String permissionDescription_;           // Tool-specific description like "Allow Bash to run: npm test"
 
     // Synchronization: agent thread waits for user choice
     std::mutex permissionMutex_;
@@ -180,6 +181,23 @@ private:
 
     // Creative verb index for turn duration
     std::atomic<size_t> turnVerbIndex_{0};
+
+    // Mode state
+    String currentMode_;
+    bool modeHintDismissed_ = false;
+
+    // Auth state
+    bool isAuthenticated_ = false;
+
+    // Cwd/git state
+    String cwd_;
+    String gitBranch_;
+
+    void setCurrentMode(const String& mode) { currentMode_ = mode; modeHintDismissed_ = false; }
+    void setAuthStatus(bool authenticated) { isAuthenticated_ = authenticated; }
+    void setCwd(const String& cwd) { cwd_ = cwd; }
+    void setGitBranch(const String& branch) { gitBranch_ = branch; }
+    void dismissModeHint() { modeHintDismissed_ = true; }
 
     // Optional AppState link for reactive state accessors
     AppState* appState_ = nullptr;

@@ -2,6 +2,7 @@
 
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/ui/FtxuiMarkdown.hpp"
+#include "claude/ui/PromptInputFooter.hpp"
 #include "claude/repl/Completer.hpp"
 #include "claude/core/ReactiveState.hpp"
 #include <ftxui/component/mouse.hpp>
@@ -951,6 +952,21 @@ public:
             completionArea = vbox(std::move(compElems));
         }
 
+        // Build footer state
+        ftxui_footer::FooterState footerState;
+        footerState.mode = r->currentMode_;
+        footerState.modeHintDismissed = r->modeHintDismissed_;
+        footerState.isAuthenticated = r->isAuthenticated_;
+        footerState.modelInfo = r->modelInfo_;
+        footerState.contextPct = (r->contextMaxTokens_ > 0)
+            ? static_cast<int>(100 * r->contextUsedTokens_ / r->contextMaxTokens_) : 0;
+        footerState.costUsd = r->costUsd_;
+        footerState.isStreaming = r->isStreaming_;
+        footerState.cwd = r->cwd_;
+        footerState.gitBranch = r->gitBranch_;
+
+        auto footer = ftxui_footer::renderFooter(footerState);
+
         return vbox({
             header,
             separatorLight(),
@@ -959,6 +975,7 @@ public:
             statusBar,
             completionArea,
             inputLine | (r->isStreaming_ ? dim : bold),
+            footer,
         });
     }
 

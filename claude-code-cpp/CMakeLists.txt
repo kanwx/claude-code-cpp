@@ -472,6 +472,7 @@ set(UI_SOURCES
     src/ui/components/PermissionPrompt.cpp
     src/ui/components/ModalOverlay.cpp
     src/ui/components/TextInputComponent.cpp
+    src/ui/PromptInputFooter.cpp
 )
 
 # RAG源文件
