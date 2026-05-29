@@ -604,76 +604,7 @@ public:
             elems.push_back(hbox(std::move(thinkingElems)));
         }
 
-        // Permission prompt — bordered box with ╭╰ style
-        if (r->permissionPromptActive_) {
-            if (!elems.empty()) elems.push_back(text(""));
-
-            elems.push_back(hbox({
-                text("╭─ ⚠ Permission Required ─") | color(MacGold),
-                filler() | color(MacGold),
-                text("╮") | color(MacGold),
-            }));
-            elems.push_back(hbox({
-                text("│ ") | color(MacGold),
-                text("Tool: ") | dim | color(MacCream),
-                text(r->permissionToolName_) | bold,
-                filler(),
-                text(" │") | color(MacGold),
-            }));
-            if (!r->permissionActivity_.empty()) {
-                String actSummary = r->permissionActivity_;
-                if (actSummary.size() > 80) actSummary = actSummary.substr(0, 77) + "...";
-                elems.push_back(hbox({
-                    text("│ ") | color(MacGold),
-                    text("Activity: ") | dim | color(MacCream),
-                    text(actSummary),
-                    filler(),
-                    text(" │") | color(MacGold),
-                }));
-            }
-            elems.push_back(hbox({
-                text("│") | color(MacGold),
-                filler(),
-                text("│") | color(MacGold),
-            }));
-
-            const char* optionLabels[] = {
-                "Yes (once)",
-                "Yes, always allow",
-                "No (once)",
-                "No, always deny"
-            };
-            const Color optionColors[] = {
-                MacMint,
-                MacSage,
-                MacRose,
-                ftxui::Color::RGB(180, 120, 120)
-            };
-
-            for (int i = 0; i < 4; i++) {
-                bool focused = (i == r->permissionFocusedIndex_);
-                elems.push_back(hbox({
-                    text("│ ") | color(MacGold),
-                    text(focused ? "❯ " : "  "),
-                    text(optionLabels[i])
-                        | (focused ? bold : dim)
-                        | color(focused ? optionColors[i] : MacCream),
-                    filler(),
-                    text(" │") | color(MacGold),
-                }));
-            }
-            elems.push_back(hbox({
-                text("│ ") | color(MacGold),
-                text("↑↓ select · Enter confirm") | dim | color(MacShadow),
-                filler(),
-                text(" │") | color(MacGold),
-            }));
-            elems.push_back(hbox({
-                text("╰") | color(MacGold),
-                filler() | color(MacGold),
-                text("╯") | color(MacGold),
-            }));
-        }
+        // Permission prompt is rendered as an overlay (see below), not inline
 
         // Show empty content area until first message arrives — no welcome screen
         if (elems.empty() && !r->isStreaming_ && !r->isThinking_) {
@@ -720,6 +651,119 @@ public:
             });
         } else {
             messagesArea = std::move(messagesContent);
+        }
+
+        // --- Permission prompt overlay ---
+        // Render as an overlay on the content area (not inline in messages),
+        // matching the official Claude Code's overlay slot in FullscreenLayout.
+        // Uses FTXUI's dbox() to stack the prompt on top of messages.
+        Element permOverlay = emptyElement();
+        if (r->permissionPromptActive_) {
+            // Tool badge
+            auto badgeBg = toolBgColor(r->permissionToolName_);
+            auto badgeFg = toolFgColor(r->permissionToolName_);
+
+            std::vector<Element> permElems;
+
+            permElems.push_back(hbox({
+                text("╭─ ⚠ Permission Required ─") | color(MacGold),
+                filler() | color(MacGold),
+                text("╮") | color(MacGold),
+            }));
+
+            permElems.push_back(hbox({
+                text("│ ") | color(MacGold),
+                text(" " + r->permissionToolName_ + " ") | bold | bgcolor(badgeBg) | color(badgeFg),
+                filler(),
+                text(" │") | color(MacGold),
+            }));
+
+            // Description (tool-specific)
+            if (!r->permissionDescription_.empty()) {
+                String descSummary = r->permissionDescription_;
+                if (descSummary.size() > 80) descSummary = descSummary.substr(0, 77) + "...";
+                permElems.push_back(hbox({
+                    text("│ ") | color(MacGold),
+                    text(descSummary) | dim | color(MacCream),
+                    filler(),
+                    text(" │") | color(MacGold),
+                }));
+            }
+
+            // Activity (fallback, shown if description is empty)
+            if (r->permissionDescription_.empty() && !r->permissionActivity_.empty()) {
+                String actSummary = r->permissionActivity_;
+                if (actSummary.size() > 80) actSummary = actSummary.substr(0, 77) + "...";
+                permElems.push_back(hbox({
+                    text("│ ") | color(MacGold),
+                    text(actSummary) | dim | color(MacCream),
+                    filler(),
+                    text(" │") | color(MacGold),
+                }));
+            }
+
+            permElems.push_back(hbox({
+                text("│") | color(MacGold),
+                filler(),
+                text("│") | color(MacGold),
+            }));
+
+            const char* optionLabels[] = {
+                "Yes (once)",
+                "Allow for this session",
+                "Yes, always allow",
+                "No (once)",
+                "No, always deny"
+            };
+            const Color optionColors[] = {
+                MacMint,    // AllowOnce
+                MacSage,    // AllowSession
+                MacSage,    // AlwaysAllow
+                MacRose,    // DenyOnce
+                MacRose,    // AlwaysDeny
+            };
+
+            for (int i = 0; i < 5; i++) {
+                bool focused = (i == r->permissionFocusedIndex_);
+                permElems.push_back(hbox({
+                    text("│ ") | color(MacGold),
+                    text(focused ? "❯ " : "  "),
+                    text(optionLabels[i])
+                        | (focused ? bold : dim)
+                        | color(focused ? optionColors[i] : MacCream),
+                    filler(),
+                    text(" │") | color(MacGold),
+                }));
+            }
+            permElems.push_back(hbox({
+                text("│ ") | color(MacGold),
+                text("↑↓ select · Enter confirm · Esc cancel") | dim | color(MacShadow),
+                filler(),
+                text(" │") | color(MacGold),
+            }));
+            permElems.push_back(hbox({
+                text("╰") | color(MacGold),
+                filler() | color(MacGold),
+                text("╯") | color(MacGold),
+            }));
+
+            // Use clear_under so the prompt doesn't show transparency artifacts
+            // over the messages behind it
+            permOverlay = clear_under(vbox(std::move(permElems)));
+        }
+
+        // Compose content area: overlay permission prompt on messages using dbox
+        // dbox stacks elements — first is the base, subsequent are overlaid on top.
+        // filler() pushes the overlay to the bottom of the content area,
+        // hcenter centers it horizontally, and size constrains width to 70.
+        Element contentArea;
+        if (r->permissionPromptActive_) {
+            contentArea = dbox({
+                messagesArea | flex,
+                vbox({ filler(), permOverlay | hcenter | size(WIDTH, LESS_THAN, 70) }),
+            }) | flex;
+        } else {
+            contentArea = std::move(messagesArea);
         }
 
         // --- Status bar ---
@@ -884,7 +928,7 @@ public:
         return vbox({
             header,
             separatorLight(),
-            messagesArea,
+            contentArea | flex,
             separatorLight(),
             statusBar,
             completionArea,
@@ -1005,11 +1049,11 @@ public:
         if (r->permissionPromptActive_) {
             if (event == Event::ArrowUp || event == Event::CtrlP) {
                 r->permissionFocusedIndex_ = (r->permissionFocusedIndex_ > 0)
-                    ? r->permissionFocusedIndex_ - 1 : 3;
+                    ? r->permissionFocusedIndex_ - 1 : 4;
                 return true;
             }
             if (event == Event::ArrowDown || event == Event::CtrlN) {
-                r->permissionFocusedIndex_ = (r->permissionFocusedIndex_ < 3)
+                r->permissionFocusedIndex_ = (r->permissionFocusedIndex_ < 4)
                     ? r->permissionFocusedIndex_ + 1 : 0;
                 return true;
             }
@@ -1017,11 +1061,13 @@ public:
                 // Convert focused index to PermissionChoice
                 PermissionChoice choices[] = {
                     PermissionChoice::AllowOnce,
+                    PermissionChoice::AllowSession,
                     PermissionChoice::AlwaysAllow,
                     PermissionChoice::DenyOnce,
                     PermissionChoice::AlwaysDeny
                 };
-                PermissionChoice choice = choices[r->permissionFocusedIndex_];
+                int idx = std::clamp(r->permissionFocusedIndex_, 0, 4);
+                PermissionChoice choice = choices[idx];
                 r->permissionPromptActive_ = false;
 
                 // Signal agent thread to continue
