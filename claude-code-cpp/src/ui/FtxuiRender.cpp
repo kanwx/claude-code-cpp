@@ -76,6 +76,12 @@ public:
             text(fmtTokens(r->inputTokens_) + " in/" + fmtTokens(r->outputTokens_) + " out") | color(MacCream) | dim,
             text(" · ") | color(MacShadow),
             text(fmtCost(r->costUsd_)) | color(MacCream) | dim,
+            text(" │ ") | color(MacShadow),
+            text(r->cwd_.empty() ? "~" : r->cwd_) | dim | color(MacCream),
+            r->gitBranch_.empty() ? emptyElement()
+                : hbox({ text(" (") | color(MacShadow),
+                         text(r->gitBranch_) | dim | color(MacSky),
+                         text(")") | color(MacShadow) }),
             filler(),
             text(r->isStreaming_ ? "● Running" : "○ Idle")
                 | color(r->isStreaming_ ? MacMint : MacShadow),
