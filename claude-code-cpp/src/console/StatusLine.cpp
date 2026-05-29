@@ -79,6 +79,7 @@ String StatusLine::formatTokenCount(long tokens) {
 }
 
 void StatusLine::refresh() {
+    if (!isatty(STDOUT_FILENO)) return;
     if (!enabled_ || !tokenTracker_) return;
 
     // Check debouncing — only execute command at most once per second
@@ -228,6 +229,7 @@ String StatusLine::executeStatusLineCommand() {
 }
 
 void StatusLine::clearStatusLine() {
+    if (!isatty(STDOUT_FILENO)) return;
     int height = getTerminalHeight();
     out_ << AnsiStyle::SAVE_CURSOR;
     out_ << AnsiStyle::moveCursor(height, 1);
@@ -247,6 +249,7 @@ String StatusLine::abbreviatePath(const String& path) {
 // ========== Reactive Auto-Refresh ==========
 
 void StatusLine::startAutoRefresh() {
+    if (!isatty(STDOUT_FILENO)) return;
     if (autoRefreshRunning_.exchange(true)) return; // already running
     refreshThread_ = std::thread(&StatusLine::refreshLoop, this);
 }

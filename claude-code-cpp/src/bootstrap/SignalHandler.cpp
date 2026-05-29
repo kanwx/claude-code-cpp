@@ -14,19 +14,24 @@ std::atomic<int> g_ctrlCCount{0};
 std::chrono::steady_clock::time_point g_lastCtrlCTime{};
 
 void restoreTerminal() {
-    // Disable all mouse tracking modes (DECSET 1000/1002/1003/1006)
-    // These are the sequences FTXUI's TrackMouse() enables. Writing them
-    // directly ensures cleanup even when FTXUI's Uninstall() is bypassed.
-    write(STDOUT_FILENO, "\x1b[?1000l", 8);  // Disable basic mouse tracking
-    write(STDOUT_FILENO, "\x1b[?1002l", 8);  // Disable button-event tracking
-    write(STDOUT_FILENO, "\x1b[?1003l", 8);  // Disable any-event tracking
-    write(STDOUT_FILENO, "\x1b[?1006l", 8);  // Disable SGR mouse mode
+    // Only write ANSI escape sequences when output is a TTY.
+    // In non-TTY mode (piped output), these appear as literal garbage.
+    if (isatty(STDOUT_FILENO)) {
+        // Disable all mouse tracking modes (DECSET 1000/1002/1003/1006)
+        // These are the sequences FTXUI's TrackMouse() enables. Writing them
+        // directly ensures cleanup even when FTXUI's Uninstall() is bypassed.
+        write(STDOUT_FILENO, "\x1b[?1000l", 8);  // Disable basic mouse tracking
+        write(STDOUT_FILENO, "\x1b[?1002l", 8);  // Disable button-event tracking
+        write(STDOUT_FILENO, "\x1b[?1003l", 8);  // Disable any-event tracking
+        write(STDOUT_FILENO, "\x1b[?1006l", 8);  // Disable SGR mouse mode
 
-    // Restore cursor visibility and reset text attributes
-    write(STDOUT_FILENO, "\x1b[?25h", 6);    // Show cursor
-    write(STDOUT_FILENO, "\x1b[0m", 4);      // Reset all attributes
+        // Restore cursor visibility and reset text attributes
+        write(STDOUT_FILENO, "\x1b[?25h", 6);    // Show cursor
+        write(STDOUT_FILENO, "\x1b[0m", 4);      // Reset all attributes
+    }
 
     // Restore terminal from raw mode (tcsetattr with original settings)
+    // tcsetattr is always safe — not an escape sequence.
     // FTXUI's Install() sets raw mode; if we bypass Uninstall(), we need
     // to restore canonical mode so the shell works normally after exit.
     struct termios t;
