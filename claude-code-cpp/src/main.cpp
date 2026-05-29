@@ -3,6 +3,7 @@
 #include <memory>
 #include <filesystem>
 #include <thread>
+#include <unistd.h>
 #include <CLI/CLI.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -212,11 +213,19 @@ private:
         app.add_option("--append-system-prompt", appendSystemPrompt_,
                        "Append to the default system prompt");
 #ifdef HAS_FTXUI
-        app.add_flag("--ftxui", useFtxui_, "Use FTXUI component-based terminal UI");
+        bool noFtxui = false;
+        app.add_flag("--no-ftxui", noFtxui, "Disable FTXUI, use readline mode instead");
 #endif
 
         try {
             app.parse(argc, argv);
+#ifdef HAS_FTXUI
+            if (noFtxui) useFtxui_ = false;
+            // Auto-fallback to readline when stdout is not a TTY
+            if (useFtxui_ && !isatty(STDOUT_FILENO)) {
+                useFtxui_ = false;
+            }
+#endif
         } catch (const CLI::ParseError& e) {
             return app.exit(e);
         }
@@ -831,7 +840,11 @@ private:
     bool verbose_ = false;
     bool dangerouslySkipPermissions_ = false;
     bool autoMode_ = false;
+#ifdef HAS_FTXUI
+    bool useFtxui_ = true;
+#else
     bool useFtxui_ = false;
+#endif
     String model_;
     String provider_;
     String permissionModeStr_;
