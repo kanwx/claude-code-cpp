@@ -48,6 +48,20 @@ public:
         for (int i = filled; i < barWidth; ++i) barStr += "░";
         String pctStr = std::to_string(ctxPct) + "% ctx";
 
+        // Token count / cost formatters
+        auto fmtTokens = [](int n) -> String {
+            if (n >= 1'000'000) return std::to_string(n / 100'000) + "." + std::to_string((n % 100'000) / 10) + "M";
+            if (n >= 1'000) return std::to_string(n / 100) + "." + std::to_string((n % 100) / 10) + "K";
+            return std::to_string(n);
+        };
+
+        auto fmtCost = [](double cost) -> String {
+            if (cost < 0.0001) return "$0.0000";
+            char buf[16];
+            snprintf(buf, sizeof(buf), "$%.4f", cost);
+            return String(buf);
+        };
+
         auto header = hbox({
             text(" ╭─") | color(MacPeach),
             text(" Claude Code C++ ") | bold | color(MacPeach),
@@ -56,6 +70,10 @@ public:
             text(" │ ") | color(MacShadow),
             text(barStr) | color(barColor),
             text(" " + pctStr) | color(barColor) | dim,
+            text(" │ ") | color(MacShadow),
+            text(fmtTokens(r->inputTokens_) + " in/" + fmtTokens(r->outputTokens_) + " out") | color(MacCream) | dim,
+            text(" · ") | color(MacShadow),
+            text(fmtCost(r->costUsd_)) | color(MacCream) | dim,
             filler(),
             text(r->isStreaming_ ? "● Running" : "○ Idle")
                 | color(r->isStreaming_ ? MacMint : MacShadow),

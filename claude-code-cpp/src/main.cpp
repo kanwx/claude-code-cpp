@@ -715,6 +715,10 @@ private:
                                 tokenTracker_->getContextWindow(),
                                 tokenTracker_->estimateCost()
                             );
+                            replPtr->setTokenCounts(
+                                static_cast<int>(tokenTracker_->getInputTokens()),
+                                static_cast<int>(tokenTracker_->getOutputTokens())
+                            );
                         }
                     }
                 } catch (const std::exception& e) {

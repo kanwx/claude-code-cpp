@@ -46,6 +46,11 @@ public:
         costUsd_ = costUsd;
     }
 
+    void setTokenCounts(int inputTokens, int outputTokens) {
+        inputTokens_ = inputTokens;
+        outputTokens_ = outputTokens;
+    }
+
     /// Link to AppState for reactive state accessors.
     /// When set, the status bar can derive values via reactive::accessors.
     void setAppState(AppState* state) { appState_ = state; }
@@ -115,6 +120,8 @@ private:
     long contextUsedTokens_ = 0;
     long contextMaxTokens_ = 0;
     double costUsd_ = 0.0;
+    int inputTokens_ = 0;
+    int outputTokens_ = 0;
     std::chrono::steady_clock::time_point startTime_{};
 
     // Virtual scrolling — replaces crude visibleCount_=50
