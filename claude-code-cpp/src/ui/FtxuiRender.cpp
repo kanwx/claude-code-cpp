@@ -169,6 +169,32 @@ public:
                 continue;
             }
 
+            if (msg.type == DisplayMessage::Type::AgentProgress) {
+                auto agentType = msg.toolUse.toolName.empty() ? String("Agent") : msg.toolUse.toolName;
+                auto desc = msg.text.empty() ? String("Working...") : msg.text;
+                auto running = msg.expanded;  // makeAgentProgress stores running state in expanded
+                auto tokens = msg.toolResult.result;  // "N tokens"
+
+                auto badgeBg = toolBgColor("Agent");
+                auto badgeFg = toolFgColor("Agent");
+
+                elems.push_back(vbox({
+                    hbox({
+                        text("├── ") | color(MacShadow),
+                        text(" " + agentType + " ") | bold | bgcolor(badgeBg) | color(badgeFg),
+                        text(" " + desc) | color(MacCream),
+                        text(" · ") | color(MacShadow),
+                        text(tokens) | dim | color(MacCream),
+                    }),
+                    hbox({
+                        text("│  ") | color(MacShadow),
+                        text(running ? "⏻  Working..." : "Done") | color(running ? MacGold : MacMint),
+                    }),
+                }));
+                i++;
+                continue;
+            }
+
             if (msg.type == DisplayMessage::Type::CollapsedReadSearch) {
                 if (msg.expanded) {
                     // Show individual tools
