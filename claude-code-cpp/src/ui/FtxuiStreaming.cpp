@@ -6,6 +6,7 @@
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
+#include <algorithm>
 
 namespace claude {
 
@@ -100,27 +101,45 @@ void FtxuiRepl::refreshLoop() {
             auto& taskStore = UnifiedTaskStore::instance();
             auto tasks = taskStore.listTasks();
             int runningCount = 0;
-            std::ostringstream bgStatus;
+            std::vector<DisplayMessage> progressMsgs;
+
             for (const auto& task : tasks) {
                 if (task.status == UnifiedTask::Status::InProgress && task.agentHandle) {
                     runningCount++;
-                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::steady_clock::now() - task.createdAt).count();
-                    bgStatus << "  #" << task.id << " " << task.subject
-                             << " (" << elapsed << "s)\n";
+                    progressMsgs.push_back(DisplayMessage::makeAgentProgress(
+                        task.agentType.empty() ? String("Agent") : task.agentType,
+                        task.subject,
+                        0,
+                        task.totalTokens,
+                        true
+                    ));
                 }
             }
+
             if (runningCount > 0 && !isStreaming_) {
-                String statusMsg = "Background tasks running:\n" + bgStatus.str();
-                screen_->Post([this, msg = std::move(statusMsg)]() {
-                    // Only add if different from last system message to avoid spam
-                    if (messages_.empty() ||
-                        messages_.back().type != DisplayMessage::Type::SystemInfo ||
-                        messages_.back().text.find("Background tasks") == String::npos) {
-                        auto dmsg = DisplayMessage::systemInfo(std::move(msg));
-                        dmsg.messageId = MessageIdGenerator::next();
-                        messages_.push_back(std::move(dmsg));
+                // Assign message IDs before posting (Post callback may be const)
+                for (auto& m : progressMsgs) {
+                    m.messageId = MessageIdGenerator::next();
+                }
+                screen_->Post([this, msgs = std::move(progressMsgs)]() {
+                    // Replace existing AgentProgress messages instead of accumulating
+                    messages_.erase(
+                        std::remove_if(messages_.begin(), messages_.end(),
+                            [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
+                        messages_.end()
+                    );
+                    for (auto& m : msgs) {
+                        messages_.push_back(std::move(m));
                     }
+                });
+            } else if (runningCount == 0) {
+                // Remove any stale AgentProgress messages
+                screen_->Post([this]() {
+                    messages_.erase(
+                        std::remove_if(messages_.begin(), messages_.end(),
+                            [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
+                        messages_.end()
+                    );
                 });
             }
         }

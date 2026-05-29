@@ -48,6 +48,8 @@ struct CollapsedToolGroup {
     int readCount = 0;
     int listCount = 0;
     int bashCount = 0;
+    int writeCount = 0;
+    int editCount = 0;
     int memoryCount = 0;
     int hookCount = 0;
     int mcpCallCount = 0;
@@ -59,33 +61,21 @@ struct CollapsedToolGroup {
     bool active = false;               // Still receiving tool calls
 
     String summaryText() const {
-        std::ostringstream oss;
-        bool first = true;
-        if (readCount > 0) {
-            oss << "Read " << readCount << " file" << (readCount > 1 ? "s" : "");
-            first = false;
-        }
-        if (searchCount > 0) {
-            if (!first) oss << " / ";
-            oss << "Searched " << searchCount << " time" << (searchCount > 1 ? "s" : "");
-            first = false;
-        }
-        if (listCount > 0) {
-            if (!first) oss << " / ";
-            oss << "Listed " << listCount << " director" << (listCount > 1 ? "ies" : "y");
-            first = false;
-        }
-        if (memoryCount > 0) {
-            if (!first) oss << " / ";
-            oss << "Memory " << memoryCount;
-            first = false;
-        }
-        if (bashCount > 0) {
-            if (!first) oss << " / ";
-            oss << "Bash " << bashCount;
-            first = false;
-        }
-        return oss.str();
+        std::vector<String> parts;
+        if (readCount > 0) parts.push_back(active ? ("Reading " + std::to_string(readCount) + " file" + (readCount != 1 ? "s" : "")) : ("Read " + std::to_string(readCount) + " file" + (readCount != 1 ? "s" : "")));
+        if (searchCount > 0) parts.push_back(active ? ("Searching " + std::to_string(searchCount) + " pattern" + (searchCount != 1 ? "s" : "")) : ("Searched " + std::to_string(searchCount) + " pattern" + (searchCount != 1 ? "s" : "")));
+        if (listCount > 0) parts.push_back(active ? ("Listing " + std::to_string(listCount) + " director" + (listCount != 1 ? "ies" : "y")) : ("Listed " + std::to_string(listCount) + " director" + (listCount != 1 ? "ies" : "y")));
+        if (writeCount > 0) parts.push_back(active ? ("Writing " + std::to_string(writeCount) + " file" + (writeCount != 1 ? "s" : "")) : ("Wrote " + std::to_string(writeCount) + " file" + (writeCount != 1 ? "s" : "")));
+        if (editCount > 0) parts.push_back(active ? ("Editing " + std::to_string(editCount) + " file" + (editCount != 1 ? "s" : "")) : ("Edited " + std::to_string(editCount) + " file" + (editCount != 1 ? "s" : "")));
+        if (bashCount > 0) parts.push_back(active ? ("Running " + std::to_string(bashCount) + " command" + (bashCount != 1 ? "s" : "")) : ("Ran " + std::to_string(bashCount) + " command" + (bashCount != 1 ? "s" : "")));
+        if (mcpCallCount > 0) parts.push_back(active ? ("Calling " + std::to_string(mcpCallCount) + " MCP tool" + (mcpCallCount != 1 ? "s" : "")) : ("Called " + std::to_string(mcpCallCount) + " MCP tool" + (mcpCallCount != 1 ? "s" : "")));
+        if (memoryCount > 0) parts.push_back(active ? ("Saving " + std::to_string(memoryCount) + " memor" + (memoryCount != 1 ? "ies" : "y")) : ("Saved " + std::to_string(memoryCount) + " memor" + (memoryCount != 1 ? "ies" : "y")));
+        if (hookCount > 0) parts.push_back(active ? ("Running " + std::to_string(hookCount) + " hook" + (hookCount != 1 ? "s" : "")) : ("Ran " + std::to_string(hookCount) + " hook" + (hookCount != 1 ? "s" : "")));
+        if (parts.empty()) return "[0 tool uses]";
+        String result = parts[0];
+        for (size_t i = 1; i < parts.size(); ++i) result += ", " + parts[i];
+        if (active) result += "...";
+        return result;
     }
 };
 
@@ -109,6 +99,7 @@ struct DisplayMessage {
         HookSummary,          // Hook progress summary
         CollapsedReadSearch,  // Grouped read/search tools (collapsed)
         GroupedToolUse,       // Multiple same-type tool uses merged into one row
+        AgentProgress,        // Sub-agent/parallel task progress tree
     };
 
     Type type;
@@ -213,6 +204,20 @@ struct DisplayMessage {
         DisplayMessage msg;
         msg.type = Type::GroupedToolUse;
         msg.groupedTools = std::move(tools);
+        return msg;
+    }
+
+    static DisplayMessage makeAgentProgress(const String& agentType,
+                                             const String& description,
+                                             int toolUses,
+                                             long tokens,
+                                             bool running) {
+        DisplayMessage msg;
+        msg.type = Type::AgentProgress;
+        msg.text = description;
+        msg.toolUse.toolName = agentType;
+        msg.expanded = running;  // Reuse expanded for running state
+        msg.toolResult.result = std::to_string(tokens) + " tokens";
         return msg;
     }
 };

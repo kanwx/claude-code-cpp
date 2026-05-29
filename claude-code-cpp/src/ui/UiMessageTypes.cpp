@@ -94,6 +94,7 @@ int estimateMessageHeight(const DisplayMessage& msg, int terminalWidth) {
 
         case DisplayMessage::Type::CompactBoundary:
         case DisplayMessage::Type::HookSummary:
+        case DisplayMessage::Type::AgentProgress:
             return 1;
     }
     return 1;
