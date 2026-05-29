@@ -64,6 +64,10 @@ void PermissionStore::load(const std::filesystem::path& configDir) {
                 choice = PermissionChoice::AlwaysAllow;
             } else if (value == "AlwaysDeny") {
                 choice = PermissionChoice::AlwaysDeny;
+            } else if (value == "AllowSession") {
+                // Session-scoped choices should not be persisted; skip
+                spdlog::debug("PermissionStore: skipping session-scoped choice '{}' for key '{}'", value, key);
+                continue;
             } else {
                 spdlog::debug("PermissionStore: skipping unknown choice '{}' for key '{}'", value, key);
                 continue;
@@ -105,6 +109,7 @@ void PermissionStore::save() {
             switch (choice) {
                 case PermissionChoice::AlwaysAllow: value = "AlwaysAllow"; break;
                 case PermissionChoice::AlwaysDeny: value = "AlwaysDeny"; break;
+                case PermissionChoice::AllowSession: continue; // Session-scoped, don't persist
                 default: continue; // Skip AllowOnce/DenyOnce (shouldn't be in the map)
             }
             decObj[key] = value;

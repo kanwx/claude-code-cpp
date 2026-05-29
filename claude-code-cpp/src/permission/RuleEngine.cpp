@@ -352,6 +352,19 @@ void RuleEngine::applyChoiceToSource(
     String prefix = extractCommandPrefix(command);
 
     switch (choice) {
+        case PermissionChoice::AllowSession: {
+            auto rule = prefix.empty()
+                ? PermissionRule::forTool(toolName, PermissionBehavior::Allow, PermissionRuleSource::Session)
+                : PermissionRule::forCommand(toolName, prefix, PermissionBehavior::Allow, PermissionRuleSource::Session);
+
+            settings_.addPermissionRulesToSettings(
+                PermissionRuleSource::Session,
+                {rule},
+                settingsManager_
+            );
+            break;
+        }
+
         case PermissionChoice::AlwaysAllow: {
             auto rule = prefix.empty()
                 ? PermissionRule::forTool(toolName, PermissionBehavior::Allow, destination)
