@@ -20,7 +20,6 @@
 #include <claude/api/AnthropicClient.hpp>
 #include <claude/api/OpenAIClient.hpp>
 #include <claude/config/AppConfig.hpp>
-#include <claude/console/BannerPrinter.hpp>
 #include <claude/console/Spinner.hpp>
 #include <claude/console/AnsiStyle.hpp>
 #include <claude/console/PermissionPromptRenderer.hpp>

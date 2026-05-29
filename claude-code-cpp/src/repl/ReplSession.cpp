@@ -1,6 +1,6 @@
 #include <claude/repl/ReplSession.hpp>
 #include <claude/command/PromptCommand.hpp>
-#include <claude/console/BannerPrinter.hpp>
+// BannerPrinter include removed — banner no longer displayed
 #include <claude/console/Spinner.hpp>
 #include <claude/console/MarkdownRenderer.hpp>
 #include <claude/permission/PermissionTypes.hpp>
@@ -27,10 +27,6 @@
 
 namespace claude {
 
-namespace console {
-    void printBanner();
-}
-
 ReplSession::ReplSession(
     AgentLoop& agentLoop,
     ToolRegistry& tools,
@@ -38,8 +34,6 @@ ReplSession::ReplSession(
 ) : agentLoop_(agentLoop), tools_(tools), commands_(commands) {}
 
 void ReplSession::run() {
-    console::printBanner();
-
     std::cout << "\nType /help for available commands.\n";
     std::cout << "Press Ctrl+C to exit.\n\n";
 
@@ -171,7 +165,6 @@ bool ReplSession::handleSlashCommand(const String& input) {
     if (cmd == "clear") {
         agentLoop_.reset();
         std::cout << "\033[2J\033[H";
-        console::printBanner();
         return true;
     }
 
