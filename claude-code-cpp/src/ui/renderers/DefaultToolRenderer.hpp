@@ -2,7 +2,6 @@
 #ifdef HAS_FTXUI
 
 #include <claude/ui/IToolRenderer.hpp>
-#include "ui/FtxuiColors.hpp"
 #include <claude/console/AnsiStyle.hpp>
 #include <claude/console/ActivityDescription.hpp>
 
