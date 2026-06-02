@@ -470,6 +470,7 @@ set(UI_SOURCES
     src/ui/components/ToolUseRenderer.cpp
     src/ui/components/StatusBarRenderer.cpp
     src/ui/components/MessageComponent.cpp
+    src/ui/components/HeaderBar.cpp
     src/ui/components/PermissionPrompt.cpp
     src/ui/components/ModalOverlay.cpp
     src/ui/components/TextInputComponent.cpp
