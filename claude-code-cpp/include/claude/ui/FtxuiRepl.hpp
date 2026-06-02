@@ -13,9 +13,8 @@
 #include "components/MessageRenderer.hpp"
 #include "components/AppLayout.hpp"
 #include "../permission/PermissionTypes.hpp"
-#include "../console/CreativeVerbs.hpp"
 #include "../repl/Completer.hpp"
-#include "../core/ReactiveState.hpp"
+#include "../bootstrap/AppState.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
