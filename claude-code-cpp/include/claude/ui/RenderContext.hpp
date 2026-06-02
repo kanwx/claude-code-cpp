@@ -2,7 +2,6 @@
 #pragma once
 #ifdef HAS_FTXUI
 
-#include <string>
 #include <ftxui/dom/elements.hpp>
 
 namespace claude::ui {
