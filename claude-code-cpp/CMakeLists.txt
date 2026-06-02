@@ -474,6 +474,18 @@ set(UI_SOURCES
     src/ui/components/PermissionPrompt.cpp
     src/ui/components/ModalOverlay.cpp
     src/ui/components/TextInputComponent.cpp
+    src/ui/components/ToolResultComponent.cpp
+    src/ui/components/UserToolSuccessComponent.cpp
+    src/ui/components/UserToolErrorComponent.cpp
+    src/ui/components/UserToolRejectedComponent.cpp
+    src/ui/components/UserToolCanceledComponent.cpp
+    src/ui/components/AssistantRedactedThinkingComponent.cpp
+    src/ui/components/UserPromptComponent.cpp
+    src/ui/components/AssistantTextComponent.cpp
+    src/ui/components/SystemInfoComponent.cpp
+    src/ui/components/SystemErrorComponent.cpp
+    src/ui/components/TurnDurationComponent.cpp
+    src/ui/components/CompactBoundaryComponent.cpp
     src/ui/PromptInputFooter.cpp
     src/ui/ToolRendererRegistry.cpp
     src/ui/renderers/DefaultToolRenderer.cpp
