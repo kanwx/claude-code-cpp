@@ -486,6 +486,11 @@ set(UI_SOURCES
     src/ui/components/SystemErrorComponent.cpp
     src/ui/components/TurnDurationComponent.cpp
     src/ui/components/CompactBoundaryComponent.cpp
+    src/ui/components/AssistantThinkingComponent.cpp
+    src/ui/components/ToolUseComponent.cpp
+    src/ui/components/CollapsedReadSearchComponent.cpp
+    src/ui/components/GroupedToolUseComponent.cpp
+    src/ui/components/AgentProgressComponent.cpp
     src/ui/PromptInputFooter.cpp
     src/ui/ToolRendererRegistry.cpp
     src/ui/renderers/DefaultToolRenderer.cpp
