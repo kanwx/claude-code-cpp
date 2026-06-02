@@ -79,6 +79,17 @@ struct CollapsedToolGroup {
     }
 };
 
+// ========== Message ID Generator ==========
+
+class MessageIdGenerator {
+public:
+    static String next() {
+        static std::atomic<uint64_t> counter{0};
+        uint64_t id = counter.fetch_add(1, std::memory_order_relaxed);
+        return "msg_" + std::to_string(id);
+    }
+};
+
 // ========== Display Message ==========
 // The output of normalization. Each DisplayMessage corresponds to one
 // visual row/unit in the transcript. One API assistant message may
@@ -100,6 +111,11 @@ struct DisplayMessage {
         CollapsedReadSearch,  // Grouped read/search tools (collapsed)
         GroupedToolUse,       // Multiple same-type tool uses merged into one row
         AgentProgress,        // Sub-agent/parallel task progress tree
+        UserToolSuccess,      // Tool result — success
+        UserToolError,        // Tool result — error
+        UserToolRejected,     // Tool result — user rejected permission
+        UserToolCanceled,     // Tool result — user canceled
+        AssistantRedactedThinking, // Redacted thinking block (no content)
     };
 
     Type type;
@@ -220,16 +236,60 @@ struct DisplayMessage {
         msg.toolResult.result = std::to_string(tokens) + " tokens";
         return msg;
     }
-};
 
-// ========== Message ID Generator ==========
+    static DisplayMessage userToolSuccess(const String& toolUseId,
+                                           const String& toolName,
+                                           const String& result) {
+        DisplayMessage msg;
+        msg.type = Type::UserToolSuccess;
+        msg.messageId = MessageIdGenerator::next();
+        msg.toolResult.toolUseId = toolUseId;
+        msg.toolResult.toolName = toolName;
+        msg.toolResult.result = result;
+        msg.toolResult.isError = false;
+        return msg;
+    }
 
-class MessageIdGenerator {
-public:
-    static String next() {
-        static std::atomic<uint64_t> counter{0};
-        uint64_t id = counter.fetch_add(1, std::memory_order_relaxed);
-        return "msg_" + std::to_string(id);
+    static DisplayMessage userToolError(const String& toolUseId,
+                                         const String& toolName,
+                                         const String& result) {
+        DisplayMessage msg;
+        msg.type = Type::UserToolError;
+        msg.messageId = MessageIdGenerator::next();
+        msg.toolResult.toolUseId = toolUseId;
+        msg.toolResult.toolName = toolName;
+        msg.toolResult.result = result;
+        msg.toolResult.isError = true;
+        return msg;
+    }
+
+    static DisplayMessage userToolRejected(const String& toolUseId,
+                                            const String& toolName) {
+        DisplayMessage msg;
+        msg.type = Type::UserToolRejected;
+        msg.messageId = MessageIdGenerator::next();
+        msg.toolResult.toolUseId = toolUseId;
+        msg.toolResult.toolName = toolName;
+        msg.toolResult.result = "Rejected";
+        return msg;
+    }
+
+    static DisplayMessage userToolCanceled(const String& toolUseId,
+                                            const String& toolName) {
+        DisplayMessage msg;
+        msg.type = Type::UserToolCanceled;
+        msg.messageId = MessageIdGenerator::next();
+        msg.toolResult.toolUseId = toolUseId;
+        msg.toolResult.toolName = toolName;
+        msg.toolResult.result = "Canceled";
+        return msg;
+    }
+
+    static DisplayMessage assistantRedactedThinking() {
+        DisplayMessage msg;
+        msg.type = Type::AssistantRedactedThinking;
+        msg.messageId = MessageIdGenerator::next();
+        return msg;
     }
 };
 
