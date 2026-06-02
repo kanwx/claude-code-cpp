@@ -75,6 +75,7 @@ set(STORAGE_SOURCES
     src/storage/StellarDBClient.cpp
     src/storage/HippoClient.cpp
     src/storage/Distributed.cpp
+    src/storage/GraphQueryTypes.cpp
 )
 
 set(INFERENCE_SOURCES
