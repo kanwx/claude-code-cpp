@@ -43,4 +43,31 @@ inline ftxui::Color toolBgColor(const String& toolName) {
 
 } // namespace claude::ftxui_colors
 
+namespace claude::ui {
+
+/// Theme color constants for the FTXUI render path.
+/// Referenced by RenderContext and all IToolRenderer implementations.
+struct ThemeColors {
+    ftxui::Color primary   = ftxui_colors::MacPeach;
+    ftxui::Color secondary = ftxui_colors::MacSage;
+    ftxui::Color accent    = ftxui_colors::MacSky;
+    ftxui::Color success   = ftxui_colors::MacMint;
+    ftxui::Color warning   = ftxui_colors::MacGold;
+    ftxui::Color error     = ftxui_colors::MacRose;
+    ftxui::Color info      = ftxui_colors::MacSky;
+    ftxui::Color muted     = ftxui_colors::MacCream;
+    ftxui::Color text      = ftxui_colors::MacCream;
+    ftxui::Color background = ftxui_colors::MacBgDark;
+    ftxui::Color prompt    = ftxui_colors::MacSage;
+    ftxui::Color assistant = ftxui_colors::MacSky;
+    ftxui::Color thinking  = ftxui_colors::MacLavender;
+    ftxui::Color toolSuccess = ftxui_colors::MacMint;
+    ftxui::Color toolError   = ftxui_colors::MacRose;
+    ftxui::Color toolRejected = ftxui_colors::MacGold;
+    ftxui::Color toolCanceled = ftxui_colors::MacCream;
+    ftxui::Color dimBorder  = ftxui_colors::MacShadow;
+};
+
+} // namespace claude::ui
+
 #endif // HAS_FTXUI

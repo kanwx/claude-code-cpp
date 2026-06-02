@@ -474,6 +474,8 @@ set(UI_SOURCES
     src/ui/components/ModalOverlay.cpp
     src/ui/components/TextInputComponent.cpp
     src/ui/PromptInputFooter.cpp
+    src/ui/ToolRendererRegistry.cpp
+    src/ui/renderers/DefaultToolRenderer.cpp
 )
 
 # RAG源文件

@@ -179,3 +179,7 @@ catch_discover_tests(test_activity_description)
 add_executable(test_ui_alignment test_ui_alignment.cpp)
 target_link_libraries(test_ui_alignment PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ui_alignment)
+
+add_executable(test_tool_renderer_registry test_tool_renderer_registry.cpp)
+target_link_libraries(test_tool_renderer_registry PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_tool_renderer_registry)
