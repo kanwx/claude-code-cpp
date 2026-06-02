@@ -491,6 +491,10 @@ set(UI_SOURCES
     src/ui/components/CollapsedReadSearchComponent.cpp
     src/ui/components/GroupedToolUseComponent.cpp
     src/ui/components/AgentProgressComponent.cpp
+    src/ui/components/StreamingText.cpp
+    src/ui/components/ThinkingIndicator.cpp
+    src/ui/components/MessageList.cpp
+    src/ui/components/ContentArea.cpp
     src/ui/PromptInputFooter.cpp
     src/ui/ToolRendererRegistry.cpp
     src/ui/renderers/DefaultToolRenderer.cpp
