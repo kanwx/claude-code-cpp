@@ -495,6 +495,7 @@ set(UI_SOURCES
     src/ui/components/ThinkingIndicator.cpp
     src/ui/components/MessageList.cpp
     src/ui/components/ContentArea.cpp
+    src/ui/components/AppLayout.cpp
     src/ui/PromptInputFooter.cpp
     src/ui/ToolRendererRegistry.cpp
     src/ui/renderers/DefaultToolRenderer.cpp

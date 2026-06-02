@@ -11,11 +11,13 @@
 #include "VirtualScroll.hpp"
 #include "MessagePipeline.hpp"
 #include "components/MessageRenderer.hpp"
+#include "components/AppLayout.hpp"
 #include "../permission/PermissionTypes.hpp"
 #include "../console/CreativeVerbs.hpp"
 #include "../repl/Completer.hpp"
 #include "../core/ReactiveState.hpp"
 #include <functional>
+#include <memory>
 #include <vector>
 #include <atomic>
 #include <chrono>
@@ -24,8 +26,6 @@
 #include <condition_variable>
 
 namespace claude {
-
-namespace detail { class MainComponent; } // forward-declare for friend access
 
 class FtxuiRepl {
 public:
@@ -39,17 +39,9 @@ public:
     void setOnSubmit(OnSubmit cb) { onSubmit_ = std::move(cb); }
     void setOnCommand(OnCommand cb) { onCommand_ = std::move(cb); }
     void setOnCancel(OnCancel cb) { onCancel_ = std::move(cb); }
-    void setModelInfo(const String& info) { modelInfo_ = info; }
-    void setContextInfo(long usedTokens, long maxTokens, double costUsd) {
-        contextUsedTokens_ = usedTokens;
-        contextMaxTokens_ = maxTokens;
-        costUsd_ = costUsd;
-    }
-
-    void setTokenCounts(int inputTokens, int outputTokens) {
-        inputTokens_ = inputTokens;
-        outputTokens_ = outputTokens;
-    }
+    void setModelInfo(const String& info);
+    void setContextInfo(long usedTokens, long maxTokens, double costUsd);
+    void setTokenCounts(int inputTokens, int outputTokens);
 
     /// Link to AppState for reactive state accessors.
     /// When set, the status bar can derive values via reactive::accessors.
@@ -99,9 +91,8 @@ public:
     void dismissModeHint() { modeHintDismissed_ = true; }
 
 private:
-    friend class detail::MainComponent;  // extracted render component needs private access
-
     ftxui::Component BuildMainComponent();
+    void syncLayoutState();  // push current state into layoutState_ for AppLayout
     static String formatElapsed(int seconds);
     static String truncate(const String& s, size_t maxLen);
 
@@ -202,6 +193,12 @@ private:
 
     // Optional AppState link for reactive state accessors
     AppState* appState_ = nullptr;
+
+    // ========== AppLayout state ==========
+    // Aggregated state struct for the new AppLayout component tree.
+    // FtxuiRepl updates these fields; AppLayoutComponent reads them during render.
+    ui::AppLayoutState layoutState_;
+    std::unique_ptr<ui::RenderContext> renderContext_;  // constructed in BuildMainComponent()
 };
 
 } // namespace claude
