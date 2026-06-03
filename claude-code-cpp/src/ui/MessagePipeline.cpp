@@ -1,4 +1,5 @@
 #include <claude/ui/MessagePipeline.hpp>
+#include <claude/ui/XmlTagDispatcher.hpp>
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -87,10 +88,17 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
         }
 
         case StreamEvent::Type::ToolResultReady: {
-            // Find matching tool_use and add result message
-            auto resultMsg = DisplayMessage::userToolResult(
-                ToolResultBlock{event.toolId, event.toolName, event.toolResult, event.toolIsError});
-            resultMsg.messageId = MessageIdGenerator::next();
+            // Dispatch to P0 subtypes based on result status
+            DisplayMessage resultMsg;
+            if (event.toolIsRejected) {
+                resultMsg = DisplayMessage::userToolRejected(event.toolId, event.toolName);
+            } else if (event.toolIsCancelled) {
+                resultMsg = DisplayMessage::userToolCanceled(event.toolId, event.toolName);
+            } else if (event.toolIsError) {
+                resultMsg = DisplayMessage::userToolError(event.toolId, event.toolName, event.toolResult);
+            } else {
+                resultMsg = DisplayMessage::userToolSuccess(event.toolId, event.toolName, event.toolResult);
+            }
             messages.push_back(std::move(resultMsg));
             // Mark the tool_use as having its result
             auto it = pendingToolUseIndex_.find(event.toolId);
@@ -136,9 +144,20 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
         }
 
         case StreamEvent::Type::UserMessage: {
-            auto msg = DisplayMessage::userPrompt(event.text);
-            msg.messageId = MessageIdGenerator::next();
-            messages.push_back(std::move(msg));
+            auto dispatchType = claude::ui::XmlTagDispatcher::dispatch(event.text);
+            if (dispatchType != DisplayMessage::Type::UserPrompt) {
+                DisplayMessage msg;
+                msg.type = dispatchType;
+                msg.messageId = MessageIdGenerator::next();
+                auto parsed = claude::ui::XmlTagDispatcher::parseFirstTag(event.text);
+                msg.text = parsed ? parsed->content : event.text;
+                msg.timestamp = std::chrono::steady_clock::now();
+                messages.push_back(std::move(msg));
+            } else {
+                auto msg = DisplayMessage::userPrompt(event.text);
+                msg.messageId = MessageIdGenerator::next();
+                messages.push_back(std::move(msg));
+            }
             return true;
         }
 
