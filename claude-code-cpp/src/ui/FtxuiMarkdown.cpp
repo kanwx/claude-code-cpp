@@ -3,11 +3,70 @@
 #include <algorithm>
 #include <sstream>
 #include <cctype>
+#include <cstdint>
+#include <list>
+#include <optional>
 #include <regex>
+#include <unordered_map>
 
 namespace claude {
 
 using namespace ftxui;
+
+// ========== Markdown LRU Cache ==========
+
+namespace {
+class MarkdownCache {
+public:
+    using CacheKey = uint64_t;
+
+    std::optional<std::vector<Element>> get(CacheKey key) {
+        auto it = cache_.find(key);
+        if (it != cache_.end()) {
+            lruList_.splice(lruList_.begin(), lruList_, it->second.second);
+            return it->second.first;
+        }
+        return std::nullopt;
+    }
+
+    void put(CacheKey key, std::vector<Element> elements) {
+        if (cache_.size() >= maxSize_) {
+            evictOldest();
+        }
+        lruList_.push_front(key);
+        cache_[key] = {std::move(elements), lruList_.begin()};
+    }
+
+    void clear() {
+        cache_.clear();
+        lruList_.clear();
+    }
+
+private:
+    void evictOldest() {
+        auto key = lruList_.back();
+        lruList_.pop_back();
+        cache_.erase(key);
+    }
+
+    static constexpr size_t maxSize_ = 200;
+    std::unordered_map<CacheKey,
+        std::pair<std::vector<Element>, std::list<CacheKey>::iterator>> cache_;
+    std::list<CacheKey> lruList_;
+};
+
+// Simple hash function (FNV-1a)
+uint64_t contentHash(const std::string& s) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (char c : s) {
+        h ^= static_cast<uint64_t>(c);
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+MarkdownCache g_markdownCache;
+} // namespace
 
 // Soft macaron colors for markdown rendering
 static const auto MdSky      = ftxui::Color::RGB(140, 186, 210);
@@ -876,6 +935,14 @@ std::vector<Element> FtxuiMarkdown::render(const std::string& markdown) {
         return {ftxui::paragraph(markdown)};
     }
 
+    // Check cache — static messages re-entering the viewport after OffscreenFreeze
+    // don't need re-parsing; cache the fully rendered Elements for instant reuse.
+    auto key = contentHash(markdown);
+    if (auto cached = g_markdownCache.get(key)) {
+        return *cached;
+    }
+
+    // Parse and render
     auto blocks = parse(markdown);
     std::vector<Element> result;
     result.reserve(blocks.size());
@@ -883,6 +950,9 @@ std::vector<Element> FtxuiMarkdown::render(const std::string& markdown) {
     for (const auto& block : blocks) {
         result.push_back(renderBlock(block));
     }
+
+    // Store in cache for future hits
+    g_markdownCache.put(key, result);
 
     return result;
 }
