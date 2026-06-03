@@ -761,4 +761,382 @@ String Neo4jClient::getStatus() const {
     return connected_ ? "connected" : "disconnected";
 }
 
+// ============================================================================
+// Neo4jClient — Cypher result parser
+// ============================================================================
+
+std::vector<Json> Neo4jClient::parseCypherResult(const String& response) {
+    std::vector<Json> results;
+    try {
+        Json result = Json::parse(response);
+        // Neo4j REST format: { "results": [{ "data": [{ "row": [...] }] }] }
+        if (result.contains("results") && result["results"].is_array()) {
+            for (const auto& res : result["results"]) {
+                if (res.contains("data") && res["data"].is_array()) {
+                    for (const auto& item : res["data"]) {
+                        if (item.contains("row") && item["row"].is_array()) {
+                            // row is an array matching the RETURN clause
+                            // Each element in row corresponds to a returned alias
+                            // When there's a single alias, row[0] is the value
+                            if (item["row"].size() == 1) {
+                                results.push_back(item["row"][0]);
+                            } else {
+                                results.push_back(item["row"]);
+                            }
+                        } else {
+                            results.push_back(item);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Neo4j parseCypherResult error: {}", e.what());
+    }
+    return results;
+}
+
+// ============================================================================
+// Neo4jClient — Authority source: data loading
+// ============================================================================
+
+LoadResult Neo4jClient::loadAllClasses(std::vector<Class>& out) {
+    LoadResult result;
+    String response;
+    String cypher =
+        "MATCH (c:Class) RETURN c.id AS id, c.name AS name, "
+        "c.description AS description, c.superClasses AS superClasses, "
+        "c.equivalentClasses AS equivalentClasses, c.disjointClasses AS disjointClasses, "
+        "c.properties AS properties, c.metadata AS metadata";
+    if (!runCypher(cypher, {}, response)) {
+        result.error = "Cypher query failed";
+        return result;
+    }
+    try {
+        auto parsed = parseCypherResult(response);
+        for (auto& row : parsed) {
+            Class cls;
+            cls.id = row.value("id", "");
+            cls.name = row.value("name", "");
+            cls.description = row.value("description", "");
+            if (row.contains("superClasses") && row["superClasses"].is_array()) {
+                cls.superClasses = row["superClasses"].get<std::vector<String>>();
+            }
+            if (row.contains("equivalentClasses") && row["equivalentClasses"].is_array()) {
+                cls.equivalentClasses = row["equivalentClasses"].get<std::vector<String>>();
+            }
+            if (row.contains("disjointClasses") && row["disjointClasses"].is_array()) {
+                cls.disjointClasses = row["disjointClasses"].get<std::vector<String>>();
+            }
+            if (row.contains("properties") && row["properties"].is_array()) {
+                cls.properties = row["properties"].get<std::vector<String>>();
+            }
+            if (row.contains("metadata")) {
+                cls.metadata = row["metadata"];
+            }
+            out.push_back(std::move(cls));
+        }
+        result.success = true;
+        result.count = static_cast<int>(out.size());
+    } catch (const std::exception& e) {
+        result.error = std::string("Parse error: ") + e.what();
+    }
+    return result;
+}
+
+LoadResult Neo4jClient::loadAllIndividuals(std::vector<Individual>& out) {
+    LoadResult result;
+    String response;
+    String cypher =
+        "MATCH (i:Individual) RETURN i.id AS id, i.name AS name, "
+        "i.classId AS classId, i.properties AS properties, "
+        "i.importance AS importance, i.metadata AS metadata";
+    if (!runCypher(cypher, {}, response)) {
+        result.error = "Cypher query failed";
+        return result;
+    }
+    try {
+        auto parsed = parseCypherResult(response);
+        for (auto& row : parsed) {
+            Individual ind;
+            ind.id = row.value("id", "");
+            ind.name = row.value("name", "");
+            ind.classId = row.value("classId", "");
+            ind.importance = row.value("importance", 1.0f);
+            if (row.contains("properties") && row["properties"].is_object()) {
+                for (auto it = row["properties"].begin(); it != row["properties"].end(); ++it) {
+                    ind.properties[it.key()] = it.value();
+                }
+            }
+            if (row.contains("metadata")) {
+                ind.metadata = row["metadata"];
+            }
+            out.push_back(std::move(ind));
+        }
+        result.success = true;
+        result.count = static_cast<int>(out.size());
+    } catch (const std::exception& e) {
+        result.error = std::string("Parse error: ") + e.what();
+    }
+    return result;
+}
+
+LoadResult Neo4jClient::loadAllRelations(std::vector<Relation>& out) {
+    LoadResult result;
+    String response;
+    String cypher =
+        "MATCH (r:Relation) RETURN r.id AS id, r.name AS name, "
+        "r.description AS description, r.domain AS domain, r.range AS range, "
+        "r.isFunctional AS isFunctional, r.isTransitive AS isTransitive, "
+        "r.isSymmetric AS isSymmetric, r.inverseProperty AS inverseProperty, "
+        "r.superProperties AS superProperties, r.metadata AS metadata";
+    if (!runCypher(cypher, {}, response)) {
+        result.error = "Cypher query failed";
+        return result;
+    }
+    try {
+        auto parsed = parseCypherResult(response);
+        for (auto& row : parsed) {
+            Relation rel;
+            rel.id = row.value("id", "");
+            rel.name = row.value("name", "");
+            rel.description = row.value("description", "");
+            rel.domain = row.value("domain", "");
+            rel.range = row.value("range", "");
+            rel.isFunctional = row.value("isFunctional", false);
+            rel.isTransitive = row.value("isTransitive", false);
+            rel.isSymmetric = row.value("isSymmetric", false);
+            rel.inverseProperty = row.value("inverseProperty", "");
+            if (row.contains("superProperties") && row["superProperties"].is_array()) {
+                rel.superProperties = row["superProperties"].get<std::vector<String>>();
+            }
+            if (row.contains("metadata")) {
+                rel.metadata = row["metadata"];
+            }
+            out.push_back(std::move(rel));
+        }
+        result.success = true;
+        result.count = static_cast<int>(out.size());
+    } catch (const std::exception& e) {
+        result.error = std::string("Parse error: ") + e.what();
+    }
+    return result;
+}
+
+LoadResult Neo4jClient::loadAllTriples(std::vector<Triple>& out) {
+    LoadResult result;
+    String response;
+    String cypher =
+        "MATCH (s)-[r]->(o) WHERE r.predicate IS NOT NULL "
+        "RETURN s.id AS subject, r.predicate AS predicate, o.id AS object, "
+        "r.confidence AS confidence";
+    if (!runCypher(cypher, {}, response)) {
+        result.error = "Cypher query failed";
+        return result;
+    }
+    try {
+        auto parsed = parseCypherResult(response);
+        for (auto& row : parsed) {
+            Triple t;
+            t.subject = row.value("subject", "");
+            t.predicate = row.value("predicate", "");
+            t.object = row.value("object", "");
+            t.confidence = row.value("confidence", 1.0f);
+            out.push_back(std::move(t));
+        }
+        result.success = true;
+        result.count = static_cast<int>(out.size());
+    } catch (const std::exception& e) {
+        result.error = std::string("Parse error: ") + e.what();
+    }
+    return result;
+}
+
+// ============================================================================
+// Neo4jClient — Authority source: single writes
+// ============================================================================
+
+bool Neo4jClient::createTriple(const Triple& triple) {
+    Json params;
+    params["s"] = triple.subject;
+    params["p"] = triple.predicate;
+    params["o"] = triple.object;
+    params["conf"] = triple.confidence;
+    String cypher =
+        "MATCH (s {id: $s}), (o {id: $o}) "
+        "CREATE (s)-[r:TRIPLE {predicate: $p, confidence: $conf}]->(o) "
+        "RETURN type(r)";
+    String response;
+    return runCypher(cypher, params, response);
+}
+
+bool Neo4jClient::createRelation(const Relation& rel) {
+    Json props;
+    props["name"] = rel.name;
+    props["description"] = rel.description;
+    props["domain"] = rel.domain;
+    props["range"] = rel.range;
+    props["isFunctional"] = rel.isFunctional;
+    props["isTransitive"] = rel.isTransitive;
+    props["isSymmetric"] = rel.isSymmetric;
+    props["inverseProperty"] = rel.inverseProperty;
+    props["superProperties"] = rel.superProperties;
+    props["metadata"] = rel.metadata;
+    if (!createNode(rel.id, "Relation", props)) return false;
+    if (!rel.domain.empty()) {
+        Json p;
+        p["id"] = rel.id;
+        p["domain"] = rel.domain;
+        String cypher = "MATCH (r:Relation {id: $id}), (d {id: $domain}) MERGE (r)-[:HAS_DOMAIN]->(d)";
+        String response;
+        runCypher(cypher, p, response);
+    }
+    if (!rel.range.empty()) {
+        Json p;
+        p["id"] = rel.id;
+        p["range"] = rel.range;
+        String cypher = "MATCH (r:Relation {id: $id}), (rng {id: $range}) MERGE (r)-[:HAS_RANGE]->(rng)";
+        String response;
+        runCypher(cypher, p, response);
+    }
+    return true;
+}
+
+bool Neo4jClient::deleteClass(const String& id) {
+    return deleteNode(id);
+}
+
+bool Neo4jClient::deleteIndividual(const String& id) {
+    return deleteNode(id);
+}
+
+bool Neo4jClient::deleteTriple(const Triple& triple) {
+    Json params;
+    params["s"] = triple.subject;
+    params["p"] = triple.predicate;
+    params["o"] = triple.object;
+    String cypher =
+        "MATCH (s {id: $s})-[r:TRIPLE {predicate: $p}]->(o {id: $o}) DELETE r";
+    String response;
+    return runCypher(cypher, params, response);
+}
+
+bool Neo4jClient::deleteRelation(const String& id) {
+    return deleteNode(id);
+}
+
+// ============================================================================
+// Neo4jClient — Authority source: graph queries
+// ============================================================================
+
+PathResult Neo4jClient::findShortestPath(const String& from, const String& to) {
+    PathResult result;
+    Json params;
+    params["from"] = from;
+    params["to"] = to;
+    String cypher =
+        "MATCH path = shortestPath((s {id: $from})-[*]-(t {id: $to})) "
+        "RETURN [n IN nodes(path) | n.id] AS nodeIds, "
+        "[r IN relationships(path) | type(r)] AS edgeTypes";
+    String response;
+    if (!runCypher(cypher, params, response)) {
+        result.error = "Cypher query failed";
+        return result;
+    }
+    try {
+        auto parsed = parseCypherResult(response);
+        if (!parsed.empty()) {
+            result.success = true;
+            if (parsed[0].contains("nodeIds") && parsed[0]["nodeIds"].is_array()) {
+                result.nodes = parsed[0]["nodeIds"].get<std::vector<String>>();
+            }
+            if (parsed[0].contains("edgeTypes") && parsed[0]["edgeTypes"].is_array()) {
+                result.edges = parsed[0]["edgeTypes"].get<std::vector<String>>();
+            }
+        }
+    } catch (const std::exception& e) {
+        result.error = std::string("Parse error: ") + e.what();
+    }
+    return result;
+}
+
+std::vector<String> Neo4jClient::getSubClassClosure(const String& classId) {
+    Json params;
+    params["id"] = classId;
+    String cypher = "MATCH (c:Class {id: $id})<-[:subClassOf*]-(sub:Class) RETURN DISTINCT sub.id AS id";
+    String response;
+    if (!runCypher(cypher, params, response)) return {};
+    try {
+        auto parsed = parseCypherResult(response);
+        std::vector<String> result;
+        for (auto& row : parsed) result.push_back(row.value("id", ""));
+        return result;
+    } catch (const std::exception&) { return {}; }
+}
+
+std::vector<String> Neo4jClient::getSuperClassClosure(const String& classId) {
+    Json params;
+    params["id"] = classId;
+    String cypher = "MATCH (c:Class {id: $id})-[:subClassOf*]->(sup:Class) RETURN DISTINCT sup.id AS id";
+    String response;
+    if (!runCypher(cypher, params, response)) return {};
+    try {
+        auto parsed = parseCypherResult(response);
+        std::vector<String> result;
+        for (auto& row : parsed) result.push_back(row.value("id", ""));
+        return result;
+    } catch (const std::exception&) { return {}; }
+}
+
+CommunityResult Neo4jClient::detectCommunities(const String& algorithm, const Json& params) {
+    CommunityResult result;
+    String cypher;
+    if (algorithm == "louvain") {
+        cypher =
+            "CALL gds.louvain.stream('ontologyGraph', {relationshipTypes: ['subClassOf']}) "
+            "YIELD nodeId, communityId RETURN gds.util.asNode(nodeId).id AS id, communityId";
+    } else if (algorithm == "label_propagation") {
+        cypher =
+            "CALL gds.labelPropagation.stream('ontologyGraph', {}) "
+            "YIELD nodeId, communityId RETURN gds.util.asNode(nodeId).id AS id, communityId";
+    } else {
+        result.error = "Unknown algorithm: " + algorithm;
+        return result;
+    }
+    String response;
+    if (!runCypher(cypher, {}, response)) {
+        result.error = "Community detection query failed";
+        return result;
+    }
+    try {
+        auto parsed = parseCypherResult(response);
+        std::unordered_map<int64_t, std::vector<String>> groups;
+        for (auto& row : parsed) {
+            int64_t cid = row.value("communityId", int64_t(0));
+            String nodeId = row.value("id", "");
+            groups[cid].push_back(nodeId);
+        }
+        for (auto& [cid, members] : groups) {
+            result.communities.push_back(std::move(members));
+        }
+        result.success = true;
+    } catch (const std::exception& e) {
+        result.error = std::string("Parse error: ") + e.what();
+    }
+    return result;
+}
+
+// ============================================================================
+// Neo4jClient — Authority source: health
+// ============================================================================
+
+HealthStatus Neo4jClient::healthCheck() const {
+    HealthStatus hs;
+    String response;
+    const_cast<Neo4jClient*>(this)->runCypher("RETURN 1 AS ok", {}, response);
+    hs.connected = !response.empty();
+    if (!hs.connected) hs.error = "Health check query failed";
+    return hs;
+}
+
 } // namespace ontology

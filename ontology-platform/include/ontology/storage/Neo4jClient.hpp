@@ -45,6 +45,30 @@ public:
 
     bool batchCreate(const std::vector<Triple>& triples) override;
 
+    // Authority source: data loading
+    LoadResult loadAllClasses(std::vector<Class>& out) override;
+    LoadResult loadAllIndividuals(std::vector<Individual>& out) override;
+    LoadResult loadAllRelations(std::vector<Relation>& out) override;
+    LoadResult loadAllTriples(std::vector<Triple>& out) override;
+
+    // Authority source: single writes
+    bool createTriple(const Triple& triple) override;
+    bool createRelation(const Relation& rel) override;
+    bool deleteClass(const String& id) override;
+    bool deleteIndividual(const String& id) override;
+    bool deleteTriple(const Triple& triple) override;
+    bool deleteRelation(const String& id) override;
+
+    // Authority source: graph queries
+    PathResult findShortestPath(const String& from, const String& to) override;
+    std::vector<String> getSubClassClosure(const String& classId) override;
+    std::vector<String> getSuperClassClosure(const String& classId) override;
+    CommunityResult detectCommunities(const String& algorithm,
+                                      const Json& params = {}) override;
+
+    // Authority source: health
+    HealthStatus healthCheck() const override;
+
     bool isConnected() const override;
     String getStatus() const override;
 
@@ -62,6 +86,7 @@ private:
     // Cypher 执行
     bool runCypher(const String& cypher, const Json& params, String& response);
     String executeCypher(const String& cypher, const Json& params = {});
+    std::vector<Json> parseCypherResult(const String& response);
 
     // 扩展方法
     std::vector<Json> findNodes(const String& label, const Json& conditions);
