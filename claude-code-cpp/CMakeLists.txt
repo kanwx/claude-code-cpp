@@ -467,6 +467,7 @@ set(UI_SOURCES
     src/ui/XmlTagDispatcher.cpp
     src/ui/MessagePipeline.cpp
     src/ui/VirtualScroll.cpp
+    src/ui/OffscreenFreeze.cpp
     src/ui/components/MessageRenderer.cpp
     src/ui/components/AssistantTextRenderer.cpp
     src/ui/components/ToolUseRenderer.cpp
@@ -501,6 +502,23 @@ set(UI_SOURCES
     src/ui/PromptInputFooter.cpp
     src/ui/ToolRendererRegistry.cpp
     src/ui/renderers/DefaultToolRenderer.cpp
+    src/ui/renderers/ReadToolRenderer.cpp
+    src/ui/renderers/BashToolRenderer.cpp
+    src/ui/renderers/EditToolRenderer.cpp
+    src/ui/renderers/WriteToolRenderer.cpp
+    src/ui/renderers/GrepToolRenderer.cpp
+    src/ui/renderers/GlobToolRenderer.cpp
+    src/ui/renderers/AgentToolRenderer.cpp
+    src/ui/renderers/WebFetchToolRenderer.cpp
+    src/ui/renderers/WebSearchToolRenderer.cpp
+    src/ui/renderers/LspToolRenderer.cpp
+    src/ui/SearchOverlay.cpp
+    src/ui/PermissionRendererRegistry.cpp
+    src/ui/permissions/DefaultPermissionRenderer.cpp
+    src/ui/permissions/BashPermissionRenderer.cpp
+    src/ui/permissions/FileEditPermissionRenderer.cpp
+    src/ui/permissions/FileWritePermissionRenderer.cpp
+    src/ui/permissions/FileReadPermissionRenderer.cpp
 )
 
 # RAG源文件

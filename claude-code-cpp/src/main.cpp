@@ -24,12 +24,15 @@
 #include <claude/config/AppConfig.hpp>
 #include <claude/console/Spinner.hpp>
 #include <claude/console/AnsiStyle.hpp>
+#include <claude/console/TerminalCapabilities.hpp>
+#include <claude/console/ThemeSystem.hpp>
 #include <claude/console/PermissionPromptRenderer.hpp>
 #include <claude/console/StatusLine.hpp>
 #include <claude/console/PromptRenderer.hpp>
 #include <claude/console/TurnDurationRenderer.hpp>
 #include <claude/console/Completer.hpp>
 #include <claude/command/CommandRegistry.hpp>
+#include <claude/services/OAuthService.hpp>
 
 // 行编辑支持: 优先使用 GNU readline
 #if __has_include(<readline/readline.h>)
@@ -345,8 +348,25 @@ private:
         // 初始化命令
         initCommands();
 
+        // Auto-downgrade theme if terminal doesn't support truecolor
+        if (!console::TerminalCapabilities::supportsTrueColor()) {
+            auto& themeMgr = console::ThemeManager::instance();
+            auto current = themeMgr.getCurrentTheme().name;
+            if (current == "dark" || current.empty()) {
+                themeMgr.setTheme("dark-ansi");
+            }
+        }
+
         // 初始化 API 客户端 (via agent_runner)
         initApiClient();
+
+        // Create FTXUI REPL before initAgentLoop so callbacks capture a valid pointer
+#ifdef HAS_FTXUI
+        if (useFtxui_) {
+            ftxuiRepl_ = std::make_unique<FtxuiRepl>();
+            ftxuiRepl_->setAppState(&AppState::instance());
+        }
+#endif
 
         // 初始化 AgentLoop (via agent_runner)
         initAgentLoop();
@@ -596,11 +616,11 @@ private:
     void runRepl() {
 
         // Enable status line at bottom of terminal — prefer display name from ModelStrings
-        if (tokenTracker_) {
+        if (agentLoop_) {
             statusLine_ = std::make_unique<StatusLine>(std::cout);
             String rawModel = config_->getModel();
             if (rawModel.empty()) rawModel = "glm-5";
-            statusLine_->enable(rawModel, *tokenTracker_);
+            statusLine_->enable(rawModel, agentLoop_->getTokenTracker());
             auto ms = AppState::instance().modelStrings();
             statusLine_->setModelName(ms.has_value() ? ms->displayName : rawModel);
         }
@@ -665,9 +685,11 @@ private:
 
             // 处理斜杠命令
             if (!input.empty() && input[0] == '/') {
-                if (handleSlashCommand(input)) {
-                    continue;
+                auto cmdResult = handleSlashCommand(input);
+                if (!cmdResult.empty()) {
+                    std::cout << cmdResult << "\n";
                 }
+                continue;
             }
 
             // 运行 Agent
@@ -677,16 +699,13 @@ private:
 
 #ifdef HAS_FTXUI
     void runFtxuiRepl() {
-        ftxuiRepl_ = std::make_unique<FtxuiRepl>();
         auto replPtr = ftxuiRepl_.get();
-
-        // Link AppState for reactive state accessors
-        ftxuiRepl_->setAppState(&AppState::instance());
 
         // Set initial permission mode
         replPtr->setCurrentMode(AppState::instance().permissionMode());
 
-        // Set auth status — check config, env vars, and fd
+        // Set auth status — app works without login (for local/custom models)
+        // Show "logged in" if any key source exists, otherwise still allow use
         {
             auto apiConfig = config_->getApiConfig();
             bool hasAuth = !apiConfig.apiKey.empty()
@@ -714,8 +733,13 @@ private:
         }
 
         ftxuiRepl_->setOnSubmit([this, replPtr](const String& input) {
-            // Join previous agent thread before starting a new one
-            if (agentThread_.joinable()) agentThread_.join();
+            // Don't join the previous agent thread on the UI thread — it could
+            // deadlock if the agent is waiting on a permission prompt.
+            // Instead, cancel the previous run and detach; the new thread starts immediately.
+            if (agentThread_.joinable()) {
+                if (agentLoop_) agentLoop_->cancel();
+                agentThread_.detach();
+            }
             // Agent must run on background thread — UI thread cannot block
             agentThread_ = std::thread([this, replPtr, input]() {
                 g_agentStreaming.store(true, std::memory_order_release);
@@ -732,15 +756,16 @@ private:
                         }
                     } else {
                         replPtr->finishStream(true, "");
-                        if (tokenTracker_) {
+                        if (agentLoop_) {
+                            auto& tracker = agentLoop_->getTokenTracker();
                             replPtr->setContextInfo(
-                                tokenTracker_->getInputTokens() + tokenTracker_->getOutputTokens(),
-                                tokenTracker_->getContextWindow(),
-                                tokenTracker_->estimateCost()
+                                tracker.getInputTokens() + tracker.getOutputTokens(),
+                                tracker.getContextWindow(),
+                                tracker.estimateCost()
                             );
                             replPtr->setTokenCounts(
-                                static_cast<int>(tokenTracker_->getInputTokens()),
-                                static_cast<int>(tokenTracker_->getOutputTokens())
+                                static_cast<int>(tracker.getInputTokens()),
+                                static_cast<int>(tracker.getOutputTokens())
                             );
                         }
                     }
@@ -758,8 +783,46 @@ private:
             }
         });
 
-        ftxuiRepl_->setOnCommand([this](const String& input) {
-            return handleSlashCommand(input);
+        ftxuiRepl_->setOnCommand([this, replPtr](const String& input) {
+            // Quick commands that should run on the UI thread (exit needs terminal cleanup)
+            String cmd = input.substr(1);
+            auto space = cmd.find(' ');
+            if (space != String::npos) cmd = cmd.substr(0, space);
+            if (cmd == "exit" || cmd == "quit" || cmd == "q") {
+                session::saveSession(agentLoop_.get());
+                replPtr->exit();
+                return true;
+            }
+            if (cmd == "clear" || cmd == "c") {
+                agentLoop_->reset();
+                replPtr->addSystemMessage("Conversation cleared.");
+                replPtr->finishStream(true, "");
+                return true;
+            }
+
+            // Other slash commands run on a background thread so the UI doesn't freeze
+            // (especially /login which blocks waiting for browser OAuth callback)
+            if (agentThread_.joinable()) {
+                if (agentLoop_) agentLoop_->cancel();
+                agentThread_.detach();
+            }
+            agentThread_ = std::thread([this, replPtr, input]() {
+                String result = handleSlashCommand(input);
+                if (!result.empty()) {
+                    replPtr->addSystemMessage(result);
+                }
+                replPtr->finishStream(true, "");
+                // Refresh auth status after commands that may change it (e.g., /login)
+                auto apiConfig = config_->getApiConfig();
+                bool hasAuth = !apiConfig.apiKey.empty()
+                            || std::getenv("ANTHROPIC_API_KEY") != nullptr
+                            || std::getenv("CLAUDE_API_KEY") != nullptr
+                            || std::getenv("OPENAI_API_KEY") != nullptr
+                            || AppState::instance().apiKeyFromFd().has_value()
+                            || oauth::OAuthManager::instance().isAuthenticated("anthropic");
+                replPtr->setAuthStatus(hasAuth);
+            });
+            return true;
         });
 
         ftxuiRepl_->run();
@@ -821,24 +884,20 @@ private:
         if (statusLine_) statusLine_->refresh();
     }
 
-    bool handleSlashCommand(const String& input) {
-        // 解析命令
+    String handleSlashCommand(const String& input) {
         size_t space = input.find(' ');
         String cmd = (space == String::npos) ? input.substr(1) : input.substr(1, space - 1);
         String args = (space == String::npos) ? "" : input.substr(space + 1);
 
-        // 内置命令
+        // Built-in commands (also handled in FTXUI onCommand for thread-safety)
         if (cmd == "exit" || cmd == "quit" || cmd == "q") {
             session::saveSession(agentLoop_.get());
-            std::cout << "Goodbye!\n";
-            CleanupRegistry::runCleanupFunctions();  // includes restoreTerminal()
+            CleanupRegistry::runCleanupFunctions();
             _Exit(0);
         }
-
         if (cmd == "clear" || cmd == "c") {
             agentLoop_->reset();
-            std::cout << "Conversation cleared.\n";
-            return true;
+            return "Conversation cleared.";
         }
 
         // 通过 CommandRegistry 执行
@@ -850,14 +909,10 @@ private:
 
         auto result = commandRegistry_->execute(cmd, args, context);
         if (result) {
-            std::cout << *result << "\n";
-            return true;
+            return *result;
         }
 
-        // 未知命令
-        std::cout << "Unknown command: /" << cmd << "\n";
-        std::cout << "Type /help for available commands.\n";
-        return true;
+        return "Unknown command: /" + cmd + "\nType /help for available commands.";
     }
 
     PermissionChoice promptPermission(const PermissionRequest& req) {

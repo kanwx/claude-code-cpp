@@ -123,6 +123,34 @@ int estimateMessageHeight(const DisplayMessage& msg, int terminalWidth) {
     return 1;
 }
 
+// ========== Searchable Text Extraction ==========
+
+std::string DisplayMessage::searchableText() const {
+    switch (type) {
+        case Type::UserPrompt:
+        case Type::SystemInfo:
+        case Type::SystemError:
+        case Type::TurnDuration:
+        case Type::HookSummary:
+        case Type::AgentProgress:
+            return text;
+        case Type::AssistantText:
+            return text;
+        case Type::AssistantThinking:
+            return thinking.text;
+        case Type::AssistantToolUse:
+            return toolUse.toolName + " " + toolUse.input;
+        case Type::UserToolResult:
+        case Type::UserToolSuccess:
+        case Type::UserToolError:
+            return toolResult.toolName + " " + toolResult.result;
+        case Type::CollapsedReadSearch:
+            return collapsedGroup.summaryText();
+        default:
+            return text;
+    }
+}
+
 // ========== Read/Search Tool Detection ==========
 
 bool isReadSearchTool(const String& toolName) {

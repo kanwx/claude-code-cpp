@@ -156,6 +156,9 @@ struct DisplayMessage {
     // Timestamp
     std::chrono::steady_clock::time_point timestamp = std::chrono::steady_clock::now();
 
+    // Searchable text extraction for search overlay
+    String searchableText() const;
+
     // UI state (mutable, only touched on UI thread)
     bool expanded = false;             // For thinking/collapsed groups
     int cachedHeight = -1;             // For virtual scroll, -1 = unknown

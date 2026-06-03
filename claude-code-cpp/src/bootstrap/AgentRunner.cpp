@@ -23,6 +23,23 @@
 
 #ifdef HAS_FTXUI
 #include <claude/ui/FtxuiRepl.hpp>
+#include <claude/ui/ToolRendererRegistry.hpp>
+#include <claude/ui/renderers/ReadToolRenderer.hpp>
+#include <claude/ui/renderers/BashToolRenderer.hpp>
+#include <claude/ui/renderers/EditToolRenderer.hpp>
+#include <claude/ui/renderers/WriteToolRenderer.hpp>
+#include <claude/ui/renderers/GrepToolRenderer.hpp>
+#include <claude/ui/renderers/GlobToolRenderer.hpp>
+#include <claude/ui/renderers/AgentToolRenderer.hpp>
+#include <claude/ui/renderers/WebFetchToolRenderer.hpp>
+#include <claude/ui/renderers/WebSearchToolRenderer.hpp>
+#include <claude/ui/renderers/LspToolRenderer.hpp>
+#include <claude/ui/PermissionRendererRegistry.hpp>
+#include <claude/ui/permissions/DefaultPermissionRenderer.hpp>
+#include <claude/ui/permissions/BashPermissionRenderer.hpp>
+#include <claude/ui/permissions/FileEditPermissionRenderer.hpp>
+#include <claude/ui/permissions/FileWritePermissionRenderer.hpp>
+#include <claude/ui/permissions/FileReadPermissionRenderer.hpp>
 #endif
 
 #include <spdlog/spdlog.h>
@@ -77,6 +94,31 @@ ApiClientHolder createApiClient(const ApiClientParams& params) {
 
 AgentLoopHolder createAgentLoop(const AgentLoopParams& params) {
     AgentLoopHolder holder;
+
+#ifdef HAS_FTXUI
+    // Register permission renderers (idempotent — singleton just overwrites)
+    {
+        auto& permRegistry = ui::PermissionRendererRegistry::instance();
+        permRegistry.registerRenderer("Bash", std::make_unique<ui::BashPermissionRenderer>());
+        permRegistry.registerRenderer("Edit", std::make_unique<ui::FileEditPermissionRenderer>());
+        permRegistry.registerRenderer("Write", std::make_unique<ui::FileWritePermissionRenderer>());
+        permRegistry.registerRenderer("Read", std::make_unique<ui::FileReadPermissionRenderer>());
+    }
+    // Register tool renderers (idempotent — singleton just overwrites)
+    {
+        auto& registry = ui::ToolRendererRegistry::instance();
+        registry.registerRenderer("Read", std::make_unique<ui::ReadToolRenderer>());
+        registry.registerRenderer("Bash", std::make_unique<ui::BashToolRenderer>());
+        registry.registerRenderer("Edit", std::make_unique<ui::EditToolRenderer>());
+        registry.registerRenderer("Write", std::make_unique<ui::WriteToolRenderer>());
+        registry.registerRenderer("Grep", std::make_unique<ui::GrepToolRenderer>());
+        registry.registerRenderer("Glob", std::make_unique<ui::GlobToolRenderer>());
+        registry.registerRenderer("Agent", std::make_unique<ui::AgentToolRenderer>());
+        registry.registerRenderer("WebFetch", std::make_unique<ui::WebFetchToolRenderer>());
+        registry.registerRenderer("WebSearch", std::make_unique<ui::WebSearchToolRenderer>());
+        registry.registerRenderer("LSP", std::make_unique<ui::LspToolRenderer>());
+    }
+#endif
 
     // --- Collect environment context ---
     auto workDir = std::filesystem::current_path();
@@ -275,6 +317,13 @@ void setupCallbacks(AgentLoop& loop,
                 ftxuiRepl->addToolMessage(event.toolName, event.arguments, "");
             }
 #endif
+        } else if (event.phase == ToolEventPhase::End) {
+            // Tool completion — add result to UI
+#ifdef HAS_FTXUI
+            if (useFtxui && ftxuiRepl && !event.result.empty()) {
+                ftxuiRepl->addToolMessage(event.toolName, "", event.result);
+            }
+#endif
         }
     });
 
@@ -332,10 +381,24 @@ void setupCallbacks(AgentLoop& loop,
 #endif
     });
 
-    // Tool chunk streaming callback
-    loop.setOnStreamEvent([useFtxui](const StreamEvent& event) {
-        if (event.type == StreamEvent::Type::ToolChunkReady && !useFtxui) {
-            std::cout << AnsiStyle::DIM << "." << AnsiStyle::RESET << std::flush;
+    // Unified stream event callback — must forward all event types to their
+    // individual handlers since emitStreamEvent short-circuits when this is set.
+    loop.setOnStreamEvent([useFtxui, ftxuiRepl](const StreamEvent& event) {
+        switch (event.type) {
+            case StreamEvent::Type::ToolChunkReady:
+                if (!useFtxui) {
+                    std::cout << AnsiStyle::DIM << "." << AnsiStyle::RESET << std::flush;
+                }
+                break;
+            case StreamEvent::Type::ToolResultReady:
+#ifdef HAS_FTXUI
+                if (useFtxui && ftxuiRepl) {
+                    ftxuiRepl->addToolMessage(event.toolName, "", event.toolResult);
+                }
+#endif
+                break;
+            default:
+                break;
         }
     });
 

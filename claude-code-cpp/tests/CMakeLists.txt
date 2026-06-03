@@ -195,3 +195,15 @@ catch_discover_tests(test_xml_dispatcher)
 add_executable(test_terminal_capabilities test_terminal_capabilities.cpp)
 target_link_libraries(test_terminal_capabilities PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_terminal_capabilities)
+
+add_executable(test_offscreen_freeze test_offscreen_freeze.cpp)
+target_link_libraries(test_offscreen_freeze PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_offscreen_freeze)
+
+add_executable(test_search_overlay test_search_overlay.cpp)
+target_link_libraries(test_search_overlay PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_search_overlay)
+
+add_executable(test_permission_renderer test_permission_renderer.cpp)
+target_link_libraries(test_permission_renderer PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_permission_renderer)
