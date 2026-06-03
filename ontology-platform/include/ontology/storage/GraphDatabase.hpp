@@ -2,6 +2,7 @@
 
 #include "../Core.hpp"
 #include "Forward.hpp"
+#include "GraphQueryTypes.hpp"
 #include <optional>
 #include <vector>
 
@@ -40,6 +41,30 @@ public:
 
     // 批量操作
     virtual bool batchCreate(const std::vector<Triple>& triples) = 0;
+
+    // === Authority source: data loading (startup recovery) ===
+    virtual LoadResult loadAllClasses(std::vector<Class>& out) = 0;
+    virtual LoadResult loadAllIndividuals(std::vector<Individual>& out) = 0;
+    virtual LoadResult loadAllRelations(std::vector<Relation>& out) = 0;
+    virtual LoadResult loadAllTriples(std::vector<Triple>& out) = 0;
+
+    // === Authority source: single writes ===
+    virtual bool createTriple(const Triple& triple) = 0;
+    virtual bool createRelation(const Relation& rel) = 0;
+    virtual bool deleteClass(const String& id) = 0;
+    virtual bool deleteIndividual(const String& id) = 0;
+    virtual bool deleteTriple(const Triple& triple) = 0;
+    virtual bool deleteRelation(const String& id) = 0;
+
+    // === Authority source: graph queries ===
+    virtual PathResult findShortestPath(const String& from, const String& to) = 0;
+    virtual std::vector<String> getSubClassClosure(const String& classId) = 0;
+    virtual std::vector<String> getSuperClassClosure(const String& classId) = 0;
+    virtual CommunityResult detectCommunities(const String& algorithm,
+                                              const Json& params = {}) = 0;
+
+    // === Authority source: health ===
+    virtual HealthStatus healthCheck() const = 0;
 
     // 状态
     virtual String getStatus() const = 0;
