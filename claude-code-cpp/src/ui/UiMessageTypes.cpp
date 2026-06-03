@@ -99,6 +99,22 @@ int estimateMessageHeight(const DisplayMessage& msg, int terminalWidth) {
         case DisplayMessage::Type::UserToolRejected:
         case DisplayMessage::Type::UserToolCanceled:
         case DisplayMessage::Type::AssistantRedactedThinking:
+        // P1: XML-tag dispatched types
+        case DisplayMessage::Type::UserBashOutput:
+        case DisplayMessage::Type::UserBashInput:
+        case DisplayMessage::Type::UserCommandMessage:
+        case DisplayMessage::Type::UserLocalCommandOutput:
+        case DisplayMessage::Type::UserTeammateMessage:
+        case DisplayMessage::Type::UserTaskNotification:
+        case DisplayMessage::Type::UserMcpResourceUpdate:
+        case DisplayMessage::Type::UserGitHubWebhook:
+        case DisplayMessage::Type::UserForkBoilerplate:
+        case DisplayMessage::Type::UserCrossSessionMessage:
+        case DisplayMessage::Type::UserChannelMessage:
+        case DisplayMessage::Type::UserMemoryInput:
+        // P2: Server tool use / Image attachment
+        case DisplayMessage::Type::AssistantServerToolUse:
+        case DisplayMessage::Type::UserImageAttachment:
             return 1;
 
         case DisplayMessage::Type::UserToolError:

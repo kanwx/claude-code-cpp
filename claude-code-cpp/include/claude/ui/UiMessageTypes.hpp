@@ -115,6 +115,24 @@ struct DisplayMessage {
         UserToolRejected,     // Tool result — user rejected permission
         UserToolCanceled,     // Tool result — user canceled
         AssistantRedactedThinking, // Redacted thinking block (no content)
+
+        // P1: XML-tag dispatched types
+        UserBashOutput,           // <bash-stdout> or <bash-stderr>
+        UserBashInput,            // <bash-input>
+        UserCommandMessage,       // <command-message>
+        UserLocalCommandOutput,   // <local-command-stdout>
+        UserTeammateMessage,      // <teammate-message>
+        UserTaskNotification,     // <task-notification>
+        UserMcpResourceUpdate,    // <mcp-resource-update>
+        UserGitHubWebhook,        // <github-webhook-activity>
+        UserForkBoilerplate,      // <fork-boilerplate>
+        UserCrossSessionMessage,  // <cross-session-message>
+        UserChannelMessage,       // <channel>
+        UserMemoryInput,          // <user-memory-input>
+        // P2: Server tool use
+        AssistantServerToolUse,   // Server-side tool use (e.g. code execution)
+        // P2: Image attachment
+        UserImageAttachment,      // Image attached by user
     };
 
     Type type;
