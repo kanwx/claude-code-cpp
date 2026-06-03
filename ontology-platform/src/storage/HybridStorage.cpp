@@ -2,9 +2,11 @@
 #include <ontology/Persistence.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <stdexcept>
+#include <thread>
 #include <unordered_set>
 
 namespace ontology {
@@ -1081,8 +1083,110 @@ std::vector<String> HybridStorage::getSuperClasses(const String& classId) const 
     return it->second.superClasses;
 }
 
-bool HybridStorage::loadFromGraphDB() { return false; }
-void HybridStorage::startReconnectionLoop() {}
-void HybridStorage::stopReconnectionLoop() {}
+HybridStorage::~HybridStorage() {
+    stopReconnectionLoop();
+}
+
+bool HybridStorage::loadFromGraphDB() {
+    if (!graphDB_ || !graphDB_->isConnected()) return false;
+
+    std::unique_lock lock(mutex_);
+
+    // Load classes
+    std::vector<Class> classes;
+    auto classResult = graphDB_->loadAllClasses(classes);
+    if (!classResult.success) {
+        spdlog::error("Failed to load classes from graphDB: {}", classResult.error);
+        return false;
+    }
+
+    // Load individuals
+    std::vector<Individual> individuals;
+    auto indResult = graphDB_->loadAllIndividuals(individuals);
+    if (!indResult.success) {
+        spdlog::error("Failed to load individuals from graphDB: {}", indResult.error);
+        return false;
+    }
+
+    // Load relations
+    std::vector<Relation> relations;
+    auto relResult = graphDB_->loadAllRelations(relations);
+    if (!relResult.success) {
+        spdlog::error("Failed to load relations from graphDB: {}", relResult.error);
+        return false;
+    }
+
+    // Load triples
+    std::vector<Triple> triples;
+    auto tripleResult = graphDB_->loadAllTriples(triples);
+    if (!tripleResult.success) {
+        spdlog::error("Failed to load triples from graphDB: {}", tripleResult.error);
+        return false;
+    }
+
+    // Clear and rebuild in-memory state
+    classes_.clear();
+    individuals_.clear();
+    relations_.clear();
+    tripleStore_.clear();
+    subClassOfIndex_.clear();
+
+    for (auto& cls : classes) {
+        classes_[cls.id] = std::move(cls);
+    }
+    for (auto& ind : individuals) {
+        individuals_[ind.id] = std::move(ind);
+    }
+    for (auto& rel : relations) {
+        relations_[rel.id] = std::move(rel);
+    }
+    for (auto& triple : triples) {
+        tripleStore_.add(triple);
+        if (triple.predicate == "subClassOf") {
+            subClassOfIndex_[triple.object].push_back(triple.subject);
+        }
+    }
+
+    spdlog::info("Loaded from graphDB: {} classes, {} individuals, {} relations, {} triples",
+                 classResult.count, indResult.count, relResult.count, tripleResult.count);
+    return true;
+}
+
+void HybridStorage::startReconnectionLoop() {
+    if (reconnectRunning_.load()) return;
+    reconnectRunning_.store(true);
+    if (reconnectionThread_.joinable()) reconnectionThread_.join();
+    reconnectionThread_ = std::thread([this]() {
+        spdlog::info("Starting graphDB reconnection loop (interval={}s)", reconnectIntervalSeconds_);
+        while (reconnectRunning_.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(reconnectIntervalSeconds_));
+            if (!reconnectRunning_.load()) break;
+            if (!graphDB_ || !graphDB_->isConnected()) {
+                spdlog::info("Attempting graphDB reconnection...");
+                bool ok = graphDB_->connect();
+                if (ok) {
+                    spdlog::info("GraphDB reconnected, loading data...");
+                    if (loadFromGraphDB()) {
+                        std::unique_lock lock(mutex_);
+                        isReadOnly_ = false;
+                        consecutiveWriteFailures_ = 0;
+                        spdlog::info("GraphDB recovery complete, exiting read-only mode");
+                        reconnectRunning_.store(false);
+                        return;
+                    }
+                    spdlog::error("GraphDB data load failed after reconnection");
+                }
+            }
+        }
+        spdlog::info("Reconnection loop stopped");
+    });
+}
+
+void HybridStorage::stopReconnectionLoop() {
+    reconnectRunning_.store(false);
+    if (reconnectionThread_.joinable()) {
+        reconnectionThread_.join();
+    }
+}
 
 } // namespace ontology

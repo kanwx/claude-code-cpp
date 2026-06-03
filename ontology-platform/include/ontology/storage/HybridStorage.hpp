@@ -22,6 +22,8 @@ public:
         VectorDatabasePtr vectorDB
     );
 
+    ~HybridStorage();
+
     /// 初始化
     bool initialize(const String& collectionName, int embeddingDimension);
 
