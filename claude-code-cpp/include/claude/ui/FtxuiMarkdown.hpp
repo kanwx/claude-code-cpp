@@ -3,7 +3,6 @@
 #include <ftxui/dom/elements.hpp>
 #include <string>
 #include <vector>
-#include <memory>
 
 namespace claude {
 
