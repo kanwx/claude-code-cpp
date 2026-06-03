@@ -5,6 +5,8 @@
 #include "VectorDatabase.hpp"
 #include <optional>
 #include <shared_mutex>
+#include <thread>
+#include <atomic>
 #include <unordered_map>
 
 namespace ontology {
@@ -68,6 +70,16 @@ public:
 
     /// Get all sub-classes transitively using the index (O(depth) DFS)
     std::vector<String> getAllSubClasses(const String& classId) const;
+
+    /// Get super-classes of a class
+    std::vector<String> getSuperClasses(const String& classId) const;
+
+    // Authority source
+    bool isReadOnly() const;
+    void setReadOnly(bool readOnly);
+    bool loadFromGraphDB();
+    void startReconnectionLoop();
+    void stopReconnectionLoop();
 
     /// 统计
     size_t classCount() const;
@@ -158,6 +170,16 @@ private:
     /// SubClassOf index: parent class -> direct child classes
     std::unordered_map<String, std::vector<String>> subClassOfIndex_;
     mutable std::shared_mutex mutex_;
+
+    // Authority source: read-only degradation
+    bool isReadOnly_ = false;
+    int consecutiveWriteFailures_ = 0;
+    static constexpr int MAX_WRITE_FAILURES = 3;
+
+    // Authority source: reconnection
+    std::thread reconnectionThread_;
+    std::atomic<bool> reconnectRunning_{false};
+    int reconnectIntervalSeconds_ = 30;
 
     // Private unlocked implementations (called under lock by public methods or other _impl)
     bool addTripleImpl_(const Triple& triple);

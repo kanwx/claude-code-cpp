@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace ontology {
@@ -32,33 +33,43 @@ bool HybridStorage::initialize(const String& collectionName, int embeddingDimens
 // ============================================================================
 
 bool HybridStorage::storeOntology(const Ontology& ontology) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    // 存储类
-    for (const auto& [id, cls] : ontology.classes) {
-        if (!addClassImpl_(cls)) return false;
-    }
+    try {
+        // 存储类
+        for (const auto& [id, cls] : ontology.classes) {
+            if (!addClassImpl_(cls)) return false;
+        }
 
-    // 存储关系
-    for (const auto& [id, rel] : ontology.relations) {
-        if (!addRelationImpl_(rel)) return false;
-    }
+        // 存储关系
+        for (const auto& [id, rel] : ontology.relations) {
+            if (!addRelationImpl_(rel)) return false;
+        }
 
-    // 存储个体
-    for (const auto& [id, ind] : ontology.individuals) {
-        if (!addIndividualImpl_(ind)) return false;
-    }
+        // 存储个体
+        for (const auto& [id, ind] : ontology.individuals) {
+            if (!addIndividualImpl_(ind)) return false;
+        }
 
-    // 存储三元组
-    for (const auto& triple : ontology.triples) {
-        if (!storeTripleImpl_(triple)) return false;
-    }
+        // 存储三元组
+        for (const auto& triple : ontology.triples) {
+            if (!storeTripleImpl_(triple)) return false;
+        }
 
-    return true;
+        return true;
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::storeIndividual(const Individual& ind, const std::vector<float>& embedding) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    if (!addIndividualImpl_(ind)) return false;
+    try {
+        if (!addIndividualImpl_(ind)) return false;
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 
     // 存储向量嵌入
     if (vectorDB_ && !embedding.empty()) {
@@ -76,18 +87,33 @@ bool HybridStorage::storeIndividual(const Individual& ind, const std::vector<flo
 // ============================================================================
 
 bool HybridStorage::storeTriple(const Triple& triple) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return storeTripleImpl_(triple);
+    try {
+        return storeTripleImpl_(triple);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::addTriple(const Triple& triple) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return addTripleImpl_(triple);
+    try {
+        return addTripleImpl_(triple);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::removeTriple(const Triple& triple) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return removeTripleImpl_(triple);
+    try {
+        return removeTripleImpl_(triple);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 std::optional<Triple> HybridStorage::findTriple(const String& subject, const String& predicate, const String& object) const {
@@ -151,18 +177,33 @@ std::vector<Individual> HybridStorage::getIndividualsByClass(const String& class
 }
 
 bool HybridStorage::addIndividual(const Individual& ind) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return addIndividualImpl_(ind);
+    try {
+        return addIndividualImpl_(ind);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::updateIndividual(const Individual& ind) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return updateIndividualImpl_(ind);
+    try {
+        return updateIndividualImpl_(ind);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::removeIndividual(const String& id) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return removeIndividualImpl_(id);
+    try {
+        return removeIndividualImpl_(id);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 // ============================================================================
@@ -170,13 +211,23 @@ bool HybridStorage::removeIndividual(const String& id) {
 // ============================================================================
 
 bool HybridStorage::addClass(const Class& cls) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return addClassImpl_(cls);
+    try {
+        return addClassImpl_(cls);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::addRelation(const Relation& rel) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return addRelationImpl_(rel);
+    try {
+        return addRelationImpl_(rel);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 std::optional<Class> HybridStorage::getClass(const String& id) const {
@@ -306,6 +357,7 @@ std::vector<VectorDatabase::SearchResult> HybridStorage::vectorSearch(
 // ============================================================================
 
 void HybridStorage::clear() {
+    if (isReadOnly_) return;
     std::unique_lock lock(mutex_);
     tripleStore_.clear();
     individuals_.clear();
@@ -313,7 +365,7 @@ void HybridStorage::clear() {
     relations_.clear();
     subClassOfIndex_.clear();
 
-    if (graphDB_) {
+    if (graphDB_ && graphDB_->isConnected()) {
         // Delete all nodes and relationships in Neo4j
         graphDB_->query(std::string("MATCH (n) DETACH DELETE n"));
     }
@@ -362,23 +414,43 @@ std::vector<Relation> HybridStorage::getAllRelations() const {
 }
 
 bool HybridStorage::updateClass(const Class& cls) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return updateClassImpl_(cls);
+    try {
+        return updateClassImpl_(cls);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::removeClass(const String& id) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return removeClassImpl_(id);
+    try {
+        return removeClassImpl_(id);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::updateRelation(const Relation& rel) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return updateRelationImpl_(rel);
+    try {
+        return updateRelationImpl_(rel);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 bool HybridStorage::removeRelation(const String& id) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
-    return removeRelationImpl_(id);
+    try {
+        return removeRelationImpl_(id);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
 }
 
 size_t HybridStorage::classCount() const {
@@ -402,62 +474,111 @@ std::vector<std::vector<String>> HybridStorage::findPath(
 // ============================================================================
 
 HybridStorage::BatchResult HybridStorage::batchAddTriples(const std::vector<Triple>& triples) {
-    std::unique_lock lock(mutex_);
     BatchResult result;
+    if (isReadOnly_) {
+        result.failed = static_cast<int>(triples.size());
+        for (const auto& t : triples) {
+            result.errors.push_back("Read-only mode");
+        }
+        return result;
+    }
+    std::unique_lock lock(mutex_);
     for (const auto& t : triples) {
-        if (addTripleImpl_(t)) {
-            result.succeeded++;
-        } else {
+        try {
+            if (addTripleImpl_(t)) {
+                result.succeeded++;
+            } else {
+                result.failed++;
+                result.errors.push_back("Failed: (" + t.subject + ", " + t.predicate + ", " + t.object + ")");
+            }
+        } catch (const std::runtime_error&) {
             result.failed++;
-            result.errors.push_back("Failed: (" + t.subject + ", " + t.predicate + ", " + t.object + ")");
+            result.errors.push_back("GraphDB write failed: (" + t.subject + ", " + t.predicate + ", " + t.object + ")");
         }
     }
     return result;
 }
 
 HybridStorage::BatchResult HybridStorage::batchAddClasses(const std::vector<Class>& classes) {
-    std::unique_lock lock(mutex_);
     BatchResult result;
+    if (isReadOnly_) {
+        result.failed = static_cast<int>(classes.size());
+        for (const auto& cls : classes) {
+            result.errors.push_back("Read-only mode");
+        }
+        return result;
+    }
+    std::unique_lock lock(mutex_);
     for (const auto& cls : classes) {
-        if (addClassImpl_(cls)) {
-            result.succeeded++;
-        } else {
+        try {
+            if (addClassImpl_(cls)) {
+                result.succeeded++;
+            } else {
+                result.failed++;
+                result.errors.push_back("Failed: class " + cls.id);
+            }
+        } catch (const std::runtime_error&) {
             result.failed++;
-            result.errors.push_back("Failed: class " + cls.id);
+            result.errors.push_back("GraphDB write failed: class " + cls.id);
         }
     }
     return result;
 }
 
 HybridStorage::BatchResult HybridStorage::batchAddIndividuals(const std::vector<Individual>& individuals) {
-    std::unique_lock lock(mutex_);
     BatchResult result;
+    if (isReadOnly_) {
+        result.failed = static_cast<int>(individuals.size());
+        for (const auto& ind : individuals) {
+            result.errors.push_back("Read-only mode");
+        }
+        return result;
+    }
+    std::unique_lock lock(mutex_);
     for (const auto& ind : individuals) {
-        if (addIndividualImpl_(ind)) {
-            result.succeeded++;
-        } else {
+        try {
+            if (addIndividualImpl_(ind)) {
+                result.succeeded++;
+            } else {
+                result.failed++;
+                result.errors.push_back("Failed: individual " + ind.id);
+            }
+        } catch (const std::runtime_error&) {
             result.failed++;
-            result.errors.push_back("Failed: individual " + ind.id);
+            result.errors.push_back("GraphDB write failed: individual " + ind.id);
         }
     }
     return result;
 }
 
 HybridStorage::BatchResult HybridStorage::batchRemoveTriples(const std::vector<Triple>& triples) {
-    std::unique_lock lock(mutex_);
     BatchResult result;
+    if (isReadOnly_) {
+        result.failed = static_cast<int>(triples.size());
+        for (const auto& t : triples) {
+            result.errors.push_back("Read-only mode");
+        }
+        return result;
+    }
+    std::unique_lock lock(mutex_);
     for (const auto& t : triples) {
-        if (removeTripleImpl_(t)) {
-            result.succeeded++;
-        } else {
+        try {
+            if (removeTripleImpl_(t)) {
+                result.succeeded++;
+            } else {
+                result.failed++;
+                result.errors.push_back("Not found: (" + t.subject + ", " + t.predicate + ", " + t.object + ")");
+            }
+        } catch (const std::runtime_error&) {
             result.failed++;
-            result.errors.push_back("Not found: (" + t.subject + ", " + t.predicate + ", " + t.object + ")");
+            result.errors.push_back("GraphDB write failed: (" + t.subject + ", " + t.predicate + ", " + t.object + ")");
         }
     }
     return result;
 }
 
 std::vector<std::pair<String, String>> HybridStorage::computeTransitiveClosure(const String& predicate, int maxDepth) {
+    if (isReadOnly_) return {};
     std::unique_lock lock(mutex_);
     std::vector<std::pair<String, String>> closure;
     // Start with all direct (subject, object) pairs for this predicate
@@ -494,6 +615,7 @@ std::vector<std::pair<String, String>> HybridStorage::computeTransitiveClosure(c
 }
 
 bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotManager* snapshotMgr) {
+    if (isReadOnly_) return false;
     std::unique_lock lock(mutex_);
     if (!snapshotMgr) return false;
 
@@ -622,6 +744,23 @@ bool HybridStorage::restoreAsOf(int64_t timestamp, WalManager* wal, SnapshotMana
 // ============================================================================
 
 bool HybridStorage::addTripleImpl_(const Triple& triple) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        bool ok = graphDB_->createTriple(triple);
+        if (!ok) {
+            consecutiveWriteFailures_++;
+            if (consecutiveWriteFailures_ >= MAX_WRITE_FAILURES) {
+                isReadOnly_ = true;
+                spdlog::error("GraphDB write failures exceeded threshold, entering read-only mode");
+                startReconnectionLoop();
+            }
+            throw std::runtime_error("GraphDB write failed");
+        }
+        consecutiveWriteFailures_ = 0;
+    }
+
+    // Update memory
     bool result = tripleStore_.add(triple);
     if (result && triple.predicate == "subClassOf") {
         subClassOfIndex_[triple.object].push_back(triple.subject);
@@ -630,6 +769,12 @@ bool HybridStorage::addTripleImpl_(const Triple& triple) {
 }
 
 bool HybridStorage::removeTripleImpl_(const Triple& triple) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        graphDB_->deleteTriple(triple);
+    }
+
     bool result = tripleStore_.remove(triple);
     if (result && triple.predicate == "subClassOf") {
         auto& children = subClassOfIndex_[triple.object];
@@ -640,6 +785,23 @@ bool HybridStorage::removeTripleImpl_(const Triple& triple) {
 }
 
 bool HybridStorage::storeTripleImpl_(const Triple& triple) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        bool ok = graphDB_->createTriple(triple);
+        if (!ok) {
+            consecutiveWriteFailures_++;
+            if (consecutiveWriteFailures_ >= MAX_WRITE_FAILURES) {
+                isReadOnly_ = true;
+                spdlog::error("GraphDB write failures exceeded threshold, entering read-only mode");
+                startReconnectionLoop();
+            }
+            throw std::runtime_error("GraphDB write failed");
+        }
+        consecutiveWriteFailures_ = 0;
+    }
+
+    // Update memory
     bool result = tripleStore_.add(triple);
     if (result && triple.predicate == "subClassOf") {
         subClassOfIndex_[triple.object].push_back(triple.subject);
@@ -648,74 +810,151 @@ bool HybridStorage::storeTripleImpl_(const Triple& triple) {
 }
 
 bool HybridStorage::addClassImpl_(const Class& cls) {
-    classes_[cls.id] = cls;
-
-    // 同时在图数据库中创建节点
-    if (graphDB_) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
         Json props;
         props["name"] = cls.name;
         props["description"] = cls.description;
         props["superClasses"] = cls.superClasses;
         props["metadata"] = cls.metadata;
-        graphDB_->createNode(cls.id, "Class", props);
+        bool ok = graphDB_->createNode(cls.id, "Class", props);
+        if (!ok) {
+            consecutiveWriteFailures_++;
+            if (consecutiveWriteFailures_ >= MAX_WRITE_FAILURES) {
+                isReadOnly_ = true;
+                spdlog::error("GraphDB write failures exceeded threshold, entering read-only mode");
+                startReconnectionLoop();
+            }
+            throw std::runtime_error("GraphDB write failed");
+        }
+        consecutiveWriteFailures_ = 0;
+
+        // Also create subClassOf edges for each super class
+        for (const auto& superId : cls.superClasses) {
+            graphDB_->createRelation(cls.id, "subClassOf", superId, {});
+        }
     }
 
+    // Update memory
+    classes_[cls.id] = cls;
     return true;
 }
 
 bool HybridStorage::updateClassImpl_(const Class& cls) {
     auto it = classes_.find(cls.id);
     if (it == classes_.end()) return false;
+
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        Json props;
+        props["name"] = cls.name;
+        props["description"] = cls.description;
+        props["superClasses"] = cls.superClasses;
+        props["metadata"] = cls.metadata;
+        graphDB_->updateNode(cls.id, props);
+    }
+
+    // Update memory
     it->second = cls;
     return true;
 }
 
 bool HybridStorage::removeClassImpl_(const String& id) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        graphDB_->deleteClass(id);
+    }
+
     return classes_.erase(id) > 0;
 }
 
 bool HybridStorage::addRelationImpl_(const Relation& rel) {
-    relations_[rel.id] = rel;
-
-    // 同时在图数据库中创建节点
-    if (graphDB_) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
         Json props;
         props["name"] = rel.name;
         props["description"] = rel.description;
         props["domain"] = rel.domain;
         props["range"] = rel.range;
         props["metadata"] = rel.metadata;
-        graphDB_->createNode(rel.id, "Relation", props);
+        bool ok = graphDB_->createNode(rel.id, "Relation", props);
+        if (!ok) {
+            consecutiveWriteFailures_++;
+            if (consecutiveWriteFailures_ >= MAX_WRITE_FAILURES) {
+                isReadOnly_ = true;
+                spdlog::error("GraphDB write failures exceeded threshold, entering read-only mode");
+                startReconnectionLoop();
+            }
+            throw std::runtime_error("GraphDB write failed");
+        }
+        consecutiveWriteFailures_ = 0;
     }
 
+    // Update memory
+    relations_[rel.id] = rel;
     return true;
 }
 
 bool HybridStorage::updateRelationImpl_(const Relation& rel) {
     auto it = relations_.find(rel.id);
     if (it == relations_.end()) return false;
+
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        Json props;
+        props["name"] = rel.name;
+        props["description"] = rel.description;
+        props["domain"] = rel.domain;
+        props["range"] = rel.range;
+        props["metadata"] = rel.metadata;
+        graphDB_->updateNode(rel.id, props);
+    }
+
+    // Update memory
     it->second = rel;
     return true;
 }
 
 bool HybridStorage::removeRelationImpl_(const String& id) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        graphDB_->deleteRelation(id);
+    }
+
     return relations_.erase(id) > 0;
 }
 
 bool HybridStorage::addIndividualImpl_(const Individual& ind) {
-    individuals_[ind.id] = ind;
-
-    // 同时在图数据库中创建节点
-    if (graphDB_) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
         Json props;
         props["name"] = ind.name;
         props["classId"] = ind.classId;
         props["properties"] = ind.properties;
         props["importance"] = ind.importance;
         props["metadata"] = ind.metadata;
-        graphDB_->createNode(ind.id, "Individual", props);
+        bool ok = graphDB_->createNode(ind.id, "Individual", props);
+        if (!ok) {
+            consecutiveWriteFailures_++;
+            if (consecutiveWriteFailures_ >= MAX_WRITE_FAILURES) {
+                isReadOnly_ = true;
+                spdlog::error("GraphDB write failures exceeded threshold, entering read-only mode");
+                startReconnectionLoop();
+            }
+            throw std::runtime_error("GraphDB write failed");
+        }
+        consecutiveWriteFailures_ = 0;
     }
 
+    // Update memory
+    individuals_[ind.id] = ind;
     return true;
 }
 
@@ -724,10 +963,10 @@ bool HybridStorage::updateIndividualImpl_(const Individual& ind) {
     if (it == individuals_.end()) {
         return false;
     }
-    it->second = ind;
 
-    // 同时更新图数据库
-    if (graphDB_) {
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
         Json props;
         props["name"] = ind.name;
         props["classId"] = ind.classId;
@@ -737,6 +976,8 @@ bool HybridStorage::updateIndividualImpl_(const Individual& ind) {
         graphDB_->updateNode(ind.id, props);
     }
 
+    // Update memory
+    it->second = ind;
     return true;
 }
 
@@ -745,14 +986,17 @@ bool HybridStorage::removeIndividualImpl_(const String& id) {
     if (it == individuals_.end()) {
         return false;
     }
-    individuals_.erase(it);
 
-    // 同时从图数据库删除
-    if (graphDB_) {
-        graphDB_->deleteNode(id);
+    // Authority source: write to graphDB first
+    if (graphDB_ && graphDB_->isConnected()) {
+        if (isReadOnly_) throw std::runtime_error("Read-only mode");
+        graphDB_->deleteIndividual(id);
     }
 
-    // 从向量数据库删除
+    // Update memory
+    individuals_.erase(it);
+
+    // Remove from vector database
     if (vectorDB_) {
         vectorDB_->remove("individuals", id);
     }
@@ -814,5 +1058,31 @@ std::vector<String> HybridStorage::getAllSubClasses(const String& classId) const
     collect(classId);
     return result;
 }
+
+// ============================================================================
+// Authority source: read-only mode and reconnection
+// ============================================================================
+
+bool HybridStorage::isReadOnly() const {
+    std::shared_lock lock(mutex_);
+    return isReadOnly_;
+}
+
+void HybridStorage::setReadOnly(bool readOnly) {
+    std::unique_lock lock(mutex_);
+    isReadOnly_ = readOnly;
+    if (!readOnly) consecutiveWriteFailures_ = 0;
+}
+
+std::vector<String> HybridStorage::getSuperClasses(const String& classId) const {
+    std::shared_lock lock(mutex_);
+    auto it = classes_.find(classId);
+    if (it == classes_.end()) return {};
+    return it->second.superClasses;
+}
+
+bool HybridStorage::loadFromGraphDB() { return false; }
+void HybridStorage::startReconnectionLoop() {}
+void HybridStorage::stopReconnectionLoop() {}
 
 } // namespace ontology
