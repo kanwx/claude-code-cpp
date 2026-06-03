@@ -1,5 +1,8 @@
 #include <ontology/ApiHandler.hpp>
 #include <ontology/Storage.hpp>
+#include <ontology/storage/HybridStorage.hpp>
+#include <ontology/storage/GraphDatabase.hpp>
+#include <ontology/storage/VectorDatabase.hpp>
 
 namespace ontology {
 
@@ -10,14 +13,40 @@ public:
     void registerRoutes(httplib::Server& server) override {
         // ==================== Health check ====================
         server.Get("/api/health", [this](const httplib::Request&, httplib::Response& res) {
-            Json j;
-            j["status"] = "healthy";
-            if (ctx_->storage) {
-                j["stats"]["classes"] = ctx_->storage->classCount();
-                j["stats"]["individuals"] = ctx_->storage->individualCount();
-                j["stats"]["triples"] = ctx_->storage->tripleCount();
+            Json health;
+            bool readOnly = ctx_->storage && ctx_->storage->isReadOnly();
+            health["status"] = readOnly ? "degraded" : "healthy";
+            health["mode"] = readOnly ? "read_only" : "normal";
+
+            Json graphDBStatus;
+            if (ctx_->graphDB) {
+                auto hs = ctx_->graphDB->healthCheck();
+                graphDBStatus["connected"] = hs.connected;
+                if (!hs.connected) graphDBStatus["lastError"] = hs.error;
+                if (!hs.version.empty()) graphDBStatus["version"] = hs.version;
+            } else {
+                graphDBStatus["connected"] = false;
+                graphDBStatus["lastError"] = "Not configured";
             }
-            jsonResponse(res, j);
+            health["graphDB"] = graphDBStatus;
+
+            Json vectorDBStatus;
+            if (ctx_->vectorDB) {
+                vectorDBStatus["connected"] = ctx_->vectorDB->isConnected();
+            } else {
+                vectorDBStatus["connected"] = false;
+            }
+            health["vectorDB"] = vectorDBStatus;
+
+            if (ctx_->storage) {
+                Json mem;
+                mem["classes"] = ctx_->storage->classCount();
+                mem["individuals"] = ctx_->storage->individualCount();
+                mem["triples"] = ctx_->storage->tripleCount();
+                health["memory"] = mem;
+            }
+
+            res.set_content(health.dump(2), "application/json");
         });
 
         // ==================== Stats ====================

@@ -1,9 +1,20 @@
 #include <ontology/ApiHandler.hpp>
 #include <ontology/Storage.hpp>
+#include <ontology/storage/HybridStorage.hpp>
 #include <ontology/storage/TripleStore.hpp>
 #include <spdlog/spdlog.h>
 
 namespace ontology {
+
+static bool checkReadOnly(const std::shared_ptr<HybridStorage>& storage, httplib::Response& res) {
+    if (storage && storage->isReadOnly()) {
+        res.status = 503;
+        res.set_content(R"({"error":"Service in read-only mode","reason":"graph database unavailable"})",
+                        "application/json");
+        return true;
+    }
+    return false;
+}
 
 class TripleHandler : public ApiHandler {
 public:
@@ -36,6 +47,7 @@ public:
                 errorResponse(res, 500, "Storage not initialized");
                 return;
             }
+            if (checkReadOnly(ctx_->storage, res)) return;
 
             try {
                 Json body = Json::parse(req.body);
@@ -112,6 +124,7 @@ public:
                 errorResponse(res, 500, "Storage not initialized");
                 return;
             }
+            if (checkReadOnly(ctx_->storage, res)) return;
 
             try {
                 Json body = Json::parse(req.body);
