@@ -10,6 +10,9 @@
 #include <functional>
 #include <condition_variable>
 #include <thread>
+#include <chrono>
+#include <filesystem>
+#include <optional>
 
 namespace ontology {
 
@@ -108,15 +111,24 @@ public:
     /// 恢复: 重放 WAL
     void replay(std::function<void(const WalEntry&)> callback);
 
+    // Authority source: confirmation tracking
+    void markConfirmed(int64_t lsn);
+    int64_t lastConfirmedLsn() const;
+    void truncateConfirmed();
+
+    // Authority source: replay from specific LSN
+    size_t replayFrom(int64_t fromLsn, std::function<void(const WalEntry&)> callback);
+
 private:
     Config config_;
     int64_t currentLsn_ = 0;
     int64_t checkpointLsn_ = 0;
+    int64_t confirmedLsn_ = 0;
     int64_t currentFileOffset_ = 0;
     int currentFileIndex_ = 0;
 
     std::ofstream walStream_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     int entriesSinceCheckpoint_ = 0;
 
     void openCurrentFile();
@@ -130,6 +142,12 @@ private:
 // 快照管理
 // 对标: Redis RDB, LevelDB SST, Neo4j snapshot
 // ============================================================================
+
+struct SnapshotInfo {
+    String id;
+    std::chrono::system_clock::time_point timestamp;
+    size_t fileSize = 0;
+};
 
 class SnapshotManager {
 public:
@@ -157,7 +175,7 @@ public:
     );
 
     /// 列出所有快照
-    std::vector<String> listSnapshots();
+    std::vector<String> listSnapshots() const;
 
     /// 删除快照
     bool deleteSnapshot(const String& snapshotId);
@@ -175,9 +193,12 @@ public:
     /// 统计
     Json getStats() const;
 
+    std::chrono::system_clock::time_point getLatestSnapshotTime() const;
+    std::optional<SnapshotInfo> getLatestSnapshot() const;
+
 private:
     Config config_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     bool autoSnapshotRunning_ = false;
     std::thread autoSnapshotThread_;
     std::condition_variable cv_;

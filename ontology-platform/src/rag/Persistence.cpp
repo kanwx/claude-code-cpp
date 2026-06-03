@@ -156,6 +156,36 @@ void WalManager::replay(std::function<void(const WalEntry&)> callback) {
     }
 }
 
+void WalManager::markConfirmed(int64_t lsn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (lsn > confirmedLsn_) {
+        confirmedLsn_ = lsn;
+    }
+}
+
+int64_t WalManager::lastConfirmedLsn() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return confirmedLsn_;
+}
+
+void WalManager::truncateConfirmed() {
+    // WAL files before the confirmed LSN can be safely deleted
+    // since graphDB has confirmed persistence. For now, this is
+    // a no-op placeholder — full implementation would scan WAL
+    // files and remove those where all entries have LSN <= confirmedLsn_
+}
+
+size_t WalManager::replayFrom(int64_t fromLsn, std::function<void(const WalEntry&)> callback) {
+    auto entries = readFromLsn(fromLsn);
+    size_t replayed = 0;
+    for (const auto& entry : entries) {
+        if (entry.type == WalEntryType::Checkpoint) continue;
+        callback(entry);
+        replayed++;
+    }
+    return replayed;
+}
+
 void WalManager::openCurrentFile() {
     // Find the latest WAL file
     currentFileIndex_ = 0;
@@ -424,7 +454,7 @@ bool SnapshotManager::restoreSnapshot(
     }
 }
 
-std::vector<String> SnapshotManager::listSnapshots() {
+std::vector<String> SnapshotManager::listSnapshots() const {
     std::vector<String> snapshots;
 
     for (const auto& entry : fs::directory_iterator(config_.snapshotDirectory)) {
@@ -498,6 +528,42 @@ Json SnapshotManager::getStats() const {
     j["totalSizeBytes"] = totalSize;
     j["autoSnapshotRunning"] = autoSnapshotRunning_;
     return j;
+}
+
+std::chrono::system_clock::time_point SnapshotManager::getLatestSnapshotTime() const {
+    auto snapshots = listSnapshots();
+    if (snapshots.empty()) return {};
+    auto& id = snapshots[0];
+    auto msStr = id.substr(5); // skip "snap_"
+    try {
+        auto ms = std::stoll(msStr);
+        return std::chrono::system_clock::time_point(
+            std::chrono::milliseconds(ms));
+    } catch (...) {
+        return {};
+    }
+}
+
+std::optional<SnapshotInfo> SnapshotManager::getLatestSnapshot() const {
+    auto snapshots = listSnapshots();
+    if (snapshots.empty()) return std::nullopt;
+    SnapshotInfo info;
+    info.id = snapshots[0];
+    auto msStr = info.id.substr(5);
+    try {
+        auto ms = std::stoll(msStr);
+        info.timestamp = std::chrono::system_clock::time_point(
+            std::chrono::milliseconds(ms));
+    } catch (...) {
+        info.timestamp = {};
+    }
+    auto path = config_.snapshotDirectory + "/" + info.id + ".json";
+    try {
+        info.fileSize = std::filesystem::file_size(path);
+    } catch (...) {
+        info.fileSize = 0;
+    }
+    return info;
 }
 
 String SnapshotManager::snapshotFilePath(const String& id) const {
