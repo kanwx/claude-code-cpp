@@ -16,6 +16,7 @@
 #include <ontology/CommunityDetection.hpp>
 #include <ontology/EmbeddingService.hpp>
 #include <ontology/Persistence.hpp>
+#include <ontology/bootstrap/RecoveryManager.hpp>
 #include <ontology/ShaclValidation.hpp>
 #include <ontology/Explainability.hpp>
 #include <ontology/Temporal.hpp>
@@ -40,6 +41,35 @@ ServiceContextPtr Bootstrap::initialize(const OntologyConfig& config) {
     initInference(*ctx, config);
     initRag(*ctx, config);
     initPersistence(*ctx, config);
+
+    // --- Startup recovery ---
+    RecoveryConfig recoveryConfig;
+    recoveryConfig.reconnectIntervalSeconds = config.storage.neo4j.connectionTimeout;
+    recoveryConfig.maxConsecutiveWriteFailures = 3;
+    recoveryConfig.autoRecoveryEnabled = true;
+
+    ctx->recoveryManager = std::make_shared<RecoveryManager>(
+        ctx->storage, ctx->graphDB, ctx->walManager, ctx->snapshotManager, recoveryConfig);
+
+    auto recoveryResult = ctx->recoveryManager->recover();
+    std::cout << "  Recovery: source=" << static_cast<int>(recoveryResult.source)
+              << ", success=" << recoveryResult.success
+              << ", details=" << recoveryResult.details << "\n";
+
+    ctx->isReadOnly = ctx->recoveryManager->isReadOnly();
+    if (ctx->isReadOnly) {
+        ctx->storage->setReadOnly(true);
+    }
+
+    // If graphDB is connected, ensure read-write mode
+    if (ctx->graphDB && ctx->graphDB->isConnected()) {
+        ctx->storage->setReadOnly(false);
+    }
+
+    // Start reconnection loop if graphDB exists but is disconnected
+    if (ctx->graphDB && !ctx->graphDB->isConnected() && recoveryConfig.autoRecoveryEnabled) {
+        ctx->storage->startReconnectionLoop();
+    }
 
     // --- Neuro-Symbolic Learning ---
     int embeddingDim = config.rag.embeddingDimension;

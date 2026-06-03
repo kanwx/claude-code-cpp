@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <ontology/bootstrap/RecoveryManager.hpp>
 
 namespace ontology {
 
@@ -91,6 +92,10 @@ struct ServiceContext {
     // --- Persistence ---
     std::shared_ptr<WalManager> walManager;
     std::shared_ptr<SnapshotManager> snapshotManager;
+
+    // --- Recovery ---
+    std::shared_ptr<RecoveryManager> recoveryManager;
+    bool isReadOnly = false;
 
     // --- Validation & incremental reasoning ---
     std::shared_ptr<ShaclValidator> shaclValidator;
