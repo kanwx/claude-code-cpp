@@ -64,8 +64,13 @@ void FtxuiRepl::syncLayoutState() {
     ls.content.thinking.summary = thinkingSummary_;
     ls.content.thinking.stalled = false; // will be computed from lastOutputTime_
     ls.content.thinking.tickCounter = ls.tickCounter;
-    ls.content.messagesAbove = 0; // simplified for now
+    ls.content.messagesAbove = static_cast<int>(virtualScroll_.firstVisibleIndex());
     ls.content.autoScroll = ls.autoScroll;
+    ls.content.scrollRatio = ls.scrollRatio;
+    if (ls.autoScroll) {
+        ls.scrollRatio = 1.0f;
+        ls.content.scrollRatio = 1.0f;
+    }
 
     // Input
     ls.input.streaming = isStreaming_;
@@ -282,7 +287,13 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
 
         if (event.is_mouse()) {
             auto& mouse = event.mouse();
-            if (mouse.button == Mouse::Left && !r->isStreaming_) {
+
+            // Shift+Left click/drag = text selection (pass to FTXUI HandleSelection)
+            if (mouse.shift && mouse.button == Mouse::Left) {
+                return false;
+            }
+
+            if (mouse.button == Mouse::Left && !r->isStreaming_ && !mouse.shift) {
                 if (!mouse.motion) {
                     int clickX = mouse.x - 2;
                     if (clickX >= 0 && static_cast<size_t>(clickX) <= static_cast<int>(ls->input.text.size())) {
@@ -296,14 +307,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 return false;
             }
             if (mouse.button == Mouse::WheelUp) {
-                ls->scrollRatio = std::max(0.0f, ls->scrollRatio - 0.05f);
+                ls->scrollRatio = std::max(0.0f, ls->scrollRatio - 0.02f);
                 ls->autoScroll = false;
                 r->virtualScroll_.setPinToBottom(false);
                 r->virtualScroll_.scrollUp();
                 return true;
             }
             if (mouse.button == Mouse::WheelDown) {
-                ls->scrollRatio = std::min(1.0f, ls->scrollRatio + 0.05f);
+                ls->scrollRatio = std::min(1.0f, ls->scrollRatio + 0.02f);
                 if (ls->scrollRatio >= 0.95f) {
                     ls->autoScroll = true;
                     r->virtualScroll_.setPinToBottom(true);
@@ -317,14 +328,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
         }
 
         if (event == Event::CtrlP || event == Event::F5) {
-            ls->scrollRatio = std::max(0.0f, ls->scrollRatio - 0.05f);
+            ls->scrollRatio = std::max(0.0f, ls->scrollRatio - 0.02f);
             ls->autoScroll = false;
             r->virtualScroll_.setPinToBottom(false);
             if (r->virtualScroll_.firstVisibleIndex() > 0) r->virtualScroll_.scrollUp();
             return true;
         }
         if (event == Event::CtrlN || event == Event::F6) {
-            ls->scrollRatio = std::min(1.0f, ls->scrollRatio + 0.05f);
+            ls->scrollRatio = std::min(1.0f, ls->scrollRatio + 0.02f);
             if (ls->scrollRatio >= 0.95f) {
                 ls->autoScroll = true;
                 r->virtualScroll_.setPinToBottom(true);

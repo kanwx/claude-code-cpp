@@ -2,7 +2,6 @@
 
 #include "claude/ui/PromptInputFooter.hpp"
 #include "FtxuiColors.hpp"
-#include <cstdio>
 
 namespace claude::ftxui_footer {
 
@@ -18,7 +17,7 @@ struct ModeDisplay {
 ModeDisplay getModeDisplay(const String& mode) {
     if (mode == "auto")        return {"⚙", "auto on",         MacSky};
     if (mode == "plan")        return {"✦", "plan on",         MacLavender};
-    if (mode == "bypass")      return {"⚡", "bypass on",      MacRose};
+    if (mode == "bypassPermissions") return {"⚡", "bypass on",  MacRose};
     if (mode == "acceptEdits") return {"✎", "accept edits on", MacMint};
     if (mode == "dontAsk")     return {"⊙", "dont ask on",    MacCream};
     return {"", "", MacShadow};
@@ -43,39 +42,17 @@ ftxui::Element renderFooter(const FooterState& state) {
     if (state.isStreaming) {
         leftParts.push_back(text("esc to interrupt") | color(MacShadow) | dim);
     } else {
-        leftParts.push_back(text("? for shortcuts") | color(MacShadow) | dim);
+        leftParts.push_back(text("? shortcuts  ⇧+drag select  ⌃Y copy") | color(MacShadow) | dim);
     }
 
-    // Right side: auth + model + context + cost
+    // Right side: auth status only
     std::vector<Element> rightParts;
 
-    // Auth status
     if (state.isAuthenticated) {
-        rightParts.push_back(text("✓") | color(MacMint));
-        rightParts.push_back(text(" logged in") | color(MacShadow) | dim);
+        rightParts.push_back(text("✓ logged in") | color(MacMint) | dim);
     } else {
-        rightParts.push_back(text("⚠") | color(MacGold));
-        rightParts.push_back(text(" not authenticated") | color(MacGold) | dim);
+        rightParts.push_back(text("⚠ not authenticated") | color(MacGold) | dim);
     }
-
-    rightParts.push_back(text(" · ") | color(MacShadow));
-
-    // Model + context + cost
-    if (!state.modelInfo.empty()) {
-        rightParts.push_back(text(state.modelInfo) | color(MacCream) | dim);
-        rightParts.push_back(text(" · ") | color(MacShadow));
-    }
-
-    auto barColor = (state.contextPct >= 85) ? MacContextCrit
-                  : (state.contextPct >= 70) ? MacContextWarn
-                  :                             MacContextOk;
-
-    rightParts.push_back(text(std::to_string(state.contextPct) + "% ctx") | color(barColor) | dim);
-    rightParts.push_back(text(" · ") | color(MacShadow));
-
-    char costBuf[16];
-    snprintf(costBuf, sizeof(costBuf), "$%.4f", state.costUsd);
-    rightParts.push_back(text(costBuf) | color(MacCream) | dim);
 
     // Compose
     auto leftSide = leftParts.empty() ? emptyElement()
@@ -90,7 +67,7 @@ ftxui::Element renderFooter(const FooterState& state) {
         leftSide | flex,
         rightSide,
         text(" "),
-    }) | bgcolor(MacBgDark);
+    });
 }
 
 } // namespace claude::ftxui_footer

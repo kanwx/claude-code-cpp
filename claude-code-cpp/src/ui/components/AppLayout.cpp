@@ -361,7 +361,11 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                 contentEls.push_back(hbox(std::move(thinkingElems)));
             }
 
-            auto messagesContent = vbox(std::move(contentEls)) | yframe | flex;
+            auto messagesContent = vbox(std::move(contentEls))
+                | focusPositionRelative(0.f, s->content.scrollRatio)
+                | yframe
+                | vscroll_indicator
+                | flex;
 
             // Permission overlay on top of content
             if (s->permissionActive) {

@@ -96,13 +96,11 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
         // Wrap in a scrollable flex area
         auto content = vbox(std::move(contentEls)) | flex;
 
-        // Auto-scroll: use yframe to make the area scrollable.
-        // When autoScroll is true, the frame automatically scrolls to the bottom.
-        if (st->autoScroll) {
-            content = content | yframe | flex;
-        } else {
-            content = content | yframe | flex;
-        }
+        content = content
+            | focusPositionRelative(0.f, st->scrollRatio)
+            | yframe
+            | vscroll_indicator
+            | flex;
 
         return content;
     });
