@@ -287,6 +287,7 @@ set(CONSOLE_SOURCES
     src/console/TurnDurationRenderer.cpp
     src/console/CollapsedToolRenderer.cpp
     src/console/ActivityDescription.cpp
+    src/console/TerminalCapabilities.cpp
 )
 
 # 上下文源文件
@@ -463,6 +464,7 @@ set(UI_SOURCES
     src/ui/FtxuiRender.cpp
     src/ui/FtxuiMarkdown.cpp
     src/ui/UiMessageTypes.cpp
+    src/ui/XmlTagDispatcher.cpp
     src/ui/MessagePipeline.cpp
     src/ui/VirtualScroll.cpp
     src/ui/components/MessageRenderer.cpp

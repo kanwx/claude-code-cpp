@@ -187,3 +187,11 @@ catch_discover_tests(test_tool_renderer_registry)
 add_executable(test_display_message_types test_display_message_types.cpp)
 target_link_libraries(test_display_message_types PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_display_message_types)
+
+add_executable(test_xml_dispatcher test_xml_dispatcher.cpp)
+target_link_libraries(test_xml_dispatcher PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_xml_dispatcher)
+
+add_executable(test_terminal_capabilities test_terminal_capabilities.cpp)
+target_link_libraries(test_terminal_capabilities PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_terminal_capabilities)
