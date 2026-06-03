@@ -1,0 +1,164 @@
+{
+  "rag": {
+    "chunkOverlap": 100,
+    "chunkSize": 500,
+    "chunkWeight": 0.4,
+    "embeddingDimension": 128,
+    "embeddingMethod": "hash_fingerprint",
+    "enabled": true,
+    "entityWeight": 0.3,
+    "extractEntities": true,
+    "extractionConfidenceThreshold": 0.7,
+    "graphWeight": 0.3,
+    "localModel": {
+      "enableImageToText": false
+    },
+    "openaiEndpoint": "https://api.openai.com",
+    "openaiModel": "text-embedding-3-small",
+    "topKChunks": 10
+  },
+  "reasoner": {
+    "hybrid": {
+      "confidenceThreshold": 0.7,
+      "enabled": true,
+      "neuralWeight": 0.5,
+      "symbolicWeight": 0.5
+    },
+    "neural": {
+      "embeddingDimension": 128,
+      "embeddingModel": "TransE",
+      "enabled": true,
+      "learningRate": 0.01,
+      "negativeSamples": 10,
+      "trainingEpochs": 100
+    },
+    "symbolic": {
+      "enableInverseInference": true,
+      "enableTransitiveClosure": true,
+      "enabled": true,
+      "maxInferenceDepth": 10
+    }
+  },
+  "server": {
+    "cors": true,
+    "enableMcp": true,
+    "host": "0.0.0.0",
+    "jwtSecret": "",
+    "maxConnections": 100,
+    "mcpPort": 9090,
+    "port": 8080,
+    "timeout": 30
+  },
+  "storage": {
+    "hippo": {
+      "connectionTimeout": 30,
+      "enableSsl": false,
+      "enabled": true,
+      "host": "10.100.12.213",
+      "maxPoolSize": 10,
+      "password": "KanwxShiva20@26",
+      "port": 8902,
+      "searchTimeout": 60,
+      "sslCertPath": "",
+      "token": "",
+      "useHttps": false,
+      "username": "shiva"
+    },
+    "milvus": {
+      "collection": "ontology_vectors",
+      "dimension": 128,
+      "enabled": false,
+      "host": "localhost",
+      "metric": "cosine",
+      "port": 19530
+    },
+    "mysql": {
+      "database": "ontology",
+      "enabled": false,
+      "host": "localhost",
+      "password": "",
+      "port": 3306,
+      "username": "root"
+    },
+    "neo4j": {
+      "connectionTimeout": 30,
+      "enabled": false,
+      "maxPoolSize": 100,
+      "password": "",
+      "uri": "bolt://localhost:7687",
+      "username": "neo4j"
+    },
+    "postgres": {
+      "database": "ontology",
+      "enabled": false,
+      "host": "localhost",
+      "password": "",
+      "port": 5432,
+      "username": "postgres"
+    },
+    "qdrant": {
+      "collection": "ontology_vectors",
+      "dimension": 128,
+      "enabled": false,
+      "host": "localhost",
+      "metric": "cosine",
+      "port": 6333
+    },
+    "sqlite": {
+      "enabled": false,
+      "path": "ontology.db"
+    },
+    "stellardb": {
+      "enabled": true,
+      "graphName": "ontology",
+      "host": "10.100.12.212",
+      "password": "KanwxHive20@26",
+      "port": 38282,
+      "token": "",
+      "useHttps": true,
+      "username": "hive",
+      "authorityMode": true,
+      "sslVerify": false,
+      "reconnectIntervalSeconds": 30,
+      "writeTimeoutMs": 5000,
+      "loadTimeoutMs": 60000
+    }
+  },
+  "llm": {
+    "endpoint": "http://172.31.103.36:48880/dsv4",
+    "model": "deepseekv4",
+    "apiPath": "/v1/chat/completions",
+    "apiKey": "20f227b6-afa3-4bb9-ad06-65fabf865697",
+    "timeoutMs": 60000,
+    "maxTokens": 4096,
+    "enableImageToText": false
+  },
+  "localEmbedding": {
+    "endpoint": "",
+    "model": "",
+    "apiPath": "/v1/embeddings",
+    "apiKey": "",
+    "timeoutMs": 30000
+  },
+  "rerank": {
+    "endpoint": "",
+    "model": "",
+    "apiPath": "/v1/rerank",
+    "apiKey": "",
+    "timeoutMs": 30000
+  },
+  "persistence": {
+    "enableWal": true,
+    "enableSnapshots": true,
+    "walDirectory": "./wal",
+    "snapshotDirectory": "./snapshots"
+  },
+  "validation": {
+    "enableShacl": true
+  },
+  "degradation": {
+    "maxConsecutiveWriteFailures": 3,
+    "autoRecoveryEnabled": true,
+    "recoveryLoadTimeoutMs": 60000
+  }
+}
