@@ -94,6 +94,11 @@ void FtxuiRepl::syncLayoutState() {
 
     // Verbose tools
     ls.verboseTools = verboseTools_;
+
+    // Text selection
+    ls.selectionActive = selectionActive_;
+    ls.selectionStartY = selectionHighlightStartY_;
+    ls.selectionEndY = selectionHighlightEndY_;
 }
 
 // ========== Constructor / Destructor ==========
@@ -288,9 +293,66 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
         if (event.is_mouse()) {
             auto& mouse = event.mouse();
 
-            // Shift+Left click/drag = text selection (pass to FTXUI HandleSelection)
+            // Shift+Left click/drag = custom text selection
+            // FTXUI's GetSelection() doesn't work with yframe (coordinate mismatch),
+            // so we track selection coordinates ourselves and read from PixelAt().
             if (mouse.shift && mouse.button == Mouse::Left) {
-                return false;
+                if (mouse.motion == Mouse::Pressed) {
+                    r->selectionActive_ = true;
+                    r->selectionStartX_ = mouse.x;
+                    r->selectionStartY_ = mouse.y;
+                    r->selectionEndX_ = mouse.x;
+                    r->selectionEndY_ = mouse.y;
+                    r->selectionText_.clear();
+                } else if (mouse.motion == Mouse::Moved && r->selectionActive_) {
+                    r->selectionEndX_ = mouse.x;
+                    r->selectionEndY_ = mouse.y;
+                } else if (mouse.motion == Mouse::Released && r->selectionActive_) {
+                    r->selectionEndX_ = mouse.x;
+                    r->selectionEndY_ = mouse.y;
+                    // Extract text from screen pixel buffer
+                    if (r->screen_) {
+                        int minY = std::min(r->selectionStartY_, r->selectionEndY_);
+                        int maxY = std::max(r->selectionStartY_, r->selectionEndY_);
+                        int minX = std::min(r->selectionStartX_, r->selectionEndX_);
+                        int maxX = std::max(r->selectionStartX_, r->selectionEndX_);
+                        String extracted;
+                        for (int y = minY; y <= maxY && y < r->screen_->dimy(); ++y) {
+                            if (y < 0) continue;
+                            int lineStart = (y == minY) ? minX : 0;
+                            int lineEnd = (y == maxY) ? maxX : r->screen_->dimx() - 1;
+                            lineStart = std::max(0, lineStart);
+                            lineEnd = std::min(r->screen_->dimx() - 1, lineEnd);
+                            String line;
+                            for (int x = lineStart; x <= lineEnd; ++x) {
+                                auto& pixel = r->screen_->PixelAt(x, y);
+                                if (!pixel.character.empty() && pixel.character != " ") {
+                                    line += pixel.character;
+                                } else {
+                                    line += " ";
+                                }
+                            }
+                            // Trim trailing spaces
+                            while (!line.empty() && line.back() == ' ') line.pop_back();
+                            if (!line.empty()) {
+                                if (!extracted.empty()) extracted += "\n";
+                                extracted += line;
+                            }
+                        }
+                        r->selectionText_ = std::move(extracted);
+                    }
+                    // Keep selectionActive_ true so highlight stays visible
+                    // until next click without Shift clears it
+                }
+                // Store normalized range for rendering highlights
+                r->selectionHighlightStartY_ = std::min(r->selectionStartY_, r->selectionEndY_);
+                r->selectionHighlightEndY_ = std::max(r->selectionStartY_, r->selectionEndY_);
+                return true;
+            }
+            // Non-Shift click clears selection
+            if (mouse.button == Mouse::Left && !mouse.shift && r->selectionActive_) {
+                r->selectionActive_ = false;
+                r->selectionText_.clear();
             }
 
             if (mouse.button == Mouse::Left && !r->isStreaming_ && !mouse.shift) {
@@ -628,8 +690,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             return true;
         }
         // Ctrl+Y: copy selected text to clipboard
+        // Uses custom selectionText_ (from Shift+drag) instead of FTXUI's
+        // GetSelection() which doesn't work correctly with yframe.
         if (event == Event::CtrlY && r->screen_) {
-            auto selected = r->screen_->GetSelection();
+            String selected = r->selectionText_;
+            // Fallback to FTXUI's GetSelection for non-yframe content
+            if (selected.empty()) {
+                selected = r->screen_->GetSelection();
+            }
             if (!selected.empty()) {
                 auto task = r->screen_->WithRestoredIO([&selected]() {
                     FILE* pb = popen("pbcopy", "w");
@@ -645,6 +713,9 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                     msg.messageId = MessageIdGenerator::next();
                     r->messages_.push_back(std::move(msg));
                 });
+                // Clear selection after copy
+                r->selectionActive_ = false;
+                r->selectionText_.clear();
             }
             return true;
         }

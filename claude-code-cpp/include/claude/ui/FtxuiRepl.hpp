@@ -160,6 +160,16 @@ private:
     // ========== Completion state ==========
     ReplCompleter completer_;
 
+    // ========== Text selection state ==========
+    bool selectionActive_ = false;      // Shift+drag in progress
+    int selectionStartX_ = 0;
+    int selectionStartY_ = 0;
+    int selectionEndX_ = 0;
+    int selectionEndY_ = 0;
+    String selectionText_;              // Extracted text from screen pixels
+    int selectionHighlightStartY_ = 0; // Normalized range for rendering
+    int selectionHighlightEndY_ = 0;
+
     // ========== Permission prompt state ==========
     bool permissionPromptActive_ = false;   // UI is showing permission prompt
     int permissionFocusedIndex_ = 0;         // Currently focused option (0-4: 5 options)

@@ -47,6 +47,10 @@ struct AppLayoutState {
     bool verboseTools = false;
     // Last completion input (for cycling detection)
     std::string lastCompletionInput;
+    // Text selection state (Shift+drag)
+    bool selectionActive = false;
+    int selectionStartY = 0;
+    int selectionEndY = 0;
 };
 
 ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& ctx);
