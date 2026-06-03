@@ -272,15 +272,16 @@ std::vector<ShaclValidationResult> ShaclValidator::validateValueType(
                 bool isSubClass = false;
                 auto cls = storage_->getClass(ind->classId);
                 while (cls) {
-                    for (const auto& sc : cls->superClasses) {
+                    auto directSupers = storage_->getSuperClasses(cls->id);
+                    for (const auto& sc : directSupers) {
                         if (sc == property.classId) {
                             isSubClass = true;
                             break;
                         }
                     }
                     if (isSubClass) break;
-                    if (!cls->superClasses.empty()) {
-                        cls = storage_->getClass(cls->superClasses[0]);
+                    if (!directSupers.empty()) {
+                        cls = storage_->getClass(directSupers[0]);
                     } else {
                         break;
                     }
@@ -1019,7 +1020,8 @@ std::vector<Triple> IncrementalReasoner::forwardChain(
         if (t.predicate == "rdf:type") {
             auto cls = storage_->getClass(t.object);
             while (cls) {
-                for (const auto& superCls : cls->superClasses) {
+                auto directSupers = storage_->getSuperClasses(cls->id);
+                for (const auto& superCls : directSupers) {
                     Triple newT;
                     newT.subject = t.subject;
                     newT.predicate = "rdf:type";
@@ -1044,8 +1046,8 @@ std::vector<Triple> IncrementalReasoner::forwardChain(
                         justificationIndex_[newT.object].push_back(triggerKey);
                     }
                 }
-                if (!cls->superClasses.empty()) {
-                    cls = storage_->getClass(cls->superClasses[0]);
+                if (!directSupers.empty()) {
+                    cls = storage_->getClass(directSupers[0]);
                 } else {
                     break;
                 }

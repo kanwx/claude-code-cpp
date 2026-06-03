@@ -34,7 +34,7 @@ struct Class {
     String description;
 
     // 基本类关系 (向后兼容)
-    std::vector<String> superClasses;      // 父类
+    std::vector<String> superClasses;       // Cache: populated from subClassOf triples. Use storage->getSuperClasses(id) for traversal.
     std::vector<String> equivalentClasses; // 等价类
     std::vector<String> disjointClasses;   // 不相交类
     std::vector<String> properties;        // 属性定义

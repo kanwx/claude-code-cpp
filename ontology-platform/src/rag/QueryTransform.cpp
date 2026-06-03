@@ -379,7 +379,8 @@ QueryTransformEngine::expandByOntology(const String& query) {
     for (const auto& cls : classes) {
         if (!cls.name.empty() && query.find(cls.name) != String::npos) {
             // Add parent class names for broader context
-            for (const auto& superClass : cls.superClasses) {
+            auto superIds = hybridStorage_->getSuperClasses(cls.id);
+            for (const auto& superClass : superIds) {
                 auto parent = hybridStorage_->getClass(superClass);
                 if (parent && !parent->name.empty()) {
                     String expanded = query + " " + parent->name;

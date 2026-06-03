@@ -49,13 +49,11 @@ std::vector<String> SymbolicReasoner::getSuperClasses(const String& classId) {
     std::vector<String> supers;
 
     std::function<void(const String&)> collect = [&](const String& cid) {
-        auto cls = storage_->getClass(cid);
-        if (cls) {
-            for (const auto& super : cls->superClasses) {
-                if (std::find(supers.begin(), supers.end(), super) == supers.end()) {
-                    supers.push_back(super);
-                    collect(super);
-                }
+        auto directSupers = storage_->getSuperClasses(cid);
+        for (const auto& super : directSupers) {
+            if (std::find(supers.begin(), supers.end(), super) == supers.end()) {
+                supers.push_back(super);
+                collect(super);
             }
         }
     };

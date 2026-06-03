@@ -1010,11 +1010,12 @@ String LlmCollaboration::buildContext(const std::vector<String>& entityIds) {
             auto cls = storage_->getClass(entityId);
             if (cls) {
                 oss << "Class: " << cls->name << " (id: " << cls->id << ")\n";
-                if (!cls->superClasses.empty()) {
+                auto superIds = storage_->getSuperClasses(cls->id);
+                if (!superIds.empty()) {
                     oss << "  SuperClasses: ";
-                    for (size_t i = 0; i < cls->superClasses.size(); i++) {
+                    for (size_t i = 0; i < superIds.size(); i++) {
                         if (i > 0) oss << ", ";
-                        oss << cls->superClasses[i];
+                        oss << superIds[i];
                     }
                     oss << "\n";
                 }
