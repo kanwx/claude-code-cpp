@@ -467,6 +467,23 @@ size_t HybridStorage::relationCount() const {
 
 std::vector<std::vector<String>> HybridStorage::findPath(
     const String& from, const String& to, const String& predicate, int maxDepth) const {
+    // Prefer graphDB for path queries
+    if (graphDB_ && graphDB_->isConnected()) {
+        auto result = graphDB_->findShortestPath(from, to);
+        if (result.success) {
+            std::vector<std::vector<String>> paths;
+            std::vector<String> path;
+            for (size_t i = 0; i < result.nodes.size(); i++) {
+                path.push_back(result.nodes[i]);
+                if (i < result.edges.size()) {
+                    path.push_back(result.edges[i]);
+                }
+            }
+            if (!path.empty()) paths.push_back(path);
+            return paths;
+        }
+    }
+    // Fallback to in-memory BFS
     std::shared_lock lock(mutex_);
     return tripleStore_.findPath(from, to, predicate, maxDepth);
 }
@@ -1042,7 +1059,17 @@ std::vector<String> HybridStorage::getDirectSubClasses(const String& classId) co
 }
 
 std::vector<String> HybridStorage::getAllSubClasses(const String& classId) const {
+    // Prefer graphDB for deep traversals
+    if (graphDB_ && graphDB_->isConnected()) {
+        auto result = graphDB_->getSubClassClosure(classId);
+        if (!result.empty()) return result;
+    }
+    // Fallback to in-memory DFS
     std::shared_lock lock(mutex_);
+    return getAllSubClassesFromMemory(classId);
+}
+
+std::vector<String> HybridStorage::getAllSubClassesFromMemory(const String& classId) const {
     std::vector<String> result;
     std::unordered_set<String> visited;
 
@@ -1081,6 +1108,29 @@ std::vector<String> HybridStorage::getSuperClasses(const String& classId) const 
     auto it = classes_.find(classId);
     if (it == classes_.end()) return {};
     return it->second.superClasses;
+}
+
+std::vector<String> HybridStorage::getAllSuperClasses(const String& classId) const {
+    if (graphDB_ && graphDB_->isConnected()) {
+        auto result = graphDB_->getSuperClassClosure(classId);
+        if (!result.empty()) return result;
+    }
+    // Fallback: walk up from getSuperClasses
+    std::shared_lock lock(mutex_);
+    std::vector<String> result;
+    std::unordered_set<String> visited;
+    std::function<void(const String&)> collect = [&](const String& cid) {
+        if (visited.count(cid)) return;
+        visited.insert(cid);
+        auto it = classes_.find(cid);
+        if (it == classes_.end()) return;
+        for (const auto& sid : it->second.superClasses) {
+            result.push_back(sid);
+            collect(sid);
+        }
+    };
+    collect(classId);
+    return result;
 }
 
 HybridStorage::~HybridStorage() {

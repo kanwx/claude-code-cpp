@@ -76,6 +76,9 @@ public:
     /// Get super-classes of a class
     std::vector<String> getSuperClasses(const String& classId) const;
 
+    /// Get all super-classes transitively (graphDB-first, memory fallback)
+    std::vector<String> getAllSuperClasses(const String& classId) const;
+
     // Authority source
     bool isReadOnly() const;
     void setReadOnly(bool readOnly);
@@ -182,6 +185,9 @@ private:
     std::thread reconnectionThread_;
     std::atomic<bool> reconnectRunning_{false};
     int reconnectIntervalSeconds_ = 30;
+
+    // Private helper: in-memory DFS for all sub-classes (no graphDB delegation)
+    std::vector<String> getAllSubClassesFromMemory(const String& classId) const;
 
     // Private unlocked implementations (called under lock by public methods or other _impl)
     bool addTripleImpl_(const Triple& triple);
