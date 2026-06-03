@@ -126,3 +126,18 @@ add_test(NAME wal_persistence COMMAND test_wal_persistence)
 add_executable(test_api_handlers test_api_handlers.cpp)
 target_link_libraries(test_api_handlers PRIVATE ontology_core ${APPLE_FRAMEWORKS})
 add_test(NAME service_context COMMAND test_api_handlers)
+
+# Integration test: GraphDB authority source
+add_executable(test_graphdb_authority test_graphdb_authority.cpp)
+target_link_libraries(test_graphdb_authority PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME graphdb_authority COMMAND test_graphdb_authority)
+
+# Integration test: RecoveryManager
+add_executable(test_recovery_manager test_recovery_manager.cpp)
+target_link_libraries(test_recovery_manager PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME recovery_manager COMMAND test_recovery_manager)
+
+# Integration test: Read-only degradation
+add_executable(test_readonly_degradation test_readonly_degradation.cpp)
+target_link_libraries(test_readonly_degradation PRIVATE ontology_core ${APPLE_FRAMEWORKS})
+add_test(NAME readonly_degradation COMMAND test_readonly_degradation)

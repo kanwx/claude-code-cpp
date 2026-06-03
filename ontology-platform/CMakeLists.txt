@@ -162,6 +162,7 @@ add_library(ontology_core STATIC
     ${NEURAL_SOURCES}
     ${MCP_SOURCES}
     ${RAG_SOURCES}
+    ${BOOTSTRAP_SOURCES}
     ${CONTEXT_SOURCES}
 )
 
