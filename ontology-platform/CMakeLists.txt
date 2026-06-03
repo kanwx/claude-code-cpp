@@ -140,6 +140,7 @@ set(API_SOURCES
 
 set(BOOTSTRAP_SOURCES
     src/bootstrap/Bootstrap.cpp
+    src/bootstrap/RecoveryManager.cpp
 )
 
 # ServiceContext.cpp must be in ontology_core (not just the server)
