@@ -59,7 +59,14 @@ void FtxuiRepl::syncLayoutState() {
     // Content — point messages pointer directly (no copy)
     ls.content.messages = &messages_;
     ls.content.streaming.text = streamingText_;
+    ls.tickCounter++;
     ls.content.streaming.tickCounter = ls.tickCounter;
+    // Use incremental StreamingRenderer instead of full reparse
+    if (!streamingText_.empty()) {
+        ls.content.streaming.cachedElements = streamingRenderer_.render();
+    } else {
+        ls.content.streaming.cachedElements.clear();
+    }
     ls.content.thinking.active = isThinking_;
     ls.content.thinking.summary = thinkingSummary_;
     ls.content.thinking.stalled = false; // will be computed from lastOutputTime_

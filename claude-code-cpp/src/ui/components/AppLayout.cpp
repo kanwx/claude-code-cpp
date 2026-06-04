@@ -306,11 +306,17 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                 contentEls.push_back(RenderMessageList(s->content.messages, ctxPtr));
             }
 
-            // Streaming text
+            // Streaming text — use cached elements from StreamingRenderer when available
             if (!s->content.streaming.text.empty()) {
                 if (!contentEls.empty()) contentEls.push_back(text(""));
 
-                auto mdBlocks = FtxuiMarkdown::render(s->content.streaming.text);
+                // Prefer incremental render from StreamingRenderer (avoids full reparse)
+                std::vector<Element> mdBlocks;
+                if (!s->content.streaming.cachedElements.empty()) {
+                    mdBlocks = std::move(s->content.streaming.cachedElements);
+                } else {
+                    mdBlocks = FtxuiMarkdown::render(s->content.streaming.text);
+                }
                 bool firstElem = true;
                 for (auto& elem : mdBlocks) {
                     if (firstElem) {
@@ -324,7 +330,7 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                     }
                 }
 
-                // Blinking cursor with glimmer
+                // Blinking cursor
                 bool cursorVisible = (s->content.streaming.tickCounter % 20) < 10;
                 Color cursorColor = cursorVisible ? MacPeach : MacCream;
                 contentEls.push_back(hbox({
@@ -359,6 +365,13 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                 thinkingElems.push_back(text(" (ctrl+o)") | dim | color(MacShadow));
 
                 contentEls.push_back(hbox(std::move(thinkingElems)));
+            }
+
+            // Add focus anchor at bottom for auto-scroll
+            // yframe scrolls to show focused elements, so placing focus
+            // at the bottom forces auto-scroll when autoScroll is on
+            if (s->content.autoScroll) {
+                contentEls.push_back(text("") | focus);
             }
 
             auto messagesContent = vbox(std::move(contentEls))
