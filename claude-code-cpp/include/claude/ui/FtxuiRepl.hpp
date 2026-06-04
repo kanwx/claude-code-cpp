@@ -10,6 +10,7 @@
 #include "FtxuiMarkdown.hpp"
 #include "VirtualScroll.hpp"
 #include "MessagePipeline.hpp"
+#include "ThinkingFilter.hpp"
 #include "components/MessageRenderer.hpp"
 #include "components/AppLayout.hpp"
 #include "../permission/PermissionTypes.hpp"
@@ -66,6 +67,10 @@ public:
     // Thread-safe thinking update
     void updateThinkingSummary(const String& summary);
     void addThinkingMessage(const String& fullText);
+
+    // Pipeline-aware message operations (preferred over addToolMessage)
+    void addToolUseStart(const String& toolName, const String& toolId, const String& input);
+    void addToolResult(const String& toolName, const String& toolId, const String& result, bool isError = false);
 
     // ========== Permission prompt (thread-safe, blocking for caller) ==========
 

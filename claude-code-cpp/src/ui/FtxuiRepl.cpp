@@ -119,77 +119,118 @@ FtxuiRepl::~FtxuiRepl() {
 
 // ========== Thread-safe message operations ==========
 
+namespace {
+
+void processAndSync(MessagePipeline& pipeline, std::vector<DisplayMessage>& messages,
+                    const StreamEvent& event) {
+    if (pipeline.processEvent(event)) {
+        messages = ThinkingFilter::apply(pipeline.getDisplayMessages());
+    }
+}
+
+} // anonymous namespace
+
 void FtxuiRepl::addUserMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        auto msg = DisplayMessage::userPrompt(std::move(c));
-        msg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(msg));
+        StreamEvent event;
+        event.type = StreamEvent::Type::UserMessage;
+        event.text = std::move(c);
+        processAndSync(messagePipeline_, messages_, event);
     });
 }
 
 void FtxuiRepl::addAssistantMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        auto msg = DisplayMessage::assistantText(std::move(c));
-        msg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(msg));
+        StreamEvent startEvent;
+        startEvent.type = StreamEvent::Type::StreamStart;
+        processAndSync(messagePipeline_, messages_, startEvent);
+
+        StreamEvent deltaEvent;
+        deltaEvent.type = StreamEvent::Type::TextDelta;
+        deltaEvent.text = std::move(c);
+        processAndSync(messagePipeline_, messages_, deltaEvent);
+
+        StreamEvent endEvent;
+        endEvent.type = StreamEvent::Type::StreamEnd;
+        endEvent.success = true;
+        processAndSync(messagePipeline_, messages_, endEvent);
+    });
+}
+
+void FtxuiRepl::addToolUseStart(const String& toolName, const String& toolId, const String& input) {
+    if (!screen_) return;
+    screen_->Post([this, tn = String(toolName), tid = String(toolId), inp = String(input)]() {
+        StreamEvent event;
+        event.type = StreamEvent::Type::ToolUseStart;
+        event.toolName = tn;
+        event.toolId = tid;
+        event.toolInput = inp;
+        processAndSync(messagePipeline_, messages_, event);
+    });
+}
+
+void FtxuiRepl::addToolResult(const String& toolName, const String& toolId, const String& result, bool isError) {
+    if (!screen_) return;
+    screen_->Post([this, tn = String(toolName), tid = String(toolId), res = String(result), err = isError]() {
+        StreamEvent event;
+        event.type = StreamEvent::Type::ToolResultReady;
+        event.toolName = tn;
+        event.toolId = tid;
+        event.toolResult = res;
+        event.toolIsError = err;
+        processAndSync(messagePipeline_, messages_, event);
     });
 }
 
 void FtxuiRepl::addToolMessage(const String& toolName, const String& input, const String& result) {
-    if (!screen_) return;
-    screen_->Post([this, tn = String(toolName), inp = String(input), res = String(result)]() {
-        // If this is a result callback (empty input, non-empty result),
-        // find the EARLIEST unmatched ToolUse message with the same name.
-        // Using earliest (not latest) ensures correct pairing when multiple
-        // tools of the same type run concurrently (e.g. 3 Read files).
-        if (inp.empty() && !res.empty()) {
-            for (size_t i = 0; i < messages_.size(); ++i) {
-                if (messages_[i].type == DisplayMessage::Type::AssistantToolUse &&
-                    messages_[i].toolUse.toolName == tn) {
-                    // Check if this tool_use already has a paired result
-                    bool alreadyPaired = false;
-                    for (size_t j = i + 1; j < messages_.size(); ++j) {
-                        if (messages_[j].type == DisplayMessage::Type::UserToolResult &&
-                            messages_[j].toolResult.toolUseId == messages_[i].toolUse.toolId) {
-                            alreadyPaired = true;
-                            break;
-                        }
+    if (input.empty() && !result.empty()) {
+        // Result callback — find earliest unpaired tool_use with matching name in pipeline
+        const auto& rawMsgs = messagePipeline_.rawMessages();
+        String toolId;
+        for (const auto& m : rawMsgs) {
+            if (m.type == DisplayMessage::Type::AssistantToolUse &&
+                m.toolUse.toolName == toolName) {
+                bool alreadyPaired = false;
+                for (const auto& other : rawMsgs) {
+                    if ((other.type == DisplayMessage::Type::UserToolResult ||
+                         other.type == DisplayMessage::Type::UserToolSuccess ||
+                         other.type == DisplayMessage::Type::UserToolError) &&
+                        other.toolResult.toolUseId == m.toolUse.toolId) {
+                        alreadyPaired = true;
+                        break;
                     }
-                    if (!alreadyPaired) {
-                        auto resultMsg = DisplayMessage::userToolResult(
-                            ToolResultBlock{messages_[i].toolUse.toolId, tn, std::move(res), false});
-                        resultMsg.messageId = MessageIdGenerator::next();
-                        messages_.push_back(std::move(resultMsg));
-                        return;
-                    }
+                }
+                if (!alreadyPaired) {
+                    toolId = m.toolUse.toolId;
+                    break;
                 }
             }
         }
-        // Tool start: add as AssistantToolUse
-        auto msg = DisplayMessage::assistantToolUse(
-            ToolUseBlock{MessageIdGenerator::next(), std::move(tn), std::move(inp)});
-        msg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(msg));
-    });
+        addToolResult(toolName, toolId, result, false);
+    } else {
+        addToolUseStart(toolName, MessageIdGenerator::next(), input);
+    }
 }
 
 void FtxuiRepl::addSystemMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        auto msg = DisplayMessage::systemInfo(std::move(c));
-        msg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(msg));
+        StreamEvent event;
+        event.type = StreamEvent::Type::SystemMessage;
+        event.text = std::move(c);
+        processAndSync(messagePipeline_, messages_, event);
     });
 }
 
 void FtxuiRepl::addErrorMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        auto msg = DisplayMessage::systemError(std::move(c));
-        msg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(msg));
+        StreamEvent event;
+        event.type = StreamEvent::Type::ErrorMessage;
+        event.text = std::move(c);
+        processAndSync(messagePipeline_, messages_, event);
     });
 }
 
@@ -198,15 +239,20 @@ void FtxuiRepl::addTurnDurationMessage(int durationMs) {
     int seconds = durationMs / 1000;
     String msg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
     screen_->Post([this, m = std::move(msg)]() {
-        auto dmsg = DisplayMessage::turnDuration(std::move(m));
-        dmsg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(dmsg));
+        StreamEvent event;
+        event.type = StreamEvent::Type::TurnDuration;
+        event.text = std::move(m);
+        processAndSync(messagePipeline_, messages_, event);
     });
 }
 
 void FtxuiRepl::clearMessages() {
     if (!screen_) return;
-    screen_->Post([this]() { messages_.clear(); });
+    screen_->Post([this]() {
+        messages_.clear();
+        messagePipeline_.rawMessages().clear();
+        messagePipeline_.reprocess();
+    });
 }
 
 void FtxuiRepl::setModelInfo(const String& info) {
