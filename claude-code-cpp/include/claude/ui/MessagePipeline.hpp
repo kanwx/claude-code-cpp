@@ -86,6 +86,7 @@ private:
     bool isThinking_ = false;
     String streamingText_;
     String thinkingSummary_;
+    String pendingThinkingText_;  // Full thinking text accumulated during streaming
     String streamingChunkText_;
 
     // Pending tool_use blocks waiting for results (keyed by toolId)

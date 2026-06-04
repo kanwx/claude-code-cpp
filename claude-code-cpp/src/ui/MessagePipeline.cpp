@@ -52,6 +52,7 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
             isThinking_ = true;
             streamingText_.clear();
             thinkingSummary_.clear();
+            pendingThinkingText_.clear();
             pendingToolUseIndex_.clear();
             return false; // No message change yet
 
@@ -63,6 +64,7 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
 
         case StreamEvent::Type::ThinkingDelta:
             thinkingSummary_ += event.text;
+            pendingThinkingText_ += event.text;
             // Keep summary trimmed to last 60 chars
             if (thinkingSummary_.size() > 60) {
                 thinkingSummary_ = "..." + thinkingSummary_.substr(thinkingSummary_.size() - 57);
@@ -119,6 +121,14 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
         case StreamEvent::Type::StreamEnd: {
             isStreaming_ = false;
             isThinking_ = false;
+
+            // Commit accumulated thinking as AssistantThinking DisplayMessage
+            if (!pendingThinkingText_.empty()) {
+                auto thinkMsg = DisplayMessage::assistantThinking(std::move(pendingThinkingText_), /*collapsed=*/true);
+                thinkMsg.messageId = MessageIdGenerator::next();
+                messages.push_back(std::move(thinkMsg));
+                pendingThinkingText_.clear();
+            }
 
             // Commit streaming text as final assistant message
             if (!streamingText_.empty()) {
