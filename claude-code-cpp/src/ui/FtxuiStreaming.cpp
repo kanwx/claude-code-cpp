@@ -3,6 +3,7 @@
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/core/UnifiedTaskStore.hpp"
 #include "claude/ui/FtxuiMarkdown.hpp"
+#include "claude/ui/ThinkingFilter.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
@@ -166,6 +167,12 @@ void FtxuiRepl::appendStreamText(const String& chunk) {
         if (isThinking_) isThinking_ = false;
         streamingText_ += c;
         streamingRenderer_.append(c);
+        // Feed to pipeline (pipeline tracks streaming text internally,
+        // no need to sync messages_ mid-stream — we sync on finishStream)
+        StreamEvent deltaEvent;
+        deltaEvent.type = StreamEvent::Type::TextDelta;
+        deltaEvent.text = c;
+        messagePipeline_.processEvent(deltaEvent);
         lastOutputTime_ = std::chrono::steady_clock::now();
     });
 }
@@ -201,7 +208,6 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
 
     // State update on UI thread
     screen_->Post([this, success, err = String(error), durationMs]() {
-        // If already transitioned to idle (e.g. by cancel handler), skip
         if (!isStreaming_ && !isThinking_) return;
 
         isStreaming_ = false;
@@ -211,31 +217,36 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
         streamingText_.clear();
         streamingRenderer_.reset();
 
-        if (success && !finalText.empty()) {
-            auto msg = DisplayMessage::assistantText(std::move(finalText));
-            msg.messageId = MessageIdGenerator::next();
-            messages_.push_back(std::move(msg));
-        } else if (!success) {
-            if (!finalText.empty()) {
-                auto msg = DisplayMessage::assistantText(std::move(finalText));
-                msg.messageId = MessageIdGenerator::next();
-                messages_.push_back(std::move(msg));
-            }
-            auto emsg = DisplayMessage::systemError("Error: " + err);
-            emsg.messageId = MessageIdGenerator::next();
-            messages_.push_back(std::move(emsg));
+        // Feed any remaining streaming text to pipeline first
+        if (!finalText.empty()) {
+            StreamEvent deltaEvent;
+            deltaEvent.type = StreamEvent::Type::TextDelta;
+            deltaEvent.text = finalText;
+            messagePipeline_.processEvent(deltaEvent);
         }
 
-        // Turn duration message (>2s)
+        // Commit via StreamEnd — NormalizeStage commits both thinking and text
+        StreamEvent endEvent;
+        endEvent.type = StreamEvent::Type::StreamEnd;
+        endEvent.success = success;
+        endEvent.text = err;
+
+        if (messagePipeline_.processEvent(endEvent)) {
+            messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+        }
+
+        // Turn duration message (>2s) — route through pipeline
         if (success && durationMs > 2000) {
             int seconds = durationMs / 1000;
             String tmsg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-            auto dmsg = DisplayMessage::turnDuration(std::move(tmsg));
-            dmsg.messageId = MessageIdGenerator::next();
-            messages_.push_back(std::move(dmsg));
+            StreamEvent durEvent;
+            durEvent.type = StreamEvent::Type::TurnDuration;
+            durEvent.text = std::move(tmsg);
+            if (messagePipeline_.processEvent(durEvent)) {
+                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+            }
         }
 
-        // Stop refresh thread after stream ends
         stopRefreshThread();
     });
 }
@@ -254,9 +265,14 @@ void FtxuiRepl::addThinkingMessage(const String& fullText) {
     if (!screen_) return;
     screen_->Post([this, t = String(fullText)]() {
         thinkingText_ = t;
-        auto msg = DisplayMessage::assistantThinking(std::move(t), /*collapsed=*/true);
-        msg.messageId = MessageIdGenerator::next();
-        messages_.push_back(std::move(msg));
+        // Feed to pipeline as ThinkingDelta — NormalizeStage will commit
+        // as AssistantThinking on StreamEnd
+        StreamEvent event;
+        event.type = StreamEvent::Type::ThinkingDelta;
+        event.text = std::move(t);
+        if (messagePipeline_.processEvent(event)) {
+            messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+        }
     });
 }
 
