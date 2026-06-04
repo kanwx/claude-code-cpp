@@ -1,6 +1,7 @@
 #ifdef HAS_FTXUI
 
 #include "claude/ui/FtxuiRepl.hpp"
+#include "claude/ui/ThinkingFilter.hpp"
 #include "claude/ui/components/AppLayout.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"

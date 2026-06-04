@@ -10,7 +10,6 @@
 #include "FtxuiMarkdown.hpp"
 #include "VirtualScroll.hpp"
 #include "MessagePipeline.hpp"
-#include "ThinkingFilter.hpp"
 #include "components/MessageRenderer.hpp"
 #include "components/AppLayout.hpp"
 #include "../permission/PermissionTypes.hpp"
