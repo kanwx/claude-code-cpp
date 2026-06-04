@@ -207,3 +207,7 @@ catch_discover_tests(test_search_overlay)
 add_executable(test_permission_renderer test_permission_renderer.cpp)
 target_link_libraries(test_permission_renderer PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_permission_renderer)
+
+add_executable(test_thinking_filter test_thinking_filter.cpp)
+target_link_libraries(test_thinking_filter PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_thinking_filter)

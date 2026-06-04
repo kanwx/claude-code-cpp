@@ -519,6 +519,7 @@ set(UI_SOURCES
     src/ui/permissions/FileEditPermissionRenderer.cpp
     src/ui/permissions/FileWritePermissionRenderer.cpp
     src/ui/permissions/FileReadPermissionRenderer.cpp
+    src/ui/ThinkingFilter.cpp
 )
 
 # RAG源文件
