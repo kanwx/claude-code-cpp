@@ -30,104 +30,114 @@ ftxui::Element RenderMessageList(const std::vector<DisplayMessage>* messages,
     using namespace ftxui;
     Elements els;
 
-    for (const auto& msg : *messages) {
-        Element el;
+    auto isToolResultType = [](DisplayMessage::Type t) {
+        return t == DisplayMessage::Type::UserToolResult ||
+               t == DisplayMessage::Type::UserToolSuccess ||
+               t == DisplayMessage::Type::UserToolError ||
+               t == DisplayMessage::Type::UserToolRejected ||
+               t == DisplayMessage::Type::UserToolCanceled;
+    };
+
+    auto renderSingle = [ctx](const DisplayMessage& msg) -> Element {
         switch (msg.type) {
             case DisplayMessage::Type::UserPrompt: {
                 UserPromptComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::AssistantText: {
                 AssistantTextComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::AssistantThinking: {
                 AssistantThinkingComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::AssistantToolUse: {
                 ToolUseComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::UserToolResult: {
                 ToolResultComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::SystemInfo: {
                 SystemInfoComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::SystemError: {
                 SystemErrorComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::TurnDuration: {
                 TurnDurationComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::CompactBoundary: {
                 CompactBoundaryComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::CollapsedReadSearch: {
                 CollapsedReadSearchComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::GroupedToolUse: {
                 GroupedToolUseComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::AgentProgress: {
                 AgentProgressComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::UserToolSuccess: {
                 UserToolSuccessComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::UserToolError: {
                 UserToolErrorComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::UserToolRejected: {
                 UserToolRejectedComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::UserToolCanceled: {
                 UserToolCanceledComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
             case DisplayMessage::Type::AssistantRedactedThinking: {
                 AssistantRedactedThinkingComponent c(msg, *ctx);
-                el = c.OnRender();
-                break;
+                return c.OnRender();
             }
-            // PermissionPrompt and HookSummary are handled by dedicated
-            // overlay/modal components, not in the message stream.
-            // Fall through to the default handler.
             case DisplayMessage::Type::PermissionPrompt:
             case DisplayMessage::Type::HookSummary:
             default:
-                el = paragraph(msg.text) | dim;
-                break;
+                return paragraph(msg.text) | dim;
         }
-        els.push_back(el);
+    };
+
+    size_t i = 0;
+    while (i < messages->size()) {
+        const auto& msg = messages->at(i);
+
+        // Detect tool_use immediately followed by its paired result
+        if (msg.type == DisplayMessage::Type::AssistantToolUse &&
+            i + 1 < messages->size() &&
+            isToolResultType(messages->at(i + 1).type) &&
+            messages->at(i + 1).toolResult.toolUseId == msg.toolUse.toolId) {
+            // Render as nested pair: tool_use header + ⎿ indented result
+            auto headerEl = renderSingle(msg);
+            auto resultEl = renderSingle(messages->at(i + 1));
+            els.push_back(vbox({
+                std::move(headerEl),
+                hbox({ text("  ⎿ ") | dim, std::move(resultEl) | flex }),
+            }));
+            i += 2;
+            continue;
+        }
+
+        // Default: render standalone
+        els.push_back(renderSingle(msg));
+        i++;
     }
 
     return vbox(std::move(els));
