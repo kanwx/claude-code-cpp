@@ -5,6 +5,7 @@
 #include <claude/ui/components/MessageList.hpp>
 #include <claude/ui/FtxuiMarkdown.hpp>
 #include <claude/ui/PromptInputFooter.hpp>
+#include <claude/console/AnsiStyle.hpp>
 #include "../FtxuiColors.hpp"
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/component/component.hpp>
@@ -321,7 +322,7 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                 for (auto& elem : mdBlocks) {
                     if (firstElem) {
                         contentEls.push_back(hbox({
-                            text("● ") | color(MacSky),
+                            text(String(" ") + AnsiStyle::ASSISTANT_PREFIX + " ") | color(MacCream),
                             std::move(elem) | flex,
                         }));
                         firstElem = false;

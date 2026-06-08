@@ -60,6 +60,14 @@ struct AnsiStyle {
     static constexpr const char* SCROLL_UP = "\033[1S";
     static constexpr const char* SCROLL_DOWN = "\033[1T";
 
+    // Assistant prefix character — ⏺ (U+23FA) on macOS, ● (U+25CF) on Linux/Windows
+    // Matches TS Claude Code layout: width-2 column, right-aligned before every assistant text block
+#ifdef __APPLE__
+    static constexpr const char* ASSISTANT_PREFIX = "\xe2\x8f\xba";  // ⏺ U+23FA
+#else
+    static constexpr const char* ASSISTANT_PREFIX = "\xe2\x97\x8f";  // ● U+25CF
+#endif
+
     // 语义化颜色 — 匹配原版 Claude Code TypeScript 设计
     struct Semantic {
         // 用户提示符: bold green ❯
