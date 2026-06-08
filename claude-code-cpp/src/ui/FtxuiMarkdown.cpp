@@ -857,9 +857,36 @@ Element FtxuiMarkdown::elementsToParagraph(std::vector<Element>&& elems) {
 
 // ========== Block Rendering ==========
 
+namespace {
+
+/// Render the content lines of a diff block with per-line coloring.
+Element renderDiffBlockFtxui(const std::vector<std::string>& diffLines) {
+    std::vector<Element> lineElements;
+    for (const auto& line : diffLines) {
+        if (line.empty()) {
+            lineElements.push_back(text(""));
+        } else if (line.size() >= 3 &&
+                   (line.substr(0, 3) == "+++" || line.substr(0, 3) == "---")) {
+            lineElements.push_back(text(line) | bold);
+        } else if (line[0] == '+') {
+            lineElements.push_back(text(line) | color(Color::Green));
+        } else if (line[0] == '-') {
+            lineElements.push_back(text(line) | color(Color::Red));
+        } else if (line.size() >= 2 && line.substr(0, 2) == "@@") {
+            lineElements.push_back(text(line) | dim | color(Color::Cyan));
+        } else {
+            lineElements.push_back(text(line) | dim);
+        }
+    }
+    return vbox(std::move(lineElements));
+}
+
+} // anonymous namespace
+
 Element FtxuiMarkdown::renderCodeBlock(const CodeBlock& code) {
     std::vector<Element> lines;
 
+    // Language badge header
     if (!code.lang.empty()) {
         lines.push_back(hbox({
             ftxui::text("╭─ " + code.lang + " ─") | color(MdSky) | dim,
@@ -874,29 +901,39 @@ Element FtxuiMarkdown::renderCodeBlock(const CodeBlock& code) {
         }));
     }
 
-    int lineNum = 1;
-    int totalLines = static_cast<int>(code.lines.size());
-    int width = 1;
-    while (totalLines >= 10) { width++; totalLines /= 10; }
-
-    for (const auto& rawLine : code.lines) {
-        std::string numStr = std::to_string(lineNum);
-        while (static_cast<int>(numStr.size()) < width) numStr = " " + numStr;
-
-        Element lineElem;
-        if (!code.lang.empty() && !rawLine.empty()) {
-            // Apply syntax highlighting: highlightLine returns ANSI-embedded text,
-            // ansiToFtxuiElement converts it to properly colored ftxui Elements.
-            lineElem = ansiToFtxuiElement(highlightLine(rawLine, code.lang));
-        } else {
-            lineElem = ftxui::text(rawLine.empty() ? std::string(" ") : rawLine);
-        }
-
+    // Diff blocks get special per-line coloring
+    if (code.lang == "diff") {
+        Element diffContent = renderDiffBlockFtxui(code.lines);
         lines.push_back(hbox({
-            ftxui::text(numStr + " │ ") | dim | color(MdShadow),
-            lineElem,
+            ftxui::text("  ") | dim,
+            diffContent,
         }));
-        lineNum++;
+    } else {
+        // Standard code block with line numbers and optional syntax highlighting
+        int lineNum = 1;
+        int totalLines = static_cast<int>(code.lines.size());
+        int width = 1;
+        while (totalLines >= 10) { width++; totalLines /= 10; }
+
+        for (const auto& rawLine : code.lines) {
+            std::string numStr = std::to_string(lineNum);
+            while (static_cast<int>(numStr.size()) < width) numStr = " " + numStr;
+
+            Element lineElem;
+            if (!code.lang.empty() && !rawLine.empty()) {
+                // Apply syntax highlighting: highlightLine returns ANSI-embedded text,
+                // ansiToFtxuiElement converts it to properly colored ftxui Elements.
+                lineElem = ansiToFtxuiElement(highlightLine(rawLine, code.lang));
+            } else {
+                lineElem = ftxui::text(rawLine.empty() ? std::string(" ") : rawLine);
+            }
+
+            lines.push_back(hbox({
+                ftxui::text(numStr + " │ ") | dim | color(MdShadow),
+                lineElem,
+            }));
+            lineNum++;
+        }
     }
 
     lines.push_back(hbox({
