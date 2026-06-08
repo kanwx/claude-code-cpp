@@ -1,5 +1,6 @@
 #include <claude/ui/FtxuiMarkdown.hpp>
 #include <claude/ui/LanguageSyntax.hpp>
+#include <claude/console/AnsiStyle.hpp>
 #include <ftxui/screen/string.hpp>
 #include <algorithm>
 #include <sstream>
@@ -810,7 +811,7 @@ std::vector<Element> FtxuiMarkdown::parseInlineElements(const std::string& src) 
             }
         }
 
-        // Link: [text](url)
+        // Link: [text](url) — OSC 8 hyperlinks for URLs, plain text for mailto:
         if (src[i] == '[') {
             size_t textEnd = src.find(']', i + 1);
             if (textEnd != std::string::npos && textEnd + 1 < src.size() && src[textEnd + 1] == '(') {
@@ -821,7 +822,17 @@ std::vector<Element> FtxuiMarkdown::parseInlineElements(const std::string& src) 
                         current.clear();
                     }
                     std::string linkText = src.substr(i + 1, textEnd - i - 1);
-                    elements.push_back(ftxui::text(linkText) | color(MdSky) | underlined);
+                    std::string url = src.substr(textEnd + 2, urlEnd - textEnd - 2);
+
+                    if (url.size() >= 7 && url.substr(0, 7) == "mailto:") {
+                        // mailto: links — display email as plain text (no hyperlink wrapping)
+                        elements.push_back(ftxui::text(linkText) | color(MdSky));
+                    } else {
+                        // Regular links — wrap with OSC 8 hyperlink sequence
+                        // FTXUI's terminal backend passes through ANSI codes, so the hyperlink works
+                        std::string hyperlinkText = AnsiStyle::createHyperlink(url, linkText);
+                        elements.push_back(ftxui::text(hyperlinkText) | color(MdSky));
+                    }
                     i = urlEnd;
                     continue;
                 }

@@ -119,6 +119,13 @@ struct AnsiStyle {
                std::to_string(g) + ";" + std::to_string(b) + "m";
     }
 
+    /// OSC 8 terminal hyperlink — makes text clickable in supporting terminals
+    /// Format: ESC]8;;URL ESC\ TEXT ESC]8;; ESC\
+    /// For mailto: links, callers should display the email as plain text instead
+    static String createHyperlink(const String& url, const String& text) {
+        return "\033]8;;" + url + "\033\\" + text + "\033]8;;\033\\";
+    }
+
     // 移动光标
     static String moveCursor(int row, int col) {
         return "\033[" + std::to_string(row) + ";" + std::to_string(col) + "H";

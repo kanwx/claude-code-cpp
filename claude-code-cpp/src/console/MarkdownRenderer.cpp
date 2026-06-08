@@ -432,10 +432,36 @@ void MarkdownRenderer::renderTable(const std::vector<std::vector<String>>& rows,
 String MarkdownRenderer::applyInlineFormatting(const String& text) {
     String result = text;
 
-    // Links: [text](url) → text (url)
-    result = std::regex_replace(result, std::regex(R"(\[([^\]]+)\]\(([^)]+)\))"),
-                                String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET +
-                                AnsiStyle::DIM + "($2)" + AnsiStyle::RESET);
+    // Links: [text](url) — OSC 8 hyperlinks for URLs, plain text for mailto:
+    {
+        static const std::regex linkRegex(R"(\[([^\]]+)\]\(([^)]+)\))");
+        String linkResult;
+        std::smatch match;
+        size_t lastEnd = 0;
+        for (auto it = std::sregex_iterator(result.begin(), result.end(), linkRegex);
+             it != std::sregex_iterator(); ++it) {
+            match = *it;
+            // Append text before this match
+            linkResult += result.substr(lastEnd, match.position() - lastEnd);
+
+            String linkText = match[1].str();
+            String url = match[2].str();
+
+            if (url.size() >= 7 && url.substr(0, 7) == "mailto:") {
+                // mailto: links — display email as plain text (no hyperlink wrapping)
+                linkResult += linkText;
+            } else {
+                // Regular links — wrap with OSC 8 hyperlink, text styled bright cyan
+                String styledText = AnsiStyle::BRIGHT_CYAN + linkText + AnsiStyle::RESET;
+                linkResult += AnsiStyle::createHyperlink(url, styledText);
+            }
+
+            lastEnd = match.position() + match.length();
+        }
+        // Append remaining text after last match
+        linkResult += result.substr(lastEnd);
+        result = std::move(linkResult);
+    }
 
     // Inline code: `text`
     result = std::regex_replace(result, std::regex(R"(`([^`]+)`)"),
