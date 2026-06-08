@@ -182,11 +182,16 @@ private:
     String permissionToolName_;              // Tool name being asked about
     String permissionActivity_;              // Activity description
     String permissionDescription_;           // Tool-specific description like "Allow Bash to run: npm test"
+    // Tab-to-amend feedback state
+    bool permissionFeedbackActive_ = false;  // Whether the feedback text input is shown
+    String permissionFeedbackText_;          // Feedback text entered by user
+    size_t permissionFeedbackCursorPos_ = 0; // Cursor position in feedback text
 
     // Synchronization: agent thread waits for user choice
     std::mutex permissionMutex_;
     std::condition_variable permissionCv_;
     PermissionChoice permissionResult_ = PermissionChoice::DenyOnce;
+    String permissionFeedbackResult_;        // Feedback text to return with the choice
     bool permissionAnswered_ = false;
 
     // Brand color

@@ -96,6 +96,9 @@ void FtxuiRepl::syncLayoutState() {
     ls.permissionActivity = permissionActivity_;
     ls.permissionDescription = permissionDescription_;
     ls.permissionFocusedIndex = permissionFocusedIndex_;
+    ls.permissionFeedbackActive = permissionFeedbackActive_;
+    ls.permissionFeedbackText = permissionFeedbackText_;
+    ls.permissionFeedbackCursorPos = permissionFeedbackCursorPos_;
 
     // Completions
     const auto& completions = completer_.currentCompletions();
@@ -614,6 +617,106 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
 
         // Permission prompt — MUST be checked BEFORE isStreaming_
         if (r->permissionPromptActive_) {
+            // Helper: clear ToolProgress::Permission on the pending tool_use
+            auto clearPermissionProgress = [r]() {
+                for (auto it = r->messages_.rbegin(); it != r->messages_.rend(); ++it) {
+                    if (it->type == DisplayMessage::Type::AssistantToolUse &&
+                        it->toolUse.progress == ToolProgress::Permission) {
+                        it->toolUse.progress = ToolProgress::None;
+                        break;
+                    }
+                }
+            };
+            // When feedback input is active, route text editing there
+            if (r->permissionFeedbackActive_) {
+                if (event == Event::Escape) {
+                    // Escape in feedback mode: close feedback, stay in prompt
+                    r->permissionFeedbackActive_ = false;
+                    ls->permissionFeedbackActive = false;
+                    return true;
+                }
+                if (event == Event::Tab) {
+                    // Tab again: close feedback
+                    r->permissionFeedbackActive_ = false;
+                    ls->permissionFeedbackActive = false;
+                    return true;
+                }
+                if (event == Event::Return) {
+                    // Return in feedback mode: confirm the choice with feedback
+                    PermissionChoice choices[] = {
+                        PermissionChoice::AllowOnce,
+                        PermissionChoice::AllowSession,
+                        PermissionChoice::AlwaysAllow,
+                        PermissionChoice::DenyOnce,
+                        PermissionChoice::AlwaysDeny
+                    };
+                    int idx = std::clamp(r->permissionFocusedIndex_, 0, 4);
+                    PermissionChoice choice = choices[idx];
+                    r->permissionPromptActive_ = false;
+                    ls->permissionActive = false;
+                    r->permissionFeedbackActive_ = false;
+                    clearPermissionProgress();
+                    ls->permissionFeedbackActive = false;
+
+                    {
+                        std::lock_guard lock(r->permissionMutex_);
+                        r->permissionResult_ = choice;
+                        r->permissionFeedbackResult_ = r->permissionFeedbackText_;
+                        r->permissionAnswered_ = true;
+                    }
+                    r->permissionCv_.notify_one();
+                    return true;
+                }
+                if (event == Event::Backspace && r->permissionFeedbackCursorPos_ > 0) {
+                    size_t& pos = r->permissionFeedbackCursorPos_;
+                    String& txt = r->permissionFeedbackText_;
+                    size_t deleteStart = pos;
+                    while (deleteStart > 0) {
+                        deleteStart--;
+                        auto c = static_cast<unsigned char>(txt[deleteStart]);
+                        if ((c & 0xC0) != 0x80) break;
+                    }
+                    txt.erase(deleteStart, pos - deleteStart);
+                    pos = deleteStart;
+                    ls->permissionFeedbackText = txt;
+                    ls->permissionFeedbackCursorPos = pos;
+                    return true;
+                }
+                if (event == Event::ArrowLeft && r->permissionFeedbackCursorPos_ > 0) {
+                    size_t& pos = r->permissionFeedbackCursorPos_;
+                    while (pos > 0) {
+                        pos--;
+                        auto c = static_cast<unsigned char>(r->permissionFeedbackText_[pos]);
+                        if ((c & 0xC0) != 0x80) break;
+                    }
+                    ls->permissionFeedbackCursorPos = pos;
+                    return true;
+                }
+                if (event == Event::ArrowRight && r->permissionFeedbackCursorPos_ < r->permissionFeedbackText_.size()) {
+                    size_t& pos = r->permissionFeedbackCursorPos_;
+                    while (pos < r->permissionFeedbackText_.size()) {
+                        pos++;
+                        if (pos >= r->permissionFeedbackText_.size()) break;
+                        auto c = static_cast<unsigned char>(r->permissionFeedbackText_[pos]);
+                        if ((c & 0xC0) != 0x80) break;
+                    }
+                    ls->permissionFeedbackCursorPos = pos;
+                    return true;
+                }
+                if (event.is_character()) {
+                    size_t& pos = r->permissionFeedbackCursorPos_;
+                    String& txt = r->permissionFeedbackText_;
+                    txt.insert(pos, event.character());
+                    pos += event.character().size();
+                    ls->permissionFeedbackText = txt;
+                    ls->permissionFeedbackCursorPos = pos;
+                    return true;
+                }
+                // Consume all other events while in feedback mode
+                return true;
+            }
+
+            // Normal permission prompt navigation (no feedback active)
             if (event == Event::ArrowUp || event == Event::CtrlP) {
                 r->permissionFocusedIndex_ = (r->permissionFocusedIndex_ > 0)
                     ? r->permissionFocusedIndex_ - 1 : 4;
@@ -624,6 +727,17 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 r->permissionFocusedIndex_ = (r->permissionFocusedIndex_ < 4)
                     ? r->permissionFocusedIndex_ + 1 : 0;
                 ls->permissionFocusedIndex = r->permissionFocusedIndex_;
+                return true;
+            }
+            if (event == Event::Tab) {
+                // Tab to amend: activate feedback text input
+                r->permissionFeedbackActive_ = true;
+                ls->permissionFeedbackActive = true;
+                // Reset feedback text when entering for first time
+                if (r->permissionFeedbackText_.empty()) {
+                    r->permissionFeedbackCursorPos_ = 0;
+                    ls->permissionFeedbackCursorPos = 0;
+                }
                 return true;
             }
             if (event == Event::Return) {
@@ -638,10 +752,12 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 PermissionChoice choice = choices[idx];
                 r->permissionPromptActive_ = false;
                 ls->permissionActive = false;
+                clearPermissionProgress();
 
                 {
                     std::lock_guard lock(r->permissionMutex_);
                     r->permissionResult_ = choice;
+                    r->permissionFeedbackResult_ = r->permissionFeedbackText_;
                     r->permissionAnswered_ = true;
                 }
                 r->permissionCv_.notify_one();
@@ -650,9 +766,11 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             if (event == Event::Escape) {
                 r->permissionPromptActive_ = false;
                 ls->permissionActive = false;
+                clearPermissionProgress();
                 {
                     std::lock_guard lock(r->permissionMutex_);
                     r->permissionResult_ = PermissionChoice::DenyOnce;
+                    r->permissionFeedbackResult_.clear();
                     r->permissionAnswered_ = true;
                 }
                 r->permissionCv_.notify_one();

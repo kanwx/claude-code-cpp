@@ -86,55 +86,63 @@ ftxui::Element renderPermissionOverlay(const AppLayoutState& state) {
 
     std::vector<Element> permElems;
 
+    // ┌─ top border ─┐
     permElems.push_back(hbox({
-        text("╭─ ⚠ Permission Required ─") | color(MacGold),
-        filler() | color(MacGold),
-        text("╮") | color(MacGold),
+        text("┌") | color(MacGold),
+        text("─") | flex | color(MacGold),
+        text("┐") | color(MacGold),
     }));
+
+    // Question text — context-specific per TS format
+    String question;
+    if (!state.permissionToolName.empty()) {
+        question = "Claude needs your permission to use " + state.permissionToolName;
+    } else if (!state.permissionActivity.empty()) {
+        question = state.permissionActivity;
+    } else {
+        question = "Claude Code needs your attention";
+    }
+    // Wrap question if too long
+    if (question.size() > 60) question = question.substr(0, 57) + "...";
 
     permElems.push_back(hbox({
         text("│ ") | color(MacGold),
-        text(" " + state.permissionToolName + " ") | bold | bgcolor(badgeBg) | color(badgeFg),
+        text(question) | bold | color(MacCream),
         filler(),
         text(" │") | color(MacGold),
     }));
 
-    // Description (tool-specific)
+    // Blank line
+    permElems.push_back(hbox({
+        text("│") | color(MacGold),
+        filler(),
+        text("│") | color(MacGold),
+    }));
+
+    // Description (tool-specific, shown as dim detail under question)
     if (!state.permissionDescription.empty()) {
         String descSummary = state.permissionDescription;
-        if (descSummary.size() > 80) descSummary = descSummary.substr(0, 77) + "...";
+        if (descSummary.size() > 70) descSummary = descSummary.substr(0, 67) + "...";
         permElems.push_back(hbox({
             text("│ ") | color(MacGold),
             text(descSummary) | dim | color(MacCream),
             filler(),
             text(" │") | color(MacGold),
         }));
-    }
-
-    // Activity (fallback, shown if description is empty)
-    if (state.permissionDescription.empty() && !state.permissionActivity.empty()) {
-        String actSummary = state.permissionActivity;
-        if (actSummary.size() > 80) actSummary = actSummary.substr(0, 77) + "...";
         permElems.push_back(hbox({
-            text("│ ") | color(MacGold),
-            text(actSummary) | dim | color(MacCream),
+            text("│") | color(MacGold),
             filler(),
-            text(" │") | color(MacGold),
+            text("│") | color(MacGold),
         }));
     }
 
-    permElems.push_back(hbox({
-        text("│") | color(MacGold),
-        filler(),
-        text("│") | color(MacGold),
-    }));
-
+    // Radio-style options: ○ / ◉
     const char* optionLabels[] = {
-        "Yes (once)",
-        "Allow for this session",
-        "Yes, always allow",
-        "No (once)",
-        "No, always deny"
+        "Allow Once",
+        "Allow for Session",
+        "Always Allow",
+        "Deny Once",
+        "Always Deny"
     };
     const Color optionColors[] = {
         MacMint,    // AllowOnce
@@ -146,9 +154,18 @@ ftxui::Element renderPermissionOverlay(const AppLayoutState& state) {
 
     for (int i = 0; i < 5; i++) {
         bool focused = (i == state.permissionFocusedIndex);
+        // Blank line separator between Allow and Deny groups
+        if (i == 3) {
+            permElems.push_back(hbox({
+                text("│") | color(MacGold),
+                filler(),
+                text("│") | color(MacGold),
+            }));
+        }
         permElems.push_back(hbox({
             text("│ ") | color(MacGold),
-            text(focused ? "❯ " : "  "),
+            text(focused ? "◉ " : "○ ")
+                | color(focused ? optionColors[i] : MacShadow),
             text(optionLabels[i])
                 | (focused ? bold : dim)
                 | color(focused ? optionColors[i] : MacCream),
@@ -156,16 +173,79 @@ ftxui::Element renderPermissionOverlay(const AppLayoutState& state) {
             text(" │") | color(MacGold),
         }));
     }
+
+    // Feedback text input (shown when Tab is pressed)
+    if (state.permissionFeedbackActive) {
+        // Determine placeholder based on whether selected option is Allow or Deny
+        bool isAllow = (state.permissionFocusedIndex < 3);  // indices 0-2 are Allow
+        String placeholder = isAllow
+            ? "tell Claude what to do next"
+            : "tell Claude what to do differently";
+
+        // Render the feedback input field
+        const String& fbText = state.permissionFeedbackText;
+        size_t cursorPos = state.permissionFeedbackCursorPos;
+        if (cursorPos > fbText.size()) cursorPos = fbText.size();
+
+        String beforeCursor = fbText.substr(0, cursorPos);
+        String cursorChar = " ";
+        size_t nextCharPos = cursorPos;
+        if (cursorPos < fbText.size()) {
+            nextCharPos = cursorPos + 1;
+            while (nextCharPos < fbText.size()) {
+                auto c = static_cast<unsigned char>(fbText[nextCharPos]);
+                if ((c & 0xC0) != 0x80) break;
+                nextCharPos++;
+            }
+            cursorChar = fbText.substr(cursorPos, nextCharPos - cursorPos);
+        }
+        String afterCursor = (nextCharPos < fbText.size())
+            ? fbText.substr(nextCharPos) : "";
+
+        if (fbText.empty()) {
+            // Show placeholder
+            permElems.push_back(hbox({
+                text("│ ") | color(MacGold),
+                text("  ") | color(MacShadow),
+                text(placeholder) | dim | color(MacShadow) | inverted,
+                filler(),
+                text(" │") | color(MacGold),
+            }));
+        } else {
+            permElems.push_back(hbox({
+                text("│ ") | color(MacGold),
+                text("  "),
+                text(beforeCursor),
+                text(cursorChar) | inverted,
+                text(afterCursor),
+                filler(),
+                text(" │") | color(MacGold),
+            }));
+        }
+    }
+
+    // Blank line before footer
+    permElems.push_back(hbox({
+        text("│") | color(MacGold),
+        filler(),
+        text("│") | color(MacGold),
+    }));
+
+    // Footer hint: "Esc to cancel ∙ Tab to amend"
     permElems.push_back(hbox({
         text("│ ") | color(MacGold),
-        text("↑↓ select · Enter confirm · Esc cancel") | dim | color(MacShadow),
+        text("Esc to cancel") | dim | color(MacShadow),
+        text(" ∙ ") | dim | color(MacShadow),
+        text("Tab to amend") | dim | color(MacShadow),
         filler(),
         text(" │") | color(MacGold),
     }));
+
+    // └─ bottom border ─┘
     permElems.push_back(hbox({
-        text("╰") | color(MacGold),
-        filler() | color(MacGold),
-        text("╯") | color(MacGold),
+        text("└") | color(MacGold),
+        text("─") | flex | color(MacGold),
+        text("┘") | color(MacGold),
     }));
 
     return clear_under(vbox(std::move(permElems)));

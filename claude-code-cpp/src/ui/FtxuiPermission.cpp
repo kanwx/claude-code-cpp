@@ -14,6 +14,7 @@ PermissionChoice FtxuiRepl::promptPermission(const String& toolName, const Strin
         std::lock_guard lock(permissionMutex_);
         permissionAnswered_ = false;
         permissionResult_ = PermissionChoice::DenyOnce;
+        permissionFeedbackResult_.clear();
     }
 
     // Show permission prompt on UI thread
@@ -22,6 +23,20 @@ PermissionChoice FtxuiRepl::promptPermission(const String& toolName, const Strin
         permissionFocusedIndex_ = 0;
         permissionToolName_ = std::move(tn);
         permissionActivity_ = std::move(act);
+        permissionDescription_.clear();
+        permissionFeedbackActive_ = false;
+        permissionFeedbackText_.clear();
+        permissionFeedbackCursorPos_ = 0;
+
+        // Set progress=Permission on the last matching tool_use message
+        // so the UI shows "Waiting for permission…" while the prompt is active
+        for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+            if (it->type == DisplayMessage::Type::AssistantToolUse &&
+                it->toolUse.toolName == permissionToolName_) {
+                it->toolUse.progress = ToolProgress::Permission;
+                break;
+            }
+        }
     });
 
     // Wake up the UI loop so it renders the prompt immediately

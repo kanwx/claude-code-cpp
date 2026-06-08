@@ -35,6 +35,10 @@ struct AppLayoutState {
     std::string permissionActivity;
     std::string permissionDescription;
     int permissionFocusedIndex = 0;
+    // Tab-to-amend feedback
+    bool permissionFeedbackActive = false;
+    std::string permissionFeedbackText;
+    size_t permissionFeedbackCursorPos = 0;
     // Completions
     std::vector<std::string> completions;
     size_t completionIndex = 0;
