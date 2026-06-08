@@ -4,7 +4,6 @@
 #include <ftxui/component/component_base.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <string>
-#include <functional>
 
 namespace claude::ui {
 
