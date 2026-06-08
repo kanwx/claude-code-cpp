@@ -96,6 +96,8 @@ private:
         std::vector<std::pair<bool, std::string>> taskItems; // checked, text
         // Nested list fields
         int indentLevel = 0;     // nesting depth
+        // Blockquote fields
+        std::vector<std::pair<int, std::string>> bqLines; // nesting level, text per line
     };
 
     static std::vector<ParsedBlock> parse(const std::string& markdown);

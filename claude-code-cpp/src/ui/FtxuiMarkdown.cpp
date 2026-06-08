@@ -723,13 +723,23 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
             }
         }
 
-        if (line.starts_with("> ")) {
+        if (!line.empty() && line[0] == '>') {
+            // Count consecutive '>' characters for nesting level
+            int bqLevel = 0;
+            size_t pos = 0;
+            while (pos < line.size() && line[pos] == '>') {
+                bqLevel++;
+                pos++;
+                // Skip optional space after '>'
+                if (pos < line.size() && line[pos] == ' ') pos++;
+            }
+            std::string bqText = line.substr(pos);
             if (!blocks.empty() && blocks.back().type == ParsedBlock::Blockquote) {
-                blocks.back().text += "\n" + line.substr(2);
+                blocks.back().bqLines.push_back({bqLevel, bqText});
             } else {
                 ParsedBlock block;
                 block.type = ParsedBlock::Blockquote;
-                block.text = line.substr(2);
+                block.bqLines.push_back({bqLevel, bqText});
                 blocks.push_back(std::move(block));
             }
             continue;
@@ -1036,7 +1046,47 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
         }
 
         case ParsedBlock::Blockquote: {
-            return ftxui::paragraph("▎ " + block.text) | dim | color(MdSky);
+            // Render each line with ▎ (U+258E) repeated per nesting level
+            std::vector<Element> bqLineElems;
+            for (const auto& [level, text] : block.bqLines) {
+                // Build prefix: ▎ repeated for each nesting level, then a space
+                std::wstring wprefix(static_cast<size_t>(level), L'▎');
+                wprefix += L' ';
+                // Convert wstring prefix to UTF-8
+                std::string prefix;
+                for (wchar_t wc : wprefix) {
+                    if (wc < 0x80) {
+                        prefix += static_cast<char>(wc);
+                    } else if (wc < 0x800) {
+                        prefix += static_cast<char>(0xC0 | (wc >> 6));
+                        prefix += static_cast<char>(0x80 | (wc & 0x3F));
+                    } else if (wc < 0x10000) {
+                        prefix += static_cast<char>(0xE0 | (wc >> 12));
+                        prefix += static_cast<char>(0x80 | ((wc >> 6) & 0x3F));
+                        prefix += static_cast<char>(0x80 | (wc & 0x3F));
+                    } else {
+                        prefix += static_cast<char>(0xF0 | (wc >> 18));
+                        prefix += static_cast<char>(0x80 | ((wc >> 12) & 0x3F));
+                        prefix += static_cast<char>(0x80 | ((wc >> 6) & 0x3F));
+                        prefix += static_cast<char>(0x80 | (wc & 0x3F));
+                    }
+                }
+                // Render content with inline parsing support
+                if (text.find('`') != std::string::npos ||
+                    text.find("**") != std::string::npos ||
+                    text.find("~~") != std::string::npos ||
+                    text.find('[') != std::string::npos) {
+                    auto inlineElems = parseInlineElements(text);
+                    // Prepend prefix as first element in the hbox
+                    inlineElems.insert(inlineElems.begin(), ftxui::text(prefix) | color(MdSky));
+                    bqLineElems.push_back(hbox(std::move(inlineElems)) | dim);
+                } else {
+                    bqLineElems.push_back(ftxui::paragraph(prefix + text) | dim | color(MdSky));
+                }
+            }
+            if (bqLineElems.empty()) return ftxui::text("");
+            if (bqLineElems.size() == 1) return std::move(bqLineElems[0]);
+            return vbox(std::move(bqLineElems));
         }
 
         case ParsedBlock::HRule:
