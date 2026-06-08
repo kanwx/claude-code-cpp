@@ -160,7 +160,7 @@ Element AgentToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Agent (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -175,7 +175,7 @@ Element AgentToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Agent (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

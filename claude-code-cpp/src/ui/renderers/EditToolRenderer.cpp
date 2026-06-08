@@ -100,27 +100,29 @@ std::string EditToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
 Element EditToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
-    auto filePath = extractField(tool.input, "file_path");
-    auto label = filePath.empty() ? tool.toolName : filePath;
-
     int added = 0, removed = 0;
     countDiffLines(result.result, added, removed);
-    std::string diffSummary = "+" + std::to_string(added) + "/-" + std::to_string(removed);
 
     if (!ctx.verbose) {
-        // Compact: file path + diff summary
+        // Compact: "Added {N} lines, Removed {M} lines" (N/M bold)
         return hbox({
             text("  ⎿  ") | dim,
-            text(label + " ") | ftxui::color(ctx.theme.muted),
-            text(diffSummary) | ftxui::color(ctx.theme.success),
+            text("Added ") | dim,
+            text(std::to_string(added)) | bold,
+            text(" lines, Removed ") | dim,
+            text(std::to_string(removed)) | bold,
+            text(" lines") | dim,
         });
     }
-    // Verbose: file path, diff summary, and actual diff lines
+    // Verbose: summary + actual diff lines
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
-            text(label + " ") | ftxui::color(ctx.theme.muted) | dim,
-            text(diffSummary) | ftxui::color(ctx.theme.success),
+            text("Added ") | dim,
+            text(std::to_string(added)) | bold,
+            text(" lines, Removed ") | dim,
+            text(std::to_string(removed)) | bold,
+            text(" lines") | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
     });
@@ -153,14 +155,13 @@ std::string EditToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
 Element EditToolRenderer::renderToolError(const ToolResultBlock& result,
                                            const ToolUseBlock& tool,
                                            const RenderContext& ctx) {
-    auto filePath = extractField(tool.input, "file_path");
-    auto label = filePath.empty() ? tool.toolName : filePath;
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.error),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.error),
+    // TS format: "File not found" (error color)
+    bool notFound = result.result.find("not found") != std::string::npos ||
+                    result.result.find("No such file") != std::string::npos;
+    auto label = notFound ? "File not found" : "Error editing file";
+    return hbox({
+        text("  ⎿  ") | dim,
+        text(label) | ftxui::color(ctx.theme.error),
     });
 }
 
@@ -179,7 +180,7 @@ Element EditToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Edit (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -194,7 +195,7 @@ Element EditToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Edit (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

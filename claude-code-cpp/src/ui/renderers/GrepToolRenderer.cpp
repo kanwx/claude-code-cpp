@@ -32,7 +32,16 @@ ftxui::Element makeGrepBadge() {
     return ftxui::text(" Grep ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
 }
 
-int countMatches(const std::string& result) {
+int countLines(const std::string& result) {
+    if (result.empty()) return 0;
+    int count = 1;
+    for (char c : result) {
+        if (c == '\n') count++;
+    }
+    return count;
+}
+
+int countFileNames(const std::string& result) {
     if (result.empty()) return 0;
     int count = 0;
     size_t pos = 0;
@@ -45,6 +54,8 @@ int countMatches(const std::string& result) {
         count++;
         pos = nl + 1;
     }
+    // Trim trailing newline
+    if (!result.empty() && result.back() == '\n') count--;
     return count;
 }
 
@@ -83,48 +94,123 @@ std::string GrepToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
 Element GrepToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
-    auto pattern = extractField(tool.input, "pattern");
-    auto label = pattern.empty() ? tool.toolName : pattern;
-    auto matches = countMatches(result.result);
-    std::string matchStr = std::to_string(matches) + " matches";
+    auto outputMode = extractField(tool.input, "output_mode");
+    // Default to "content" if not specified
+    if (outputMode.empty()) outputMode = "content";
 
-    if (!ctx.verbose) {
-        // Compact: pattern + match count
+    auto lines = countLines(result.result);
+
+    // No results: "No matches found" (dim)
+    if (lines == 0 || result.result == "No matches found.\n" || result.result == "No matches found.") {
         return hbox({
             text("  ⎿  ") | dim,
-            text(label + " ") | ftxui::color(ctx.theme.muted),
-            text(matchStr) | ftxui::color(ctx.theme.success),
+            text("No matches found") | dim,
         });
     }
-    // Verbose: pattern, match count, and output
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label + " ") | ftxui::color(ctx.theme.muted) | dim,
-            text(matchStr) | ftxui::color(ctx.theme.success),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.muted) | dim,
-    });
+
+    if (!ctx.verbose) {
+        // Compact formats based on output_mode
+        if (outputMode == "files_with_matches") {
+            auto files = countFileNames(result.result);
+            return hbox({
+                text("  ⎿  ") | dim,
+                text("Found ") | dim,
+                text(std::to_string(files)) | bold,
+                text(" files") | dim,
+                text(" [Ctrl+O to expand]") | dim,
+            });
+        } else if (outputMode == "count") {
+            auto files = countFileNames(result.result);
+            auto matches = lines; // in count mode, each line is a file count
+            return hbox({
+                text("  ⎿  ") | dim,
+                text("Found ") | dim,
+                text(std::to_string(matches)) | bold,
+                text(" matches across ") | dim,
+                text(std::to_string(files)) | bold,
+                text(" files") | dim,
+                text(" [Ctrl+O to expand]") | dim,
+            });
+        } else {
+            // content mode
+            return hbox({
+                text("  ⎿  ") | dim,
+                text("Found ") | dim,
+                text(std::to_string(lines)) | bold,
+                text(" lines") | dim,
+                text(" [Ctrl+O to expand]") | dim,
+            });
+        }
+    }
+    // Verbose: summary + full output
+    if (outputMode == "files_with_matches") {
+        auto files = countFileNames(result.result);
+        return vbox({
+            hbox({
+                text("  ⎿  ") | dim,
+                text("Found ") | dim,
+                text(std::to_string(files)) | bold,
+                text(" files") | dim,
+            }),
+            text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        });
+    } else if (outputMode == "count") {
+        auto files = countFileNames(result.result);
+        return vbox({
+            hbox({
+                text("  ⎿  ") | dim,
+                text("Found ") | dim,
+                text(std::to_string(lines)) | bold,
+                text(" matches across ") | dim,
+                text(std::to_string(files)) | bold,
+                text(" files") | dim,
+            }),
+            text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        });
+    } else {
+        return vbox({
+            hbox({
+                text("  ⎿  ") | dim,
+                text("Found ") | dim,
+                text(std::to_string(lines)) | bold,
+                text(" lines") | dim,
+            }),
+            text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        });
+    }
 }
 
 std::string GrepToolRenderer::renderToolResultAnsi(const ToolResultBlock& result,
                                                      const ToolUseBlock& tool) {
-    auto pattern = extractField(tool.input, "pattern");
-    auto label = pattern.empty() ? tool.toolName : pattern;
-    auto matches = countMatches(result.result);
-    std::string matchStr = std::to_string(matches) + " matches";
+    auto outputMode = extractField(tool.input, "output_mode");
+    if (outputMode.empty()) outputMode = "content";
+    auto lines = countLines(result.result);
+
+    // No results
+    if (lines == 0 || result.result == "No matches found.\n" || result.result == "No matches found.") {
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
+               AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
+               "No matches found" + AnsiStyle::RESET;
+    }
+
+    std::string summary;
+    if (outputMode == "files_with_matches") {
+        summary = "Found " + std::to_string(countFileNames(result.result)) + " files [Ctrl+O to expand]";
+    } else if (outputMode == "count") {
+        summary = "Found " + std::to_string(lines) + " matches across " +
+                  std::to_string(countFileNames(result.result)) + " files [Ctrl+O to expand]";
+    } else {
+        summary = "Found " + std::to_string(lines) + " lines [Ctrl+O to expand]";
+    }
 
     if (result.result.size() < 500) {
         return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
-               label + " " + AnsiStyle::RESET +
-               AnsiStyle::Semantic::DIFF_ADD + matchStr + AnsiStyle::RESET;
+               summary + AnsiStyle::RESET;
     }
     return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
-           label + " " + AnsiStyle::RESET +
-           AnsiStyle::Semantic::DIFF_ADD + matchStr + AnsiStyle::RESET + "\n" +
-           AnsiStyle::Semantic::STATUS_DIM + result.result + AnsiStyle::RESET;
+           summary + "\n" + result.result + AnsiStyle::RESET;
 }
 
 // ── Error result ────────────────────────────────────────────────────
@@ -132,14 +218,9 @@ std::string GrepToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
 Element GrepToolRenderer::renderToolError(const ToolResultBlock& result,
                                            const ToolUseBlock& tool,
                                            const RenderContext& ctx) {
-    auto pattern = extractField(tool.input, "pattern");
-    auto label = pattern.empty() ? tool.toolName : pattern;
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.error),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.error),
+    return hbox({
+        text("  ⎿  ") | dim,
+        text("Error: " + result.result) | ftxui::color(ctx.theme.error),
     });
 }
 
@@ -158,7 +239,7 @@ Element GrepToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Grep (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -173,7 +254,7 @@ Element GrepToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Grep (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

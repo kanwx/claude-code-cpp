@@ -32,6 +32,21 @@ ftxui::Element makeReadBadge() {
     return ftxui::text(" Read ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
 }
 
+int countLines(const std::string& result) {
+    if (result.empty()) return 0;
+    int count = 1;
+    for (char c : result) {
+        if (c == '\n') count++;
+    }
+    return count;
+}
+
+bool isFileNotFound(const std::string& result) {
+    return result.find("not found") != std::string::npos ||
+           result.find("No such file") != std::string::npos ||
+           result.find("does not exist") != std::string::npos;
+}
+
 } // anonymous namespace
 
 using namespace ftxui;
@@ -67,21 +82,24 @@ std::string ReadToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
 Element ReadToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
-    auto filePath = extractField(tool.input, "file_path");
-    auto label = filePath.empty() ? tool.toolName : filePath;
-
     if (!ctx.verbose) {
-        // Compact: just show file path with checkmark
+        // Compact: "Read {N} lines" (N bold)
+        auto lines = countLines(result.result);
         return hbox({
             text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.muted),
+            text("Read ") | dim,
+            text(std::to_string(lines)) | bold,
+            text(" lines") | dim,
         });
     }
-    // Verbose: file path + full content
+    // Verbose: "Read {N} lines" + full content
+    auto lines = countLines(result.result);
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.muted) | dim,
+            text("Read ") | dim,
+            text(std::to_string(lines)) | bold,
+            text(" lines") | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
     });
@@ -108,14 +126,11 @@ std::string ReadToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
 Element ReadToolRenderer::renderToolError(const ToolResultBlock& result,
                                            const ToolUseBlock& tool,
                                            const RenderContext& ctx) {
-    auto filePath = extractField(tool.input, "file_path");
-    auto label = filePath.empty() ? tool.toolName : filePath;
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.error),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.error),
+    // TS format: "File not found" or "Error reading file"
+    auto label = isFileNotFound(result.result) ? "File not found" : "Error reading file";
+    return hbox({
+        text("  ⎿  ") | dim,
+        text(label) | ftxui::color(ctx.theme.error),
     });
 }
 
@@ -134,7 +149,7 @@ Element ReadToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Read (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -149,7 +164,7 @@ Element ReadToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Read (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

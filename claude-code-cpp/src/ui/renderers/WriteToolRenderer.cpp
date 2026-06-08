@@ -32,8 +32,13 @@ ftxui::Element makeWriteBadge() {
     return ftxui::text(" Write ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
 }
 
-int countBytes(const std::string& text) {
-    return static_cast<int>(text.size());
+int countLines(const std::string& text) {
+    if (text.empty()) return 0;
+    int count = 1;
+    for (char c : text) {
+        if (c == '\n') count++;
+    }
+    return count;
 }
 
 } // anonymous namespace
@@ -73,23 +78,26 @@ Element WriteToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const RenderContext& ctx) {
     auto filePath = extractField(tool.input, "file_path");
     auto label = filePath.empty() ? tool.toolName : filePath;
-    auto bytes = countBytes(result.result);
-    std::string byteStr = std::to_string(bytes) + " bytes";
+    auto lines = countLines(result.result);
 
     if (!ctx.verbose) {
-        // Compact: file path + byte count
+        // Compact: "Wrote {N} lines to {path}" (N bold, path bold)
         return hbox({
             text("  ⎿  ") | dim,
-            text("Wrote ") | ftxui::color(ctx.theme.muted),
-            text(byteStr) | ftxui::color(ctx.theme.success),
-            text(" to " + label) | ftxui::color(ctx.theme.muted),
+            text("Wrote ") | dim,
+            text(std::to_string(lines)) | bold,
+            text(" lines to ") | dim,
+            text(label) | bold,
         });
     }
-    // Verbose: file path, byte count, and content
+    // Verbose: summary + content
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
-            text("Wrote " + byteStr + " to " + label) | ftxui::color(ctx.theme.muted) | dim,
+            text("Wrote ") | dim,
+            text(std::to_string(lines)) | bold,
+            text(" lines to ") | dim,
+            text(label) | bold,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
     });
@@ -99,17 +107,17 @@ std::string WriteToolRenderer::renderToolResultAnsi(const ToolResultBlock& resul
                                                      const ToolUseBlock& tool) {
     auto filePath = extractField(tool.input, "file_path");
     auto label = filePath.empty() ? tool.toolName : filePath;
-    auto bytes = countBytes(result.result);
-    std::string byteStr = std::to_string(bytes) + " bytes";
+    auto lines = countLines(result.result);
+    std::string lineStr = std::to_string(lines) + " lines";
 
     if (result.result.size() < 500) {
         return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
-               "Wrote " + byteStr + " to " + label + AnsiStyle::RESET;
+               "Wrote " + lineStr + " to " + label + AnsiStyle::RESET;
     }
     return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
-           "Wrote " + byteStr + " to " + label + "\n" + result.result + AnsiStyle::RESET;
+           "Wrote " + lineStr + " to " + label + "\n" + result.result + AnsiStyle::RESET;
 }
 
 // ── Error result ────────────────────────────────────────────────────
@@ -117,14 +125,13 @@ std::string WriteToolRenderer::renderToolResultAnsi(const ToolResultBlock& resul
 Element WriteToolRenderer::renderToolError(const ToolResultBlock& result,
                                            const ToolUseBlock& tool,
                                            const RenderContext& ctx) {
-    auto filePath = extractField(tool.input, "file_path");
-    auto label = filePath.empty() ? tool.toolName : filePath;
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.error),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.error),
+    // TS format: "File not found" or generic error
+    bool notFound = result.result.find("not found") != std::string::npos ||
+                    result.result.find("No such file") != std::string::npos;
+    auto label = notFound ? "File not found" : "Error writing file";
+    return hbox({
+        text("  ⎿  ") | dim,
+        text(label) | ftxui::color(ctx.theme.error),
     });
 }
 
@@ -143,7 +150,7 @@ Element WriteToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Write (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -158,7 +165,7 @@ Element WriteToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Write (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

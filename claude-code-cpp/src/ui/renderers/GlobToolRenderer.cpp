@@ -83,25 +83,33 @@ std::string GlobToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
 Element GlobToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
-    auto pattern = extractField(tool.input, "pattern");
-    auto label = pattern.empty() ? tool.toolName : pattern;
     auto files = countFiles(result.result);
-    std::string fileStr = std::to_string(files) + " files";
 
-    if (!ctx.verbose) {
-        // Compact: pattern + file count
+    // No results: "No files found" (dim)
+    if (files == 0) {
         return hbox({
             text("  ⎿  ") | dim,
-            text(label + " ") | ftxui::color(ctx.theme.muted),
-            text(fileStr) | ftxui::color(ctx.theme.success),
+            text("No files found") | dim,
         });
     }
-    // Verbose: pattern, file count, and file list
+
+    if (!ctx.verbose) {
+        // Compact: "Found {N} files [Ctrl+O to expand]" (N bold)
+        return hbox({
+            text("  ⎿  ") | dim,
+            text("Found ") | dim,
+            text(std::to_string(files)) | bold,
+            text(" files") | dim,
+            text(" [Ctrl+O to expand]") | dim,
+        });
+    }
+    // Verbose: "Found {N} files" + file list
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
-            text(label + " ") | ftxui::color(ctx.theme.muted) | dim,
-            text(fileStr) | ftxui::color(ctx.theme.success),
+            text("Found ") | dim,
+            text(std::to_string(files)) | bold,
+            text(" files") | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
     });
@@ -132,14 +140,9 @@ std::string GlobToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
 Element GlobToolRenderer::renderToolError(const ToolResultBlock& result,
                                            const ToolUseBlock& tool,
                                            const RenderContext& ctx) {
-    auto pattern = extractField(tool.input, "pattern");
-    auto label = pattern.empty() ? tool.toolName : pattern;
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.error),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.error),
+    return hbox({
+        text("  ⎿  ") | dim,
+        text("Error: " + result.result) | ftxui::color(ctx.theme.error),
     });
 }
 
@@ -158,7 +161,7 @@ Element GlobToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Glob (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -173,7 +176,7 @@ Element GlobToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Glob (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

@@ -164,7 +164,7 @@ Element LspToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                              const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("LSP (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -179,7 +179,7 @@ Element LspToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                              const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("LSP (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 

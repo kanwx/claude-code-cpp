@@ -82,11 +82,17 @@ Element BashToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
     if (!ctx.verbose) {
-        // Compact: first line of output, max 80 chars
+        // Compact: "Done" (dim) if no output, first line otherwise
         auto line = firstLine(result.result);
+        if (line.empty()) {
+            return hbox({
+                text("  ⎿  ") | dim,
+                text("Done") | dim,
+            });
+        }
         return hbox({
             text("  ⎿  ") | dim,
-            text(line) | ftxui::color(ctx.theme.muted),
+            text(line),
         });
     }
     // Verbose: full output
@@ -117,14 +123,12 @@ std::string BashToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
 Element BashToolRenderer::renderToolError(const ToolResultBlock& result,
                                            const ToolUseBlock& tool,
                                            const RenderContext& ctx) {
-    auto cmd = extractField(tool.input, "command");
-    auto label = cmd.empty() ? tool.toolName : truncateCmd(cmd, 40);
-    return vbox({
-        hbox({
-            text("  ⎿  ") | dim,
-            text(label) | ftxui::color(ctx.theme.error),
-        }),
-        text(result.result) | ftxui::color(ctx.theme.error),
+    // TS format: "Error: {message}" (error color)
+    auto msg = firstLine(result.result);
+    if (msg.empty()) msg = "Unknown error";
+    return hbox({
+        text("  ⎿  ") | dim,
+        text("Error: " + msg) | ftxui::color(ctx.theme.error),
     });
 }
 
@@ -143,7 +147,7 @@ Element BashToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Bash (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("Tool use rejected") | dim,
     });
 }
 
@@ -158,7 +162,7 @@ Element BashToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
         text("  ⎿  ") | dim,
-        text("Bash (canceled)") | dim | ftxui::color(ctx.theme.muted),
+        text("Interrupted \xE2\x88\x99 What should Claude do instead?") | dim,
     });
 }
 
