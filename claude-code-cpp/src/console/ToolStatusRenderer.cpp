@@ -151,7 +151,7 @@ bool shouldAnimate(bool permissionDialogOpen, bool transcriptMode) {
 }
 
 void ToolStatusRenderer::renderPrefix() {
-    out_ << AnsiStyle::Semantic::TOOL_PREFIX << "  " << Figures::TOOL_PREFIX << " " << AnsiStyle::RESET;
+    out_ << AnsiStyle::Semantic::TOOL_PREFIX << "  " << Figures::TOOL_PREFIX << "  " << AnsiStyle::RESET;
 }
 
 void ToolStatusRenderer::renderBadge(const String& toolName) {
@@ -361,7 +361,7 @@ void ToolStatusRenderer::renderBashResult(const String& result, bool isError, do
             int lineCount = 0;
             while (std::getline(stream, line) && lineCount < 5) {
                 if (!line.empty()) {
-                    out_ << "\n" << AnsiStyle::DIM << "    " << Figures::TOOL_PREFIX << " "
+                    out_ << "\n" << AnsiStyle::DIM << "    " << Figures::TOOL_PREFIX << "  "
                          << AnsiStyle::Semantic::TOOL_ERROR << truncate(line, 120)
                          << AnsiStyle::RESET;
                     lineCount++;
@@ -387,7 +387,7 @@ void ToolStatusRenderer::renderBashResult(const String& result, bool isError, do
             int lineCount = 0;
             while (std::getline(stream, line) && lineCount < 3) {
                 if (!line.empty()) {
-                    out_ << "\n" << AnsiStyle::DIM << "    " << Figures::TOOL_PREFIX << " "
+                    out_ << "\n" << AnsiStyle::DIM << "    " << Figures::TOOL_PREFIX << "  "
                          << truncate(line, 120) << AnsiStyle::RESET;
                     lineCount++;
                 }
@@ -473,7 +473,7 @@ void ToolStatusRenderer::renderEditResult(const String& result, const ToolInputI
         String line;
         int lineCount = 0;
         while (std::getline(stream, line) && lineCount < 10) {
-            out_ << AnsiStyle::DIM << "    " << Figures::TOOL_PREFIX << " " << AnsiStyle::RESET;
+            out_ << AnsiStyle::DIM << "    " << Figures::TOOL_PREFIX << "  " << AnsiStyle::RESET;
             if (line.starts_with("+") && !line.starts_with("++")) {
                 out_ << AnsiStyle::Semantic::DIFF_ADD << line << AnsiStyle::RESET;
             } else if (line.starts_with("-") && !line.starts_with("--")) {
@@ -675,7 +675,7 @@ String ToolStatusRenderer::formatCollapsedGroup(int toolCount,
                                                   const std::vector<String>& toolNames,
                                                   const std::vector<String>& args) {
     std::ostringstream oss;
-    oss << AnsiStyle::Semantic::TOOL_PREFIX << "  " << Figures::TOOL_PREFIX << " " << AnsiStyle::RESET;
+    oss << AnsiStyle::Semantic::TOOL_PREFIX << "  " << Figures::TOOL_PREFIX << "  " << AnsiStyle::RESET;
     oss << "[" << toolCount << " tool use";
     if (toolCount != 1) oss << "s";
     oss << "] ";

@@ -59,7 +59,7 @@ Element LspToolRenderer::renderToolUse(const ToolUseBlock& tool,
         desc = claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true);
     }
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -78,7 +78,7 @@ std::string LspToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     } else {
         desc = claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true);
     }
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " LSP " + AnsiStyle::RESET + " " + desc;
 }
@@ -97,7 +97,7 @@ Element LspToolRenderer::renderToolResult(const ToolResultBlock& result,
         // Compact: operation + symbol + brief result
         auto brief = truncateResult(result.result);
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(brief) | ftxui::color(ctx.theme.success),
         });
@@ -105,7 +105,7 @@ Element LspToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Verbose: label + full result
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
@@ -120,11 +120,11 @@ std::string LspToolRenderer::renderToolResultAnsi(const ToolResultBlock& result,
     if (!symbol.empty()) label += " " + symbol;
 
     if (result.result.size() < 500) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                label + ": " + result.result + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            label + "\n" + result.result + AnsiStyle::RESET;
 }
@@ -140,7 +140,7 @@ Element LspToolRenderer::renderToolError(const ToolResultBlock& result,
     if (!symbol.empty()) label += " " + symbol;
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -153,7 +153,7 @@ std::string LspToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
     auto symbol = extractField(tool.input, "symbol");
     std::string label = operation.empty() ? tool.toolName : operation;
     if (!symbol.empty()) label += " " + symbol;
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -163,13 +163,13 @@ std::string LspToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
 Element LspToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                              const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("LSP (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string LspToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ LSP (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  LSP (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -178,13 +178,13 @@ std::string LspToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/
 Element LspToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                              const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("LSP (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string LspToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ LSP (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  LSP (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -207,7 +207,7 @@ Element LspToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -236,7 +236,7 @@ Element LspToolRenderer::renderGroupedToolUse(
     auto badge = makeLspBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

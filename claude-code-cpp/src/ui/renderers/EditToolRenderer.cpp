@@ -79,7 +79,7 @@ Element EditToolRenderer::renderToolUse(const ToolUseBlock& tool,
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : filePath;
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -90,7 +90,7 @@ std::string EditToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     auto desc = filePath.empty()
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : filePath;
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " Edit " + AnsiStyle::RESET + " " + desc;
 }
@@ -110,7 +110,7 @@ Element EditToolRenderer::renderToolResult(const ToolResultBlock& result,
     if (!ctx.verbose) {
         // Compact: file path + diff summary
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(diffSummary) | ftxui::color(ctx.theme.success),
         });
@@ -118,7 +118,7 @@ Element EditToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Verbose: file path, diff summary, and actual diff lines
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted) | dim,
             text(diffSummary) | ftxui::color(ctx.theme.success),
         }),
@@ -136,12 +136,12 @@ std::string EditToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
     std::string diffSummary = "+" + std::to_string(added) + "/-" + std::to_string(removed);
 
     if (countLines(result.result) <= 5) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                label + " " + AnsiStyle::RESET +
                AnsiStyle::Semantic::DIFF_ADD + diffSummary + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            label + " " + AnsiStyle::RESET +
            AnsiStyle::Semantic::DIFF_ADD + diffSummary + AnsiStyle::RESET + "\n" +
@@ -157,7 +157,7 @@ Element EditToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = filePath.empty() ? tool.toolName : filePath;
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -168,7 +168,7 @@ std::string EditToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
                                                     const ToolUseBlock& tool) {
     auto filePath = extractField(tool.input, "file_path");
     auto label = filePath.empty() ? tool.toolName : filePath;
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -178,13 +178,13 @@ std::string EditToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
 Element EditToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("Edit (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string EditToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ Edit (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Edit (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -193,13 +193,13 @@ std::string EditToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*
 Element EditToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("Edit (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string EditToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ Edit (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Edit (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -216,7 +216,7 @@ Element EditToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -245,7 +245,7 @@ Element EditToolRenderer::renderGroupedToolUse(
     auto badge = makeEditBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

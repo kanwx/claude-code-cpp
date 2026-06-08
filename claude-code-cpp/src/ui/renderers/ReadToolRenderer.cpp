@@ -46,7 +46,7 @@ Element ReadToolRenderer::renderToolUse(const ToolUseBlock& tool,
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : filePath;
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -57,7 +57,7 @@ std::string ReadToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     auto desc = filePath.empty()
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : filePath;
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " Read " + AnsiStyle::RESET + " " + desc;
 }
@@ -73,14 +73,14 @@ Element ReadToolRenderer::renderToolResult(const ToolResultBlock& result,
     if (!ctx.verbose) {
         // Compact: just show file path with checkmark
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.muted),
         });
     }
     // Verbose: file path + full content
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
@@ -94,11 +94,11 @@ std::string ReadToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
 
     // For compact output just show file path
     if (result.result.size() < 500) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                label + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            label + "\n" + result.result + AnsiStyle::RESET;
 }
@@ -112,7 +112,7 @@ Element ReadToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = filePath.empty() ? tool.toolName : filePath;
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -123,7 +123,7 @@ std::string ReadToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
                                                     const ToolUseBlock& tool) {
     auto filePath = extractField(tool.input, "file_path");
     auto label = filePath.empty() ? tool.toolName : filePath;
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -133,13 +133,13 @@ std::string ReadToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
 Element ReadToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("Read (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string ReadToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ Read (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Read (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -148,13 +148,13 @@ std::string ReadToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*
 Element ReadToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("Read (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string ReadToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ Read (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Read (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -171,7 +171,7 @@ Element ReadToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -200,7 +200,7 @@ Element ReadToolRenderer::renderGroupedToolUse(
     auto badge = makeReadBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

@@ -60,7 +60,7 @@ Element BashToolRenderer::renderToolUse(const ToolUseBlock& tool,
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : truncateCmd(cmd);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + display) | ftxui::color(ctx.theme.muted),
     });
@@ -71,7 +71,7 @@ std::string BashToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     auto display = cmd.empty()
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : truncateCmd(cmd);
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " Bash " + AnsiStyle::RESET + " " + display;
 }
@@ -85,14 +85,14 @@ Element BashToolRenderer::renderToolResult(const ToolResultBlock& result,
         // Compact: first line of output, max 80 chars
         auto line = firstLine(result.result);
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(line) | ftxui::color(ctx.theme.muted),
         });
     }
     // Verbose: full output
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text("Bash") | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
@@ -103,11 +103,11 @@ std::string BashToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
                                                      const ToolUseBlock& tool) {
     auto line = firstLine(result.result);
     if (result.result.size() < 200) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                line + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            "Bash\n" + result.result + AnsiStyle::RESET;
 }
@@ -121,7 +121,7 @@ Element BashToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = cmd.empty() ? tool.toolName : truncateCmd(cmd, 40);
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -132,7 +132,7 @@ std::string BashToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
                                                     const ToolUseBlock& tool) {
     auto cmd = extractField(tool.input, "command");
     auto label = cmd.empty() ? tool.toolName : truncateCmd(cmd, 40);
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -142,13 +142,13 @@ std::string BashToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
 Element BashToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("Bash (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string BashToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ Bash (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Bash (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -157,13 +157,13 @@ std::string BashToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*
 Element BashToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("Bash (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string BashToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ Bash (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Bash (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -180,7 +180,7 @@ Element BashToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -209,7 +209,7 @@ Element BashToolRenderer::renderGroupedToolUse(
     auto badge = makeBashBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

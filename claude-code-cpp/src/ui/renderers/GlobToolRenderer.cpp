@@ -62,7 +62,7 @@ Element GlobToolRenderer::renderToolUse(const ToolUseBlock& tool,
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : pattern;
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -73,7 +73,7 @@ std::string GlobToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     auto desc = pattern.empty()
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : pattern;
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " Glob " + AnsiStyle::RESET + " " + desc;
 }
@@ -91,7 +91,7 @@ Element GlobToolRenderer::renderToolResult(const ToolResultBlock& result,
     if (!ctx.verbose) {
         // Compact: pattern + file count
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(fileStr) | ftxui::color(ctx.theme.success),
         });
@@ -99,7 +99,7 @@ Element GlobToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Verbose: pattern, file count, and file list
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted) | dim,
             text(fileStr) | ftxui::color(ctx.theme.success),
         }),
@@ -115,12 +115,12 @@ std::string GlobToolRenderer::renderToolResultAnsi(const ToolResultBlock& result
     std::string fileStr = std::to_string(files) + " files";
 
     if (result.result.size() < 500) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                label + " " + AnsiStyle::RESET +
                AnsiStyle::Semantic::DIFF_ADD + fileStr + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            label + " " + AnsiStyle::RESET +
            AnsiStyle::Semantic::DIFF_ADD + fileStr + AnsiStyle::RESET + "\n" +
@@ -136,7 +136,7 @@ Element GlobToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = pattern.empty() ? tool.toolName : pattern;
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -147,7 +147,7 @@ std::string GlobToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
                                                     const ToolUseBlock& tool) {
     auto pattern = extractField(tool.input, "pattern");
     auto label = pattern.empty() ? tool.toolName : pattern;
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -157,13 +157,13 @@ std::string GlobToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
 Element GlobToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("Glob (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string GlobToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ Glob (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Glob (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -172,13 +172,13 @@ std::string GlobToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*
 Element GlobToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("Glob (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string GlobToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ Glob (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Glob (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -195,7 +195,7 @@ Element GlobToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -224,7 +224,7 @@ Element GlobToolRenderer::renderGroupedToolUse(
     auto badge = makeGlobBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

@@ -59,7 +59,7 @@ Element AgentToolRenderer::renderToolUse(const ToolUseBlock& tool,
         desc = claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true);
     }
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -78,7 +78,7 @@ std::string AgentToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     } else {
         desc = claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true);
     }
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " Agent " + AnsiStyle::RESET + " " + desc;
 }
@@ -99,7 +99,7 @@ Element AgentToolRenderer::renderToolResult(const ToolResultBlock& result,
             : result.result.substr(0, firstNl);
         if (summary.size() > 80) summary = summary.substr(0, 79) + "…";
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + ": ") | ftxui::color(ctx.theme.muted),
             text(summary) | ftxui::color(ctx.theme.success),
         });
@@ -107,7 +107,7 @@ Element AgentToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Verbose: label + full result
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
@@ -120,11 +120,11 @@ std::string AgentToolRenderer::renderToolResultAnsi(const ToolResultBlock& resul
     auto label = description.empty() ? tool.toolName : truncateDesc(description);
 
     if (result.result.size() < 500) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                label + ": " + result.result + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            label + "\n" + result.result + AnsiStyle::RESET;
 }
@@ -138,7 +138,7 @@ Element AgentToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = description.empty() ? tool.toolName : truncateDesc(description);
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -149,7 +149,7 @@ std::string AgentToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result
                                                     const ToolUseBlock& tool) {
     auto description = extractField(tool.input, "description");
     auto label = description.empty() ? tool.toolName : truncateDesc(description);
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -159,13 +159,13 @@ std::string AgentToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result
 Element AgentToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("Agent (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string AgentToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ Agent (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Agent (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -174,13 +174,13 @@ std::string AgentToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool
 Element AgentToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("Agent (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string AgentToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ Agent (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Agent (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -197,7 +197,7 @@ Element AgentToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -226,7 +226,7 @@ Element AgentToolRenderer::renderGroupedToolUse(
     auto badge = makeAgentBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

@@ -24,14 +24,14 @@ Element DefaultToolRenderer::renderToolUse(const ToolUseBlock& tool,
     auto badge = makeBadge(tool.toolName);
     auto activity = text(" " + claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true));
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         activity | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string DefaultToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " " + tool.toolName + " " + AnsiStyle::RESET + " " +
            claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true);
@@ -45,14 +45,14 @@ Element DefaultToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Compact one-line summary in non-verbose mode
     if (!ctx.verbose && result.result.size() < 200) {
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(result.result) | ftxui::color(ctx.theme.muted),
         });
     }
     // Verbose: full output
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(tool.toolName) | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
@@ -62,11 +62,11 @@ Element DefaultToolRenderer::renderToolResult(const ToolResultBlock& result,
 std::string DefaultToolRenderer::renderToolResultAnsi(const ToolResultBlock& result,
                                                       const ToolUseBlock& tool) {
     if (result.result.size() < 200) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                result.result + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            tool.toolName + "\n" + result.result + AnsiStyle::RESET;
 }
@@ -78,7 +78,7 @@ Element DefaultToolRenderer::renderToolError(const ToolResultBlock& result,
                                               const RenderContext& ctx) {
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(tool.toolName) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -87,7 +87,7 @@ Element DefaultToolRenderer::renderToolError(const ToolResultBlock& result,
 
 std::string DefaultToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result,
                                                      const ToolUseBlock& tool) {
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + tool.toolName + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -97,13 +97,13 @@ std::string DefaultToolRenderer::renderToolErrorAnsi(const ToolResultBlock& resu
 Element DefaultToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                                  const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text(tool.toolName + " (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string DefaultToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& tool) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            tool.toolName + " (rejected)" + AnsiStyle::RESET;
 }
 
@@ -112,13 +112,13 @@ std::string DefaultToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& tool
 Element DefaultToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                                  const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text(tool.toolName + " (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string DefaultToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& tool) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            tool.toolName + " (canceled)" + AnsiStyle::RESET;
 }
 
@@ -132,7 +132,7 @@ Element DefaultToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         activity | ftxui::color(ctx.theme.muted),
@@ -161,7 +161,7 @@ Element DefaultToolRenderer::renderGroupedToolUse(
     auto badge = makeBadge(tools[0].toolName);
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

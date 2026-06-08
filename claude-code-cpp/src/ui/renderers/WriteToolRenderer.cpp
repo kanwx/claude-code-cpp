@@ -50,7 +50,7 @@ Element WriteToolRenderer::renderToolUse(const ToolUseBlock& tool,
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : filePath;
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -61,7 +61,7 @@ std::string WriteToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     auto desc = filePath.empty()
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : filePath;
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " Write " + AnsiStyle::RESET + " " + desc;
 }
@@ -79,7 +79,7 @@ Element WriteToolRenderer::renderToolResult(const ToolResultBlock& result,
     if (!ctx.verbose) {
         // Compact: file path + byte count
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text("Wrote ") | ftxui::color(ctx.theme.muted),
             text(byteStr) | ftxui::color(ctx.theme.success),
             text(" to " + label) | ftxui::color(ctx.theme.muted),
@@ -88,7 +88,7 @@ Element WriteToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Verbose: file path, byte count, and content
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text("Wrote " + byteStr + " to " + label) | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
@@ -103,11 +103,11 @@ std::string WriteToolRenderer::renderToolResultAnsi(const ToolResultBlock& resul
     std::string byteStr = std::to_string(bytes) + " bytes";
 
     if (result.result.size() < 500) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                "Wrote " + byteStr + " to " + label + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            "Wrote " + byteStr + " to " + label + "\n" + result.result + AnsiStyle::RESET;
 }
@@ -121,7 +121,7 @@ Element WriteToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = filePath.empty() ? tool.toolName : filePath;
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -132,7 +132,7 @@ std::string WriteToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result
                                                     const ToolUseBlock& tool) {
     auto filePath = extractField(tool.input, "file_path");
     auto label = filePath.empty() ? tool.toolName : filePath;
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -142,13 +142,13 @@ std::string WriteToolRenderer::renderToolErrorAnsi(const ToolResultBlock& result
 Element WriteToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("Write (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string WriteToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ Write (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Write (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -157,13 +157,13 @@ std::string WriteToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool
 Element WriteToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                               const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("Write (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string WriteToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ Write (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Write (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -180,7 +180,7 @@ Element WriteToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -209,7 +209,7 @@ Element WriteToolRenderer::renderGroupedToolUse(
     auto badge = makeWriteBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });

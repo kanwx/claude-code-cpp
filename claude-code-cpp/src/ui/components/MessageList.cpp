@@ -129,7 +129,7 @@ ftxui::Element RenderMessageList(const std::vector<DisplayMessage>* messages,
             auto resultEl = renderSingle(messages->at(i + 1));
             els.push_back(vbox({
                 std::move(headerEl),
-                hbox({ text("  ⎿ ") | dim, std::move(resultEl) | flex }),
+                hbox({ text("  ⎿  ") | dim, std::move(resultEl) | flex }),
             }));
             i += 2;
             continue;

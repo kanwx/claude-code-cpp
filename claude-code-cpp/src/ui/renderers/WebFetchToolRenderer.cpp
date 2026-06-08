@@ -51,7 +51,7 @@ Element WebFetchToolRenderer::renderToolUse(const ToolUseBlock& tool,
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : truncateUrl(url);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
     });
@@ -62,7 +62,7 @@ std::string WebFetchToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
     auto desc = url.empty()
         ? claude::getActivityDescription(tool.toolName, tool.input, /*active=*/true)
         : truncateUrl(url);
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "⎿ " + AnsiStyle::RESET +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
            AnsiStyle::BOLD + " WebFetch " + AnsiStyle::RESET + " " + desc;
 }
@@ -80,7 +80,7 @@ Element WebFetchToolRenderer::renderToolResult(const ToolResultBlock& result,
     if (!ctx.verbose) {
         // Compact: URL + content length
         return hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(lenStr) | ftxui::color(ctx.theme.success),
         });
@@ -88,7 +88,7 @@ Element WebFetchToolRenderer::renderToolResult(const ToolResultBlock& result,
     // Verbose: URL, content length, and fetched content
     return vbox({
         hbox({
-            text("  ✓ ") | ftxui::color(ctx.theme.toolSuccess) | bold,
+            text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted) | dim,
             text(lenStr) | ftxui::color(ctx.theme.success),
         }),
@@ -104,12 +104,12 @@ std::string WebFetchToolRenderer::renderToolResultAnsi(const ToolResultBlock& re
     std::string lenStr = std::to_string(contentLen) + " chars";
 
     if (result.result.size() < 500) {
-        return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+        return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
                AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
                label + " " + AnsiStyle::RESET +
                AnsiStyle::Semantic::DIFF_ADD + lenStr + AnsiStyle::RESET;
     }
-    return std::string(AnsiStyle::Semantic::TOOL_SUCCESS) + "  ✓ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::RESET + AnsiStyle::Semantic::STATUS_DIM +
            label + " " + AnsiStyle::RESET +
            AnsiStyle::Semantic::DIFF_ADD + lenStr + AnsiStyle::RESET + "\n" +
@@ -125,7 +125,7 @@ Element WebFetchToolRenderer::renderToolError(const ToolResultBlock& result,
     auto label = url.empty() ? tool.toolName : truncateUrl(url, 40);
     return vbox({
         hbox({
-            text("  ✗ ") | ftxui::color(ctx.theme.toolError) | bold,
+            text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.error),
         }),
         text(result.result) | ftxui::color(ctx.theme.error),
@@ -136,7 +136,7 @@ std::string WebFetchToolRenderer::renderToolErrorAnsi(const ToolResultBlock& res
                                                         const ToolUseBlock& tool) {
     auto url = extractField(tool.input, "url");
     auto label = url.empty() ? tool.toolName : truncateUrl(url, 40);
-    return std::string(AnsiStyle::Semantic::TOOL_ERROR) + "  ✗ " +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " +
            AnsiStyle::BOLD + label + AnsiStyle::RESET + "\n" +
            AnsiStyle::Semantic::TOOL_ERROR + result.result + AnsiStyle::RESET;
 }
@@ -146,13 +146,13 @@ std::string WebFetchToolRenderer::renderToolErrorAnsi(const ToolResultBlock& res
 Element WebFetchToolRenderer::renderToolRejected(const ToolUseBlock& tool,
                                                   const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | ftxui::color(ctx.theme.toolRejected) | dim,
+        text("  ⎿  ") | dim,
         text("WebFetch (rejected)") | ftxui::color(ctx.theme.toolRejected) | dim,
     });
 }
 
 std::string WebFetchToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_REJECTED) + "  ⊘ WebFetch (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  WebFetch (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -161,13 +161,13 @@ std::string WebFetchToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*t
 Element WebFetchToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
                                                   const RenderContext& ctx) {
     return hbox({
-        text("  ⊘ ") | dim | ftxui::color(ctx.theme.toolCanceled),
+        text("  ⎿  ") | dim,
         text("WebFetch (canceled)") | dim | ftxui::color(ctx.theme.muted),
     });
 }
 
 std::string WebFetchToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_CANCELLED) + "  ⊘ WebFetch (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  WebFetch (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -184,7 +184,7 @@ Element WebFetchToolRenderer::renderToolProgress(const ToolUseBlock& tool,
     auto dot = text("●") | ftxui::color(ctx.theme.accent) | blink;
     auto progText = progress.empty() ? text("") : text(" " + progress) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         dot,
         badge,
         text(" " + desc) | ftxui::color(ctx.theme.muted),
@@ -213,7 +213,7 @@ Element WebFetchToolRenderer::renderGroupedToolUse(
     auto badge = makeWebFetchBadge();
     auto count = text(" ×" + std::to_string(tools.size())) | ftxui::color(ctx.theme.muted);
     return hbox({
-        text("⎿ ") | dim | ftxui::color(ctx.theme.dimBorder),
+        text("  ⎿  ") | dim,
         badge,
         count,
     });
