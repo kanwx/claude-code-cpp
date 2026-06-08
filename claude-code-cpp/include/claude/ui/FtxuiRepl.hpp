@@ -65,11 +65,13 @@ public:
 
     // Thread-safe thinking update
     void updateThinkingSummary(const String& summary);
-    void addThinkingMessage(const String& fullText);
+    void addThinkingMessage(const String& chunk);
 
     // Pipeline-aware message operations (preferred over addToolMessage)
     void addToolUseStart(const String& toolName, const String& toolId, const String& input);
-    void addToolResult(const String& toolName, const String& toolId, const String& result, bool isError = false);
+    void addToolUseComplete(const String& toolId, const String& toolInput);
+    void addToolResult(const String& toolName, const String& toolId, const String& result, bool isError = false,
+                       bool isRejected = false, bool isCancelled = false);
 
     // ========== Permission prompt (thread-safe, blocking for caller) ==========
 

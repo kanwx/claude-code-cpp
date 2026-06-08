@@ -408,8 +408,12 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                 }
             }
 
-            // Only collapse if 2+ tools
-            if (groupMsgs.size() >= 2) {
+            // Only collapse if 2+ tool_use messages (not counting tool_results)
+            size_t toolUseCount = 0;
+            for (const auto& m : groupMsgs) {
+                if (m.type == DisplayMessage::Type::AssistantToolUse) toolUseCount++;
+            }
+            if (toolUseCount >= 2) {
                 auto collapsed = DisplayMessage::collapsedReadSearch(std::move(group));
                 collapsed.messageId = MessageIdGenerator::next();
                 result.push_back(std::move(collapsed));
