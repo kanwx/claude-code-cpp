@@ -213,17 +213,12 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
         isStreaming_ = false;
         isThinking_ = false;
 
-        String finalText = std::move(streamingText_);
         streamingText_.clear();
         streamingRenderer_.reset();
 
-        // Feed any remaining streaming text to pipeline first
-        if (!finalText.empty()) {
-            StreamEvent deltaEvent;
-            deltaEvent.type = StreamEvent::Type::TextDelta;
-            deltaEvent.text = finalText;
-            messagePipeline_.processEvent(deltaEvent);
-        }
+        // Note: streaming text was already fed incrementally via appendStreamText()
+        // TextDelta events. Do NOT re-feed finalText here — that would double the
+        // pipeline's streamingText_ accumulator.
 
         // Commit via StreamEnd — NormalizeStage commits both thinking and text
         StreamEvent endEvent;
@@ -261,15 +256,15 @@ void FtxuiRepl::updateThinkingSummary(const String& summary) {
     }
 }
 
-void FtxuiRepl::addThinkingMessage(const String& fullText) {
+void FtxuiRepl::addThinkingMessage(const String& chunk) {
     if (!screen_) return;
-    screen_->Post([this, t = String(fullText)]() {
-        thinkingText_ = t;
-        // Feed to pipeline as ThinkingDelta — NormalizeStage will commit
-        // as AssistantThinking on StreamEnd
+    screen_->Post([this, c = String(chunk)]() {
+        thinkingText_ += c;
+        // Feed to pipeline as ThinkingDelta — NormalizeStage accumulates
+        // into pendingThinkingText_ and commits as AssistantThinking on StreamEnd
         StreamEvent event;
         event.type = StreamEvent::Type::ThinkingDelta;
-        event.text = std::move(t);
+        event.text = std::move(c);
         if (messagePipeline_.processEvent(event)) {
             messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
         }

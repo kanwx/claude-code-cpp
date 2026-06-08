@@ -163,6 +163,13 @@ void FtxuiRepl::addAssistantMessage(const String& content) {
 void FtxuiRepl::addToolUseStart(const String& toolName, const String& toolId, const String& input) {
     if (!screen_) return;
     screen_->Post([this, tn = String(toolName), tid = String(toolId), inp = String(input)]() {
+        // Flush streaming text before inserting tool event.
+        // The pipeline's NormalizeStage will also flush its internal accumulator,
+        // committing the text as an AssistantText message before the ToolUse.
+        // We must clear the UI streaming buffer to avoid double-display.
+        streamingText_.clear();
+        streamingRenderer_.reset();
+
         StreamEvent event;
         event.type = StreamEvent::Type::ToolUseStart;
         event.toolName = tn;
@@ -172,15 +179,40 @@ void FtxuiRepl::addToolUseStart(const String& toolName, const String& toolId, co
     });
 }
 
-void FtxuiRepl::addToolResult(const String& toolName, const String& toolId, const String& result, bool isError) {
+void FtxuiRepl::addToolUseComplete(const String& toolId, const String& toolInput) {
     if (!screen_) return;
-    screen_->Post([this, tn = String(toolName), tid = String(toolId), res = String(result), err = isError]() {
+    screen_->Post([this, tid = String(toolId), inp = String(toolInput)]() {
+        // Flush streaming text before tool complete event (maintains inline order)
+        streamingText_.clear();
+        streamingRenderer_.reset();
+
+        StreamEvent event;
+        event.type = StreamEvent::Type::ToolUseComplete;
+        event.toolId = tid;
+        event.toolInput = inp;
+        processAndSync(messagePipeline_, messages_, event);
+    });
+}
+
+void FtxuiRepl::addToolResult(const String& toolName, const String& toolId, const String& result,
+                               bool isError, bool isRejected, bool isCancelled) {
+    if (!screen_) return;
+    screen_->Post([this, tn = String(toolName), tid = String(toolId), res = String(result),
+                   err = isError, rej = isRejected, can = isCancelled]() {
+        // Flush streaming text before tool result event.
+        // The pipeline commits accumulated text as AssistantText before ToolResult.
+        // Clear the UI streaming buffer to avoid double-display.
+        streamingText_.clear();
+        streamingRenderer_.reset();
+
         StreamEvent event;
         event.type = StreamEvent::Type::ToolResultReady;
         event.toolName = tn;
         event.toolId = tid;
         event.toolResult = res;
         event.toolIsError = err;
+        event.toolIsRejected = rej;
+        event.toolIsCancelled = can;
         processAndSync(messagePipeline_, messages_, event);
     });
 }

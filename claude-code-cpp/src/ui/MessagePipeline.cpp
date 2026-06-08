@@ -38,6 +38,14 @@ bool isCollapsibleCategory(ToolCategory cat) {
            cat == ToolCategory::List || cat == ToolCategory::Memory;
 }
 
+bool isToolResultSubtype(claude::DisplayMessage::Type type) {
+    return type == claude::DisplayMessage::Type::UserToolResult
+        || type == claude::DisplayMessage::Type::UserToolSuccess
+        || type == claude::DisplayMessage::Type::UserToolError
+        || type == claude::DisplayMessage::Type::UserToolRejected
+        || type == claude::DisplayMessage::Type::UserToolCanceled;
+}
+
 } // anonymous namespace
 
 namespace claude {
@@ -72,6 +80,24 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
             return true;
 
         case StreamEvent::Type::ToolUseStart: {
+            // Flush accumulated thinking text before tool event (ensures inline order:
+            // thinking → text → tool_use, not tool_use → thinking → text)
+            if (!pendingThinkingText_.empty()) {
+                auto thinkMsg = DisplayMessage::assistantThinking(std::move(pendingThinkingText_), /*collapsed=*/true);
+                thinkMsg.messageId = MessageIdGenerator::next();
+                messages.push_back(std::move(thinkMsg));
+                pendingThinkingText_.clear();
+                isThinking_ = false;
+            }
+            // Flush accumulated streaming text before tool event (ensures inline order:
+            // text-so-far → tool_use, not tool_use → text)
+            if (!streamingText_.empty()) {
+                auto textMsg = DisplayMessage::assistantText(std::move(streamingText_));
+                textMsg.messageId = MessageIdGenerator::next();
+                messages.push_back(std::move(textMsg));
+                streamingText_.clear();
+            }
+
             auto msg = DisplayMessage::assistantToolUse(
                 ToolUseBlock{event.toolId, event.toolName, event.toolInput});
             msg.messageId = MessageIdGenerator::next();
@@ -81,6 +107,14 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
         }
 
         case StreamEvent::Type::ToolUseComplete: {
+            // Flush streaming text before updating tool_use (maintains inline order)
+            if (!streamingText_.empty()) {
+                auto textMsg = DisplayMessage::assistantText(std::move(streamingText_));
+                textMsg.messageId = MessageIdGenerator::next();
+                messages.push_back(std::move(textMsg));
+                streamingText_.clear();
+            }
+
             // Update the tool_use message with complete input
             auto it = pendingToolUseIndex_.find(event.toolId);
             if (it != pendingToolUseIndex_.end() && it->second < messages.size()) {
@@ -90,20 +124,35 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
         }
 
         case StreamEvent::Type::ToolResultReady: {
-            // Dispatch to P0 subtypes based on result status
+            // Flush any accumulated streaming text before tool result.
+            // This ensures the order: text-before-tool → tool_result → text-after-tool
+            // rather than tool_result appearing before text that preceded it.
+            if (!streamingText_.empty()) {
+                auto textMsg = DisplayMessage::assistantText(std::move(streamingText_));
+                textMsg.messageId = MessageIdGenerator::next();
+                messages.push_back(std::move(textMsg));
+                streamingText_.clear();
+            }
+
+            // Find paired tool_use to get input for denormalization
+            String toolInput;
+            auto it = pendingToolUseIndex_.find(event.toolId);
+            if (it != pendingToolUseIndex_.end() && it->second < messages.size()) {
+                toolInput = messages[it->second].toolUse.input;
+            }
+
             DisplayMessage resultMsg;
             if (event.toolIsRejected) {
-                resultMsg = DisplayMessage::userToolRejected(event.toolId, event.toolName);
+                resultMsg = DisplayMessage::userToolRejected(event.toolId, event.toolName, toolInput);
             } else if (event.toolIsCancelled) {
-                resultMsg = DisplayMessage::userToolCanceled(event.toolId, event.toolName);
+                resultMsg = DisplayMessage::userToolCanceled(event.toolId, event.toolName, toolInput);
             } else if (event.toolIsError) {
-                resultMsg = DisplayMessage::userToolError(event.toolId, event.toolName, event.toolResult);
+                resultMsg = DisplayMessage::userToolError(event.toolId, event.toolName, event.toolResult, toolInput);
             } else {
-                resultMsg = DisplayMessage::userToolSuccess(event.toolId, event.toolName, event.toolResult);
+                resultMsg = DisplayMessage::userToolSuccess(event.toolId, event.toolName, event.toolResult, toolInput);
             }
             messages.push_back(std::move(resultMsg));
             // Mark the tool_use as having its result
-            auto it = pendingToolUseIndex_.find(event.toolId);
             if (it != pendingToolUseIndex_.end()) {
                 pendingToolUseIndex_.erase(it);
             }
@@ -240,6 +289,23 @@ void GroupStage::regroupAll(std::vector<DisplayMessage>& messages) {
     applyGrouping(messages);
 }
 
+/// Check if a message type is a non-tool "boundary" message that should
+/// break tool group sequences. Non-tool messages must not be crossed
+/// when grouping, or the display order will be wrong.
+static bool isGroupBoundary(const DisplayMessage& m) {
+    switch (m.type) {
+        case DisplayMessage::Type::AssistantToolUse:
+        case DisplayMessage::Type::UserToolResult:
+        case DisplayMessage::Type::UserToolSuccess:
+        case DisplayMessage::Type::UserToolError:
+        case DisplayMessage::Type::UserToolRejected:
+        case DisplayMessage::Type::UserToolCanceled:
+            return false; // Tool-related — not a boundary
+        default:
+            return true;  // Everything else is a group boundary
+    }
+}
+
 void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
     // Remove existing CollapsedReadSearch and GroupedToolUse messages (they'll be regenerated)
     messages.erase(
@@ -253,6 +319,9 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
     if (verboseMode_) return; // Don't collapse in verbose mode
 
     // ====== Pass 1: Collapse consecutive read/search/list/memory tools ======
+    // IMPORTANT: Non-tool messages (AssistantText, SystemInfo, etc.) act as
+    // group boundaries. Tools separated by a boundary must NOT be collapsed
+    // together, or they will appear out of order relative to the boundary message.
     std::vector<DisplayMessage> result;
     result.reserve(messages.size());
 
@@ -269,10 +338,10 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
             while (i < messages.size()) {
                 if (messages[i].type == DisplayMessage::Type::AssistantToolUse &&
                     isCollapsibleCategory(classifyTool(messages[i].toolUse.toolName))) {
+                    const auto& tmsg = messages[i];
                     groupMsgs.push_back(messages[i]);
                     group.toolIndices.push_back(i - groupStart + result.size());
 
-                    const auto& tmsg = messages[i];
                     auto cat = classifyTool(tmsg.toolUse.toolName);
 
                     switch (cat) {
@@ -319,13 +388,22 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                     }
                     i++;
 
-                    // Skip paired tool_result
+                    // Collect paired tool_result into groupMsgs (do not skip/drop it)
                     if (i < messages.size() &&
-                        messages[i].type == DisplayMessage::Type::UserToolResult &&
+                        isToolResultSubtype(messages[i].type) &&
                         messages[i].toolResult.toolUseId == tmsg.toolUse.toolId) {
+                        groupMsgs.push_back(messages[i]);
                         i++;
                     }
+                } else if (i < messages.size() && isToolResultSubtype(messages[i].type)) {
+                    // Stray tool_result not paired with the last tool_use —
+                    // include it in the group so it's not lost
+                    groupMsgs.push_back(messages[i]);
+                    i++;
                 } else {
+                    // Non-tool message (AssistantText, etc.) — this is a group boundary.
+                    // Stop grouping here so tools before and after the boundary
+                    // remain in their correct display positions.
                     break;
                 }
             }
@@ -336,7 +414,7 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                 collapsed.messageId = MessageIdGenerator::next();
                 result.push_back(std::move(collapsed));
             } else {
-                // Just 1 tool: keep as-is
+                // Just 1 tool (or 1 tool_use + 1 tool_result): keep as-is
                 for (auto& m : groupMsgs) {
                     result.push_back(std::move(m));
                 }
@@ -348,6 +426,8 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
     }
 
     // ====== Pass 2: Merge consecutive same-type non-collapsed tool_use into GroupedToolUse ======
+    // Same boundary rule applies: only group consecutive tool_uses with no
+    // intervening non-tool messages.
     {
         std::vector<DisplayMessage> final;
         final.reserve(result.size());
@@ -356,6 +436,7 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
             if (result[j].type == DisplayMessage::Type::AssistantToolUse) {
                 String toolName = result[j].toolUse.toolName;
                 std::vector<ToolUseRenderData> group;
+                std::vector<DisplayMessage> ungrouped; // fallback if only 1
                 size_t start = j;
 
                 while (j < result.size() &&
@@ -366,16 +447,18 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                     rd.toolName = result[j].toolUse.toolName;
                     rd.arguments = result[j].toolUse.input;
                     rd.isInProgress = false;
-                    group.push_back(std::move(rd));
+                    ungrouped.push_back(result[j]);
                     j++;
 
-                    // Skip paired tool_result
+                    // Collect paired tool_result
                     if (j < result.size() &&
-                        result[j].type == DisplayMessage::Type::UserToolResult) {
-                        group.back().result = result[j].toolResult.result;
-                        group.back().isError = result[j].toolResult.isError;
+                        isToolResultSubtype(result[j].type)) {
+                        rd.result = result[j].toolResult.result;
+                        rd.isError = result[j].toolResult.isError;
+                        ungrouped.push_back(result[j]);
                         j++;
                     }
+                    group.push_back(std::move(rd));
                 }
 
                 if (group.size() >= 2) {
@@ -383,8 +466,8 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                     gmsg.messageId = MessageIdGenerator::next();
                     final.push_back(std::move(gmsg));
                 } else {
-                    for (size_t k = start; k < j; ++k) {
-                        final.push_back(std::move(result[k]));
+                    for (auto& m : ungrouped) {
+                        final.push_back(std::move(m));
                     }
                 }
             } else {
