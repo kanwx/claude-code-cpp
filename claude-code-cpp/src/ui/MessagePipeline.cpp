@@ -307,6 +307,16 @@ static bool isGroupBoundary(const DisplayMessage& m) {
 }
 
 void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
+    // Save existing CollapsedReadSearch groups for anti-flicker hint preservation.
+    // When regenerating, we check if the old group's latestHint was set recently
+    // (<700ms ago) and, if so, keep the old hint to avoid visual flicker.
+    std::vector<const DisplayMessage*> oldCollapsed;
+    for (const auto& m : messages) {
+        if (m.type == DisplayMessage::Type::CollapsedReadSearch) {
+            oldCollapsed.push_back(&m);
+        }
+    }
+
     // Remove existing CollapsedReadSearch and GroupedToolUse messages (they'll be regenerated)
     messages.erase(
         std::remove_if(messages.begin(), messages.end(),
@@ -414,6 +424,26 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                 if (m.type == DisplayMessage::Type::AssistantToolUse) toolUseCount++;
             }
             if (toolUseCount >= 2) {
+                // Anti-flicker: if an old collapsed group had a different hint
+                // and was set <700ms ago, keep the old hint to avoid flicker.
+                if (!oldCollapsed.empty() && !group.latestHint.empty()) {
+                    using namespace std::chrono;
+                    auto now = steady_clock::now();
+                    for (const auto* old : oldCollapsed) {
+                        const auto& oldGroup = old->collapsedGroup;
+                        if (oldGroup.latestHint != group.latestHint &&
+                            !oldGroup.latestHint.empty()) {
+                            auto elapsed = duration_cast<milliseconds>(
+                                now - oldGroup.hintSetTime).count();
+                            if (elapsed < 700) {
+                                // Keep old hint — anti-flicker
+                                group.latestHint = oldGroup.latestHint;
+                                group.hintSetTime = oldGroup.hintSetTime;
+                                break;
+                            }
+                        }
+                    }
+                }
                 auto collapsed = DisplayMessage::collapsedReadSearch(std::move(group));
                 collapsed.messageId = MessageIdGenerator::next();
                 result.push_back(std::move(collapsed));
