@@ -216,13 +216,15 @@ bool GlobTool::matchesGlob(const String& name, const String& pattern) {
     return true;
 }
 
-String GlobTool::renderToolResult(const String& result, bool isError,
+ToolResultSummary GlobTool::renderToolResult(const String& result, bool isError,
                                   bool isCancelled, bool isRejected) const {
-    if (isError || isCancelled || isRejected) return "";
+    if (isError) return ToolResultSummary::error("Error searching files");
+    if (isCancelled || isRejected) return ToolResultSummary{};
     int files = 0;
     for (char c : result) { if (c == '\n') files++; }
     if (!result.empty()) files++;
-    return "Found " + std::to_string(files) + " file" + (files != 1 ? "s" : "");
+    if (files == 0) return ToolResultSummary::dim("No files found");
+    return ToolResultSummary::success("Found " + std::to_string(files) + " files", /*bold=*/true, "", "[Ctrl+O to expand]");
 }
 
 } // namespace claude

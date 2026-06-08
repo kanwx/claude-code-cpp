@@ -126,6 +126,34 @@ struct ToolResponse {
     bool isRejected = false;
 };
 
+/// Structured tool result summary for UI rendering
+struct ToolResultSummary {
+    String primaryText;     // "Read 42 lines", "Found 5 files", "Done"
+    bool primaryBold = false;
+    String secondaryText;   // "across 3 files", "to path/file"
+    String expandHint;      // "[Ctrl+O to expand]" or ""
+    String errorText;       // for error states
+    bool isDim = false;
+    bool isError = false;
+
+    static ToolResultSummary success(const String& primary, bool bold = false,
+                                      const String& secondary = "",
+                                      const String& expand = "") {
+        return {primary, bold, secondary, expand, "", false, false};
+    }
+    static ToolResultSummary dim(const String& primary) {
+        return {primary, false, "", "", "", true, false};
+    }
+    static ToolResultSummary error(const String& text) {
+        return {"", false, "", "", text, false, true};
+    }
+
+    /// Check if this summary has any renderable content
+    bool empty() const {
+        return primaryText.empty() && errorText.empty();
+    }
+};
+
 /// Data for rendering a tool use/result pair (used by grouped rendering)
 struct ToolUseRenderData {
     String toolUseId;
@@ -237,6 +265,8 @@ struct ToolEvent {
     String toolName;
     String arguments;
     String result;
+    String toolId;                     // ID for pairing tool_use with tool_result
+    bool isError = false;              // Whether the result is an error
     std::optional<String> error;
 };
 

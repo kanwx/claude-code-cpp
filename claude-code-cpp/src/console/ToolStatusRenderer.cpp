@@ -275,10 +275,27 @@ void ToolStatusRenderer::renderToolResult(const String& toolName, const String& 
     if (toolRegistry_) {
         auto* tool = toolRegistry_->findByName(toolName);
         if (tool) {
-            String customResult = tool->renderToolResult(result, isError, isCancelled, isRejected);
-            if (!customResult.empty()) {
+            auto summary = tool->renderToolResult(result, isError, isCancelled, isRejected);
+            if (!summary.empty()) {
                 renderPrefix();
-                out_ << customResult << "\n";
+                if (summary.isError) {
+                    out_ << AnsiStyle::Semantic::TOOL_ERROR << summary.errorText << AnsiStyle::RESET;
+                } else if (summary.isDim) {
+                    out_ << AnsiStyle::DIM << summary.primaryText << AnsiStyle::RESET;
+                } else {
+                    if (summary.primaryBold) {
+                        out_ << AnsiStyle::BOLD << summary.primaryText << AnsiStyle::RESET;
+                    } else {
+                        out_ << summary.primaryText;
+                    }
+                    if (!summary.secondaryText.empty()) {
+                        out_ << " " << summary.secondaryText;
+                    }
+                    if (!summary.expandHint.empty()) {
+                        out_ << " " << AnsiStyle::DIM << summary.expandHint << AnsiStyle::RESET;
+                    }
+                }
+                out_ << "\n";
                 return;
             }
         }

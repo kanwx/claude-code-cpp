@@ -45,7 +45,7 @@ public:
 
     bool alwaysLoad() const override { return true; }
 
-    String renderToolResult(const String& result, bool isError,
+    ToolResultSummary renderToolResult(const String& result, bool isError,
                             bool isCancelled, bool isRejected) const override;
 
     /// Get last preflight result (for permission UI formatting)

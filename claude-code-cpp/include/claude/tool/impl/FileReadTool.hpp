@@ -54,7 +54,7 @@ public:
 
     bool isCollapsible() const override { return true; }
     bool isReadTool() const override { return true; }
-    String renderToolResult(const String& result, bool isError,
+    ToolResultSummary renderToolResult(const String& result, bool isError,
                             bool isCancelled, bool isRejected) const override;
 };
 

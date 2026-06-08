@@ -235,13 +235,15 @@ String GrepTool::executeWithRegex(const Json& input, ToolContext& context) {
     return output.str();
 }
 
-String GrepTool::renderToolResult(const String& result, bool isError,
+ToolResultSummary GrepTool::renderToolResult(const String& result, bool isError,
                                   bool isCancelled, bool isRejected) const {
-    if (isError || isCancelled || isRejected) return "";
+    if (isError) return ToolResultSummary::error("Error searching files");
+    if (isCancelled || isRejected) return ToolResultSummary{};
     int matches = 0;
     for (char c : result) { if (c == '\n') matches++; }
     if (!result.empty()) matches++;
-    return "Found " + std::to_string(matches) + " match" + (matches != 1 ? "es" : "");
+    if (matches == 0) return ToolResultSummary::dim("No matches found");
+    return ToolResultSummary::success("Found " + std::to_string(matches) + " matches", /*bold=*/true, "", "[Ctrl+O to expand]");
 }
 
 } // namespace claude

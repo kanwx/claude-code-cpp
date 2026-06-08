@@ -134,15 +134,12 @@ String FileWriteTool::execute(const Json& input, ToolContext& context) {
            " (" + std::to_string(content.size()) + " bytes)";
 }
 
-String FileWriteTool::renderToolResult(const String& result, bool isError,
+ToolResultSummary FileWriteTool::renderToolResult(const String& result, bool isError,
                                        bool isCancelled, bool isRejected) const {
-    if (isError || isCancelled || isRejected) return "";
-    int lines = 0;
-    for (char c : result) { if (c == '\n') lines++; }
-    if (lines > 0) {
-        return "Wrote " + std::to_string(lines) + " line" + (lines != 1 ? "s" : "");
-    }
-    return "File written";
+    if (isError) return ToolResultSummary::error("Error writing file");
+    if (isCancelled) return ToolResultSummary::dim("Interrupted" "\xe2\x88\x99" " What should Claude do instead?");
+    if (isRejected) return ToolResultSummary::dim("Tool use rejected");
+    return ToolResultSummary::success("File written");
 }
 
 } // namespace claude

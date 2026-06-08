@@ -219,16 +219,16 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
     return result.str();
 }
 
-String FileEditTool::renderToolResult(const String& result, bool isError,
+ToolResultSummary FileEditTool::renderToolResult(const String& result, bool isError,
                                       bool isCancelled, bool isRejected) const {
-    if (isError || isCancelled || isRejected) return "";
-    auto pos = result.find("Applied edit");
-    if (pos != String::npos) {
-        auto lineEnd = result.find('\n', pos);
-        if (lineEnd == String::npos) lineEnd = result.size();
-        return result.substr(pos, lineEnd - pos);
+    if (isError) {
+        if (result.find("not found") != String::npos)
+            return ToolResultSummary::error("File not found");
+        return ToolResultSummary::error("Error editing file");
     }
-    return "Edit applied";
+    if (isCancelled) return ToolResultSummary::dim("Interrupted" "\xe2\x88\x99" " What should Claude do instead?");
+    if (isRejected) return ToolResultSummary::dim("Tool use rejected");
+    return ToolResultSummary::success("Edit applied");
 }
 
 } // namespace claude

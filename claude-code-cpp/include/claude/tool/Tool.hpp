@@ -134,11 +134,11 @@ public:
         return "";
     }
 
-    /// Render tool result (ANSI terminal output).
-    /// Default returns empty string (falls back to ToolStatusRenderer).
-    virtual String renderToolResult(const String& result, bool isError,
-                                    bool isCancelled, bool isRejected) const {
-        return "";
+    /// Render tool result summary (structured data for UI rendering).
+    /// Default returns empty summary (falls back to ToolStatusRenderer).
+    virtual ToolResultSummary renderToolResult(const String& result, bool isError,
+                                               bool isCancelled, bool isRejected) const {
+        return ToolResultSummary{};
     }
 
     /// Render grouped tool use (multiple same-type tools merged).

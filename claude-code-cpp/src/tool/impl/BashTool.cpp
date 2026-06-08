@@ -212,21 +212,20 @@ String BashTool::activityDescription(const Json& input) const {
     return String(prefix) + "Running: " + cmd;
 }
 
-String BashTool::renderToolResult(const String& result, bool isError,
+ToolResultSummary BashTool::renderToolResult(const String& result, bool isError,
                                   bool isCancelled, bool isRejected) const {
-    if (isCancelled || isRejected) return "";
+    if (isCancelled) return ToolResultSummary::dim("Interrupted" "\xe2\x88\x99" " What should Claude do instead?");
+    if (isRejected) return ToolResultSummary::dim("Tool use rejected");
     if (isError) {
-        String stderrContent;
-        auto exitPos = result.find("Exit code:");
-        if (exitPos != String::npos) {
-            auto lineEnd = result.find('\n', exitPos);
-            if (lineEnd == String::npos) lineEnd = result.size();
-            stderrContent = result.substr(exitPos, lineEnd - exitPos);
-        }
-        if (stderrContent.empty()) stderrContent = result.substr(0, 80);
-        return stderrContent;
+        if (result.find("Exit code:") != String::npos)
+            return ToolResultSummary::error(result.substr(0, 80));
+        return ToolResultSummary::error("Error");
     }
-    return "";
+    if (result.empty()) return ToolResultSummary::dim("Done");
+    // Show first line of output
+    auto nlPos = result.find('\n');
+    String firstLine = (nlPos != String::npos) ? result.substr(0, nlPos) : result;
+    return ToolResultSummary::success(firstLine);
 }
 
 } // namespace claude

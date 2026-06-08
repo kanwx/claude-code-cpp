@@ -277,13 +277,15 @@ String FileReadTool::executeStreaming(const Json& input, ToolContext& context,
     return fullResult;
 }
 
-String FileReadTool::renderToolResult(const String& result, bool isError,
+ToolResultSummary FileReadTool::renderToolResult(const String& result, bool isError,
                                       bool isCancelled, bool isRejected) const {
-    if (isError || isCancelled || isRejected) return "";  // use default rendering
+    if (isError) return ToolResultSummary::error("Error reading file");
+    if (isCancelled || isRejected) return ToolResultSummary{};
     int lines = 0;
     for (char c : result) { if (c == '\n') lines++; }
     if (!result.empty() && result.back() != '\n') lines++;
-    return "Read " + std::to_string(lines) + " line" + (lines != 1 ? "s" : "");
+    if (lines == 0) lines = 1;
+    return ToolResultSummary::success("Read " + std::to_string(lines) + " lines", /*bold=*/true);
 }
 
 } // namespace claude
