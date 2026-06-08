@@ -480,6 +480,28 @@ static std::vector<std::string> parseTableRow(const std::string& line) {
     return cells;
 }
 
+// Parse column alignments from a GFM table separator row
+// e.g. | :--- | ---: | :---: | --- | → {Left, Right, Center, Left}
+std::vector<FtxuiMarkdown::ParsedBlock::ColumnAlign> FtxuiMarkdown::parseColumnAligns(const std::string& line) {
+    auto cells = parseTableRow(line);
+    std::vector<ParsedBlock::ColumnAlign> aligns;
+    aligns.reserve(cells.size());
+    for (const auto& cell : cells) {
+        // Check for leading/trailing colons in the separator cell
+        std::string content = cell;
+        bool leadColon = !content.empty() && content.front() == ':';
+        bool trailColon = !content.empty() && content.back() == ':';
+        if (leadColon && trailColon && content.size() >= 3) {
+            aligns.push_back(ParsedBlock::ColumnAlign::Center);
+        } else if (trailColon && content.size() >= 2) {
+            aligns.push_back(ParsedBlock::ColumnAlign::Right);
+        } else {
+            aligns.push_back(ParsedBlock::ColumnAlign::Left);
+        }
+    }
+    return aligns;
+}
+
 // Helper: check if a line is a task list item: - [ ] or - [x]
 static bool parseTaskItem(const std::string& line, bool& checked, std::string& text) {
     // Match: - [ ] text or - [x] text (also * or +)
@@ -516,6 +538,7 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
     // For table parsing: track header row and separator
     std::vector<std::string> tableHeader;
     std::vector<std::vector<std::string>> tableRows;
+    std::vector<ParsedBlock::ColumnAlign> tableAligns;
     bool inTable = false;
 
     while (std::getline(stream, line)) {
@@ -527,6 +550,7 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
                     block.type = ParsedBlock::Table;
                     block.headerCells = std::move(tableHeader);
                     block.rows = std::move(tableRows);
+                    block.columnAligns = std::move(tableAligns);
                     blocks.push_back(std::move(block));
                     inTable = false;
                 }
@@ -560,6 +584,7 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
                     // Separator before header — unusual but handle gracefully
                     // Don't start a table, treat as potential paragraph
                     // Actually, start table with empty header
+                    tableAligns = parseColumnAligns(line);
                     inTable = true;
                     // Skip the separator — header may come on next line (unlikely)
                     continue;
@@ -569,7 +594,8 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
                 inTable = true;
                 continue;
             } else if (isTableSeparator(line)) {
-                // Table separator row: skip it
+                // Table separator row: parse alignment markers, then skip
+                tableAligns = parseColumnAligns(line);
                 continue;
             } else {
                 // Data row
@@ -582,6 +608,7 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
             block.type = ParsedBlock::Table;
             block.headerCells = std::move(tableHeader);
             block.rows = std::move(tableRows);
+            block.columnAligns = std::move(tableAligns);
             blocks.push_back(std::move(block));
             inTable = false;
             // Don't continue — fall through to process this line normally
@@ -728,6 +755,7 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
         block.type = ParsedBlock::Table;
         block.headerCells = std::move(tableHeader);
         block.rows = std::move(tableRows);
+        block.columnAligns = std::move(tableAligns);
         blocks.push_back(std::move(block));
     }
 
@@ -1019,6 +1047,12 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
         case ParsedBlock::Table: {
             auto numCols = std::max(block.headerCells.size(), size_t(1));
 
+            // Resolve alignment per column (default: Left if not specified)
+            auto getAlign = [&](size_t c) -> ParsedBlock::ColumnAlign {
+                if (c < block.columnAligns.size()) return block.columnAligns[c];
+                return ParsedBlock::ColumnAlign::Left;
+            };
+
             // Compute per-column max content width
             std::vector<int> colWidths(numCols, 3);
             for (size_t c = 0; c < numCols; ++c) {
@@ -1029,6 +1063,25 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
                         colWidths[c] = std::max(colWidths[c], displayWidth(row[c]));
                 }
             }
+
+            // Helper: pad a cell string according to column alignment
+            auto alignCell = [&](const std::string& cell, int width, ParsedBlock::ColumnAlign align) -> std::string {
+                int cellW = displayWidth(cell);
+                int pad = width - cellW;
+                if (pad <= 0) return cell;
+                switch (align) {
+                    case ParsedBlock::ColumnAlign::Right:
+                        return std::string(static_cast<size_t>(pad), ' ') + cell;
+                    case ParsedBlock::ColumnAlign::Center: {
+                        int leftPad = pad / 2;
+                        int rightPad = pad - leftPad;
+                        return std::string(static_cast<size_t>(leftPad), ' ') + cell +
+                               std::string(static_cast<size_t>(rightPad), ' ');
+                    }
+                    default: // Left
+                        return cell + std::string(static_cast<size_t>(pad), ' ');
+                }
+            };
 
             // Build each row as a single preformatted string — no hbox, no flex compression
             std::vector<Element> rows;
@@ -1053,7 +1106,7 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
                 for (size_t c = 0; c < numCols; ++c) {
                     if (c == 0) headerParts.push_back(ftxui::text("│") | color(MdSky) | dim);
                     std::string cell = c < block.headerCells.size() ? block.headerCells[c] : "";
-                    headerParts.push_back(ftxui::text(" " + padToDisplayWidth(cell, colWidths[c]) + " ") | bold);
+                    headerParts.push_back(ftxui::text(" " + alignCell(cell, colWidths[c], getAlign(c)) + " ") | bold);
                     headerParts.push_back(ftxui::text("│") | color(MdSky) | dim);
                 }
                 rows.push_back(ftxui::hbox(std::move(headerParts)));
@@ -1068,7 +1121,7 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
                 for (size_t c = 0; c < numCols; ++c) {
                     if (c == 0) rowParts.push_back(ftxui::text("│") | color(MdSky) | dim);
                     std::string cell = c < row.size() ? row[c] : "";
-                    rowParts.push_back(ftxui::text(" " + padToDisplayWidth(cell, colWidths[c]) + " "));
+                    rowParts.push_back(ftxui::text(" " + alignCell(cell, colWidths[c], getAlign(c)) + " "));
                     rowParts.push_back(ftxui::text("│") | color(MdSky) | dim);
                 }
                 rows.push_back(ftxui::hbox(std::move(rowParts)));

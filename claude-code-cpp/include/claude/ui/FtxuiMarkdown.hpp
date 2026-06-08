@@ -88,8 +88,10 @@ private:
         CodeBlock code;          // code block content
         std::vector<std::string> items;  // list items
         // Table fields
+        enum class ColumnAlign { Left, Right, Center };
         std::vector<std::string> headerCells;
         std::vector<std::vector<std::string>> rows;
+        std::vector<ColumnAlign> columnAligns;
         // Task list fields
         std::vector<std::pair<bool, std::string>> taskItems; // checked, text
         // Nested list fields
@@ -99,6 +101,7 @@ private:
     static std::vector<ParsedBlock> parse(const std::string& markdown);
     static ftxui::Element renderBlock(const ParsedBlock& block);
     static ftxui::Element renderCodeBlock(const CodeBlock& code);
+    static std::vector<ParsedBlock::ColumnAlign> parseColumnAligns(const std::string& separatorLine);
 
     // Inline rendering helpers
     static std::vector<ftxui::Element> parseInlineElements(const std::string& text);
