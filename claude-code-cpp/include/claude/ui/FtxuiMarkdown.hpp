@@ -104,16 +104,7 @@ private:
     static std::vector<ftxui::Element> parseInlineElements(const std::string& text);
     static ftxui::Element elementsToParagraph(std::vector<ftxui::Element>&& elems);
 
-    // Keyword lists for syntax highlighting
-    static const std::vector<std::string> CPP_KEYWORDS;
-    static const std::vector<std::string> PYTHON_KEYWORDS;
-    static const std::vector<std::string> RUST_KEYWORDS;
-    static const std::vector<std::string> GO_KEYWORDS;
-    static const std::vector<std::string> JS_KEYWORDS;
-    static const std::vector<std::string> BASH_KEYWORDS;
-    static const std::vector<std::string> JSON_SPECIAL;
-
-    static bool isKeyword(const std::string& word, const std::string& lang);
+    // Syntax highlighting uses LanguageSyntaxRegistry from LanguageSyntax.hpp
 };
 
 } // namespace claude

@@ -1,9 +1,11 @@
 #include <claude/console/MarkdownRenderer.hpp>
 #include <claude/console/AnsiStyle.hpp>
 #include <claude/console/MessageResponse.hpp>
+#include <claude/ui/LanguageSyntax.hpp>
 #include <regex>
 #include <iomanip>
 #include <algorithm>
+#include <cstdlib>
 
 namespace claude {
 
@@ -452,6 +454,220 @@ String MarkdownRenderer::applyInlineFormatting(const String& text) {
 
 // ========== Code Block ==========
 
+namespace {
+
+/// Try to match any of the candidate strings at position `pos` in `line`.
+/// Returns the length of the match (0 if none matched).
+size_t consoleMatchAnyAt(const String& line, size_t pos,
+                  const std::vector<std::pair<String,String>>& candidates) {
+    for (const auto& [open, _close] : candidates) {
+        if (pos + open.size() <= line.size() &&
+            line.compare(pos, open.size(), open) == 0) {
+            return open.size();
+        }
+    }
+    return 0;
+}
+
+/// Find the closing delimiter starting from `pos` (after the opening delimiter).
+/// Returns the index just past the closing delimiter, or String::npos.
+size_t consoleFindClosing(const String& line, size_t pos,
+                   const String& open, const String& close) {
+    if (open == close) {
+        size_t next = line.find(close, pos);
+        return (next == String::npos) ? String::npos : next + close.size();
+    }
+    size_t next = line.find(close, pos);
+    return (next == String::npos) ? String::npos : next + close.size();
+}
+
+/// State-machine syntax highlighter for the console path.
+/// Uses LanguageSyntaxRegistry for per-language keyword/string/comment definitions.
+String consoleHighlightLine(const String& line, const String& lang) {
+    // Env guard: CLAUDE_CODE_SYNTAX_HIGHLIGHT=0 disables highlighting
+    if (LanguageSyntaxRegistry::isDisabled()) return line;
+
+    const LanguageSyntax* syn = LanguageSyntaxRegistry::instance().getOrAlias(lang);
+
+    // ── JSON special path (key vs value string distinction) ──
+    if (lang == "json") {
+        String result;
+        for (size_t i = 0; i < line.size(); ++i) {
+            char c = line[i];
+            if (c == '"') {
+                size_t end = line.find('"', i + 1);
+                if (end != String::npos) {
+                    String str = line.substr(i, end - i + 1);
+                    size_t nextNonSpace = line.find_first_not_of(" \t", end + 1);
+                    if (nextNonSpace != String::npos && line[nextNonSpace] == ':') {
+                        result += AnsiStyle::BRIGHT_CYAN + str + AnsiStyle::RESET;
+                    } else if (str == "\"true\"" || str == "\"false\"" || str == "\"null\"") {
+                        result += AnsiStyle::BRIGHT_YELLOW + str + AnsiStyle::RESET;
+                    } else {
+                        result += AnsiStyle::BRIGHT_GREEN + str + AnsiStyle::RESET;
+                    }
+                    i = end;
+                } else {
+                    result += c;
+                }
+            } else if (c == ':' || c == '{' || c == '}' || c == '[' || c == ']') {
+                result += AnsiStyle::BRIGHT_WHITE + String(1, c) + AnsiStyle::RESET;
+            } else {
+                result += c;
+            }
+        }
+        return result;
+    }
+
+    // If no syntax definition, return plain text
+    if (!syn) return line;
+
+    // ── State-machine tokenizer ──
+    String result;
+    String currentWord;
+    size_t i = 0;
+
+    while (i < line.size()) {
+        // 1. Try block comment open
+        if (!syn->blockCommentDelimiters.empty()) {
+            size_t matchLen = consoleMatchAnyAt(line, i, syn->blockCommentDelimiters);
+            if (matchLen > 0) {
+                const String* openDelim = nullptr;
+                const String* closeDelim = nullptr;
+                for (const auto& [o, c] : syn->blockCommentDelimiters) {
+                    if (line.compare(i, o.size(), o) == 0) {
+                        openDelim = &o;
+                        closeDelim = &c;
+                        break;
+                    }
+                }
+                if (openDelim && closeDelim) {
+                    if (!currentWord.empty()) {
+                        if (syn->isKeyword(currentWord))
+                            result += AnsiStyle::BRIGHT_MAGENTA + currentWord + AnsiStyle::RESET;
+                        else if (std::isdigit(static_cast<unsigned char>(currentWord[0])))
+                            result += AnsiStyle::BRIGHT_YELLOW + currentWord + AnsiStyle::RESET;
+                        else
+                            result += currentWord;
+                        currentWord.clear();
+                    }
+                    size_t closePos = consoleFindClosing(line, i + matchLen, *openDelim, *closeDelim);
+                    if (closePos != String::npos) {
+                        result += AnsiStyle::DIM + line.substr(i, closePos - i) + AnsiStyle::RESET;
+                        i = closePos;
+                        continue;
+                    } else {
+                        result += AnsiStyle::DIM + line.substr(i) + AnsiStyle::RESET;
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // 2. Try string delimiter open
+        if (!syn->stringDelimiters.empty()) {
+            size_t matchLen = consoleMatchAnyAt(line, i, syn->stringDelimiters);
+            if (matchLen > 0) {
+                const String* openDelim = nullptr;
+                const String* closeDelim = nullptr;
+                for (const auto& [o, c] : syn->stringDelimiters) {
+                    if (line.compare(i, o.size(), o) == 0) {
+                        openDelim = &o;
+                        closeDelim = &c;
+                        break;
+                    }
+                }
+                if (openDelim && closeDelim) {
+                    if (!currentWord.empty()) {
+                        if (syn->isKeyword(currentWord))
+                            result += AnsiStyle::BRIGHT_MAGENTA + currentWord + AnsiStyle::RESET;
+                        else if (std::isdigit(static_cast<unsigned char>(currentWord[0])))
+                            result += AnsiStyle::BRIGHT_YELLOW + currentWord + AnsiStyle::RESET;
+                        else
+                            result += currentWord;
+                        currentWord.clear();
+                    }
+                    size_t closePos = consoleFindClosing(line, i + matchLen, *openDelim, *closeDelim);
+                    if (closePos != String::npos) {
+                        result += AnsiStyle::BRIGHT_GREEN + line.substr(i, closePos - i) + AnsiStyle::RESET;
+                        i = closePos;
+                        continue;
+                    } else {
+                        result += AnsiStyle::BRIGHT_GREEN + line.substr(i) + AnsiStyle::RESET;
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // 3. Try line comment
+        if (syn->hasLineComments && !syn->lineCommentStart.empty()) {
+            if (i + syn->lineCommentStart.size() <= line.size() &&
+                line.compare(i, syn->lineCommentStart.size(), syn->lineCommentStart) == 0) {
+                if (!currentWord.empty()) {
+                    if (syn->isKeyword(currentWord))
+                        result += AnsiStyle::BRIGHT_MAGENTA + currentWord + AnsiStyle::RESET;
+                    else if (std::isdigit(static_cast<unsigned char>(currentWord[0])))
+                        result += AnsiStyle::BRIGHT_YELLOW + currentWord + AnsiStyle::RESET;
+                    else
+                        result += currentWord;
+                    currentWord.clear();
+                }
+                result += AnsiStyle::DIM + line.substr(i) + AnsiStyle::RESET;
+                return result;
+            }
+        }
+
+        // 4. PHP also supports # line comments
+        if (lang == "php" && line[i] == '#') {
+            if (!currentWord.empty()) {
+                if (syn->isKeyword(currentWord))
+                    result += AnsiStyle::BRIGHT_MAGENTA + currentWord + AnsiStyle::RESET;
+                else if (std::isdigit(static_cast<unsigned char>(currentWord[0])))
+                    result += AnsiStyle::BRIGHT_YELLOW + currentWord + AnsiStyle::RESET;
+                else
+                    result += currentWord;
+                currentWord.clear();
+            }
+            result += AnsiStyle::DIM + line.substr(i) + AnsiStyle::RESET;
+            return result;
+        }
+
+        // 5. Build word (alphanumeric, underscore, @, #prefix for C preprocessor)
+        char c = line[i];
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '@' ||
+            (c == '#' && currentWord.empty() && (lang == "cpp" || lang == "c" || lang == "hpp" || lang == "h" || lang == "cc"))) {
+            currentWord += c;
+        } else {
+            if (!currentWord.empty()) {
+                if (syn->isKeyword(currentWord))
+                    result += AnsiStyle::BRIGHT_MAGENTA + currentWord + AnsiStyle::RESET;
+                else if (std::isdigit(static_cast<unsigned char>(currentWord[0])))
+                    result += AnsiStyle::BRIGHT_YELLOW + currentWord + AnsiStyle::RESET;
+                else
+                    result += currentWord;
+                currentWord.clear();
+            }
+            result += std::string(1, c);
+        }
+        ++i;
+    }
+
+    // Flush trailing word
+    if (!currentWord.empty()) {
+        if (syn->isKeyword(currentWord))
+            result += AnsiStyle::BRIGHT_MAGENTA + currentWord + AnsiStyle::RESET;
+        else if (std::isdigit(static_cast<unsigned char>(currentWord[0])))
+            result += AnsiStyle::BRIGHT_YELLOW + currentWord + AnsiStyle::RESET;
+        else
+            result += currentWord;
+    }
+
+    return result;
+}
+
+} // anonymous namespace
+
 void MarkdownRenderer::renderCodeBlock(const String& code, const String& lang) {
     // Box-drawing borders: ╭─ lang ───╮ ... ╰────────╯
     String displayLang = lang.empty() ? "code" : lang;
@@ -495,72 +711,7 @@ void MarkdownRenderer::renderCodeBlock(const String& code, const String& lang) {
             displayLine = displayLine.substr(0, codeWidth - 3) + "...";
         }
 
-        String highlighted = displayLine;
-
-        // Language-specific keyword highlighting
-        if (lang == "cpp" || lang == "c++" || lang == "c" || lang == "hpp") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|for|while|return|break|continue|switch|case|default)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(class|struct|void|int|char|bool|float|double|auto|const|static|namespace|using|template|typename)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(std::\w+|String|Vector|Map|Json)\b)"),
-                                           String(AnsiStyle::BRIGHT_GREEN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "python" || lang == "py") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|elif|for|while|return|def|class|import|from|as|with|try|except|finally|lambda|yield|async|await)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(True|False|None|self|int|str|list|dict|set|tuple)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "rust" || lang == "rs") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|for|while|loop|return|break|continue|match|fn|let|mut|const|struct|enum|impl|trait|pub|mod|use|self|Self)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(i32|i64|u32|u64|f32|f64|bool|char|str|String|Vec|Option|Result|Box|Rc|Arc)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "go") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|for|range|return|break|continue|switch|case|default|func|var|const|type|struct|interface|package|import|go|defer|chan|select)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(int|int64|float64|string|bool|byte|rune|error|nil|true|false)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "java" || lang == "kotlin" || lang == "kt") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|for|while|return|break|continue|switch|case|default|class|interface|object|fun|val|var|const|public|private|protected|static|final|override|import|package|new|this|super)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(int|long|float|double|boolean|char|String|void|null|true|false)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "swift") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|for|while|return|break|continue|switch|case|default|func|let|var|class|struct|enum|protocol|extension|public|private|fileprivate|internal|static|override|import|guard|defer|async|await|throws|try|catch)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(Int|Double|Float|Bool|String|Character|Array|Dictionary|Set|Optional|nil|true|false)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "javascript" || lang == "js" || lang == "typescript" || lang == "ts") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|else|for|while|return|break|continue|switch|case|default|function|const|let|var|class|interface|type|enum|public|private|protected|static|async|await|import|export|from|new|this|super|try|catch|finally|throw)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(string|number|boolean|void|null|undefined|any|never|true|false|console)\b)"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "json") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(([\w\-]+)(\s*:\s*))"),
-                                           String(AnsiStyle::BRIGHT_CYAN) + "$1" + AnsiStyle::RESET + "$2");
-        } else if (lang == "bash" || lang == "sh" || lang == "shell" || lang == "zsh") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(if|then|else|elif|fi|for|do|done|while|case|esac|function|return|export|source|alias|unset|local|readonly)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-        } else if (lang == "sql") {
-            highlighted = std::regex_replace(highlighted, std::regex(R"(\b(SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TABLE|INDEX|JOIN|LEFT|RIGHT|INNER|ON|AND|OR|NOT|NULL|PRIMARY|KEY|FOREIGN|REFERENCES|ORDER|BY|GROUP|HAVING|LIMIT|OFFSET|DISTINCT|UNION)\b)"),
-                                           String(AnsiStyle::BRIGHT_MAGENTA) + "$1" + AnsiStyle::RESET);
-        }
-
-        // Universal: string literals
-        highlighted = std::regex_replace(highlighted, std::regex("\"([^\"]*)\""),
-                                       String(AnsiStyle::BRIGHT_GREEN) + "\"$1\"" + AnsiStyle::RESET);
-        highlighted = std::regex_replace(highlighted, std::regex("'([^']*)'"),
-                                       String(AnsiStyle::BRIGHT_GREEN) + "'$1'" + AnsiStyle::RESET);
-
-        // Universal: comments
-        highlighted = std::regex_replace(highlighted, std::regex(R"(//.*$)"),
-                                       String(AnsiStyle::DIM) + "$&" + AnsiStyle::RESET);
-        highlighted = std::regex_replace(highlighted, std::regex(R"(#.*$)"),
-                                       String(AnsiStyle::DIM) + "$&" + AnsiStyle::RESET);
-        highlighted = std::regex_replace(highlighted, std::regex(R"(/\*.*\*/)"),
-                                       String(AnsiStyle::DIM) + "$&" + AnsiStyle::RESET);
-
-        out_ << highlighted << "\n";
+        out_ << consoleHighlightLine(displayLine, lang) << "\n";
     }
 
     // Bottom border: ╰──────────────╯

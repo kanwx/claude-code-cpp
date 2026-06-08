@@ -1,4 +1,5 @@
 #include <claude/ui/FtxuiMarkdown.hpp>
+#include <claude/ui/LanguageSyntax.hpp>
 #include <ftxui/screen/string.hpp>
 #include <algorithm>
 #include <sstream>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <regex>
 #include <unordered_map>
+#include <cstdlib>
 
 namespace claude {
 
@@ -79,92 +81,57 @@ static const auto MdPeach    = ftxui::Color::RGB(224, 164, 140);
 static const auto MdMint     = ftxui::Color::RGB(160, 210, 180);
 static const auto MdRose     = ftxui::Color::RGB(210, 150, 150);
 
-// ========== Keyword lists ==========
+// ========== Syntax highlighting ==========
+// Keyword tables and language definitions are in LanguageSyntaxRegistry (LanguageSyntax.hpp).
+// highlightLine() uses a state-machine that respects string/comment delimiters per language.
 
-const std::vector<std::string> FtxuiMarkdown::CPP_KEYWORDS = {
-    "auto","break","case","catch","class","const","constexpr","continue","default",
-    "delete","do","else","enum","explicit","extern","false","final","for","friend",
-    "goto","if","inline","mutable","namespace","new","noexcept","nullptr","operator",
-    "override","private","protected","public","register","return","sizeof","static",
-    "static_assert","static_cast","struct","switch","template","this","throw","true",
-    "try","typedef","typeid","typename","union","using","virtual","volatile","while",
-    "#include","#define","#ifdef","#ifndef","#endif","#pragma","std::","void","int",
-    "long","double","float","char","bool","unsigned","signed","size_t","string",
-    "vector","map","set","optional","expected","unique_ptr","shared_ptr","make_unique",
-    "make_shared","return","auto","const","override","noexcept"
-};
+namespace {
 
-const std::vector<std::string> FtxuiMarkdown::PYTHON_KEYWORDS = {
-    "and","as","assert","async","await","break","class","continue","def","del",
-    "elif","else","except","False","finally","for","from","global","if","import",
-    "in","is","lambda","None","nonlocal","not","or","pass","raise","return",
-    "True","try","while","with","yield","self","print","range","len","list",
-    "dict","set","tuple","str","int","float","bool","type","super","__init__"
-};
+/// ANSI escape codes used by the FTXUI highlighter (applied inside ftxui::text strings)
+static constexpr const char* HL_KEYWORD    = "\033[35m";  // magenta – keywords
+static constexpr const char* HL_TYPE       = "\033[36m";  // cyan    – type-like keywords
+static constexpr const char* HL_STRING     = "\033[32m";  // green   – string literals
+static constexpr const char* HL_NUMBER     = "\033[33m";  // yellow  – numeric literals
+static constexpr const char* HL_COMMENT    = "\033[90m";  // bright-black (dim gray) – comments
+static constexpr const char* HL_PUNCT      = "\033[37m";  // white   – punctuation
+static constexpr const char* HL_RESET      = "\033[0m";
 
-const std::vector<std::string> FtxuiMarkdown::RUST_KEYWORDS = {
-    "as","async","await","break","const","continue","crate","dyn","else","enum",
-    "extern","false","fn","for","if","impl","in","let","loop","match","mod",
-    "move","mut","pub","ref","return","self","Self","static","struct","super",
-    "trait","true","type","unsafe","use","where","while","Vec","String","Option",
-    "Result","Ok","Err","Some","None","Box","Rc","Arc","println","vec","format"
-};
-
-const std::vector<std::string> FtxuiMarkdown::GO_KEYWORDS = {
-    "break","case","chan","const","continue","default","defer","else","fallthrough",
-    "for","func","go","goto","if","import","interface","map","package","range",
-    "return","select","struct","switch","type","var","true","false","nil","iota",
-    "append","cap","close","complex","copy","delete","imag","len","make","new",
-    "panic","print","println","real","recover","fmt","string","int","bool","error"
-};
-
-const std::vector<std::string> FtxuiMarkdown::JS_KEYWORDS = {
-    "async","await","break","case","catch","class","const","continue","debugger",
-    "default","delete","do","else","export","extends","false","finally","for",
-    "function","if","import","in","instanceof","let","new","null","of","return",
-    "static","super","switch","this","throw","true","try","typeof","undefined",
-    "var","void","while","with","yield","console","require","module","Promise",
-    "React","useState","useEffect","useRef","interface","type","enum","implements"
-};
-
-const std::vector<std::string> FtxuiMarkdown::BASH_KEYWORDS = {
-    "if","then","else","elif","fi","case","esac","for","while","until","do","done",
-    "in","function","select","time","coproc","return","exit","break","continue",
-    "declare","export","local","readonly","typeset","unset","source","alias","echo",
-    "printf","read","cd","pwd","ls","grep","find","awk","sed","sort","uniq","wc",
-    "cat","head","tail","mkdir","rm","cp","mv","chmod","chown","sudo","apt","npm",
-    "git","docker","curl","wget","set","true","false","test","0"
-};
-
-const std::vector<std::string> FtxuiMarkdown::JSON_SPECIAL = {
-    "true","false","null"
-};
-
-bool FtxuiMarkdown::isKeyword(const std::string& word, const std::string& lang) {
-    const std::vector<std::string>* keywords = nullptr;
-    if (lang == "cpp" || lang == "c" || lang == "hpp" || lang == "h" || lang == "cc")
-        keywords = &CPP_KEYWORDS;
-    else if (lang == "python" || lang == "py")
-        keywords = &PYTHON_KEYWORDS;
-    else if (lang == "rust" || lang == "rs")
-        keywords = &RUST_KEYWORDS;
-    else if (lang == "go" || lang == "golang")
-        keywords = &GO_KEYWORDS;
-    else if (lang == "js" || lang == "javascript" || lang == "ts" || lang == "typescript" || lang == "jsx" || lang == "tsx")
-        keywords = &JS_KEYWORDS;
-    else if (lang == "bash" || lang == "sh" || lang == "zsh" || lang == "shell")
-        keywords = &BASH_KEYWORDS;
-    else if (lang == "json")
-        keywords = &JSON_SPECIAL;
-    else
-        return false;
-
-    return std::find(keywords->begin(), keywords->end(), word) != keywords->end();
+/// Try to match any of the candidate strings at position `pos` in `line`.
+/// Returns the length of the match (0 if none matched).
+size_t matchAnyAt(const std::string& line, size_t pos,
+                  const std::vector<std::pair<std::string,std::string>>& candidates) {
+    for (const auto& [open, _close] : candidates) {
+        if (pos + open.size() <= line.size() &&
+            line.compare(pos, open.size(), open) == 0) {
+            return open.size();
+        }
+    }
+    return 0;
 }
 
-// ========== Syntax highlighting ==========
+/// Find the closing delimiter starting from `pos` (after the opening delimiter).
+/// Returns the index just past the closing delimiter, or std::string::npos.
+size_t findClosing(const std::string& line, size_t pos,
+                   const std::string& open, const std::string& close) {
+    // For symmetric delimiters (open==close), find next occurrence after pos.
+    if (open == close) {
+        size_t next = line.find(close, pos);
+        return (next == std::string::npos) ? std::string::npos : next + close.size();
+    }
+    // For asymmetric delimiters, just find the close.
+    size_t next = line.find(close, pos);
+    return (next == std::string::npos) ? std::string::npos : next + close.size();
+}
+
+} // anonymous namespace
 
 std::string FtxuiMarkdown::highlightLine(const std::string& line, const std::string& lang) {
+    // Env guard: CLAUDE_CODE_SYNTAX_HIGHLIGHT=0 disables highlighting
+    if (LanguageSyntaxRegistry::isDisabled()) return line;
+
+    const LanguageSyntax* syn = LanguageSyntaxRegistry::instance().getOrAlias(lang);
+
+    // ── JSON special path (key vs value string distinction) ──
     if (lang == "json") {
         std::string result;
         for (size_t i = 0; i < line.size(); ++i) {
@@ -175,18 +142,18 @@ std::string FtxuiMarkdown::highlightLine(const std::string& line, const std::str
                     std::string str = line.substr(i, end - i + 1);
                     size_t nextNonSpace = line.find_first_not_of(" \t", end + 1);
                     if (nextNonSpace != std::string::npos && line[nextNonSpace] == ':') {
-                        result += "\033[36m" + str + "\033[0m";
+                        result += HL_TYPE + str + HL_RESET;
                     } else if (str == "\"true\"" || str == "\"false\"" || str == "\"null\"") {
-                        result += "\033[33m" + str + "\033[0m";
+                        result += HL_NUMBER + str + HL_RESET;
                     } else {
-                        result += "\033[32m" + str + "\033[0m";
+                        result += HL_STRING + str + HL_RESET;
                     }
                     i = end;
                 } else {
                     result += c;
                 }
             } else if (c == ':' || c == '{' || c == '}' || c == '[' || c == ']') {
-                result += "\033[37m" + std::string(1, c) + "\033[0m";
+                result += HL_PUNCT + std::string(1, c) + HL_RESET;
             } else {
                 result += c;
             }
@@ -194,53 +161,146 @@ std::string FtxuiMarkdown::highlightLine(const std::string& line, const std::str
         return result;
     }
 
+    // If no syntax definition, return plain text (preserving old behavior for unknown langs)
+    if (!syn) return line;
+
+    // ── State-machine tokenizer ──
     std::string result;
     std::string currentWord;
-    bool inString = false;
-    char stringChar = 0;
+    size_t i = 0;
 
-    for (size_t i = 0; i < line.size(); ++i) {
-        char c = line[i];
-
-        if (!inString && (c == '/' && i + 1 < line.size() && line[i+1] == '/')) {
-            result += "\033[90m" + line.substr(i) + "\033[0m";
-            return result;
+    while (i < line.size()) {
+        // 1. Try block comment open
+        if (!syn->blockCommentDelimiters.empty()) {
+            size_t matchLen = matchAnyAt(line, i, syn->blockCommentDelimiters);
+            if (matchLen > 0) {
+                // Find which delimiter matched
+                const std::string* openDelim = nullptr;
+                const std::string* closeDelim = nullptr;
+                for (const auto& [o, c] : syn->blockCommentDelimiters) {
+                    if (line.compare(i, o.size(), o) == 0) {
+                        openDelim = &o;
+                        closeDelim = &c;
+                        break;
+                    }
+                }
+                if (openDelim && closeDelim) {
+                    // Flush current word
+                    if (!currentWord.empty()) {
+                        if (syn->isKeyword(currentWord)) {
+                            result += HL_KEYWORD + currentWord + HL_RESET;
+                        } else if (std::isdigit(static_cast<unsigned char>(currentWord[0]))) {
+                            result += HL_NUMBER + currentWord + HL_RESET;
+                        } else {
+                            result += currentWord;
+                        }
+                        currentWord.clear();
+                    }
+                    // Find closing on this line
+                    size_t closePos = findClosing(line, i + matchLen, *openDelim, *closeDelim);
+                    if (closePos != std::string::npos) {
+                        result += HL_COMMENT + line.substr(i, closePos - i) + HL_RESET;
+                        i = closePos;
+                        continue;
+                    } else {
+                        // Block comment extends past this line – color rest as comment
+                        result += HL_COMMENT + line.substr(i) + HL_RESET;
+                        return result;
+                    }
+                }
+            }
         }
-        if (!inString && c == '#') {
-            if (lang == "bash" || lang == "sh" || lang == "zsh" || lang == "python" || lang == "py") {
-                result += "\033[90m" + line.substr(i) + "\033[0m";
+
+        // 2. Try string delimiter open
+        if (!syn->stringDelimiters.empty()) {
+            size_t matchLen = matchAnyAt(line, i, syn->stringDelimiters);
+            if (matchLen > 0) {
+                // Find which delimiter matched
+                const std::string* openDelim = nullptr;
+                const std::string* closeDelim = nullptr;
+                for (const auto& [o, c] : syn->stringDelimiters) {
+                    if (line.compare(i, o.size(), o) == 0) {
+                        openDelim = &o;
+                        closeDelim = &c;
+                        break;
+                    }
+                }
+                if (openDelim && closeDelim) {
+                    // Flush current word
+                    if (!currentWord.empty()) {
+                        if (syn->isKeyword(currentWord)) {
+                            result += HL_KEYWORD + currentWord + HL_RESET;
+                        } else if (std::isdigit(static_cast<unsigned char>(currentWord[0]))) {
+                            result += HL_NUMBER + currentWord + HL_RESET;
+                        } else {
+                            result += currentWord;
+                        }
+                        currentWord.clear();
+                    }
+                    // Find closing
+                    size_t closePos = findClosing(line, i + matchLen, *openDelim, *closeDelim);
+                    if (closePos != std::string::npos) {
+                        result += HL_STRING + line.substr(i, closePos - i) + HL_RESET;
+                        i = closePos;
+                        continue;
+                    } else {
+                        // String extends past this line – color rest as string
+                        result += HL_STRING + line.substr(i) + HL_RESET;
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // 3. Try line comment
+        if (syn->hasLineComments && !syn->lineCommentStart.empty()) {
+            if (i + syn->lineCommentStart.size() <= line.size() &&
+                line.compare(i, syn->lineCommentStart.size(), syn->lineCommentStart) == 0) {
+                // Flush current word
+                if (!currentWord.empty()) {
+                    if (syn->isKeyword(currentWord)) {
+                        result += HL_KEYWORD + currentWord + HL_RESET;
+                    } else if (std::isdigit(static_cast<unsigned char>(currentWord[0]))) {
+                        result += HL_NUMBER + currentWord + HL_RESET;
+                    } else {
+                        result += currentWord;
+                    }
+                    currentWord.clear();
+                }
+                // Color rest of line as comment
+                result += HL_COMMENT + line.substr(i) + HL_RESET;
                 return result;
             }
         }
 
-        if ((c == '"' || c == '\'')) {
-            if (!inString) {
-                inString = true;
-                stringChar = c;
-                result += "\033[32m" + std::string(1, c);
-            } else if (c == stringChar) {
-                result += std::string(1, c) + "\033[0m";
-                inString = false;
-            } else {
-                result += std::string(1, c);
+        // 4. PHP also supports # line comments
+        if (lang == "php" && line[i] == '#') {
+            if (!currentWord.empty()) {
+                if (syn->isKeyword(currentWord)) {
+                    result += HL_KEYWORD + currentWord + HL_RESET;
+                } else if (std::isdigit(static_cast<unsigned char>(currentWord[0]))) {
+                    result += HL_NUMBER + currentWord + HL_RESET;
+                } else {
+                    result += currentWord;
+                }
+                currentWord.clear();
             }
-            continue;
+            result += HL_COMMENT + line.substr(i) + HL_RESET;
+            return result;
         }
 
-        if (inString) {
-            result += std::string(1, c);
-            continue;
-        }
-
+        // 5. Build word (alphanumeric, underscore, @, #prefix for C preprocessor)
+        char c = line[i];
         if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '@' ||
-            (c == '#' && currentWord.empty() && (lang == "cpp" || lang == "c"))) {
+            (c == '#' && currentWord.empty() && (lang == "cpp" || lang == "c" || lang == "hpp" || lang == "h" || lang == "cc"))) {
             currentWord += c;
         } else {
+            // Flush current word
             if (!currentWord.empty()) {
-                if (isKeyword(currentWord, lang)) {
-                    result += "\033[35m" + currentWord + "\033[0m";
+                if (syn->isKeyword(currentWord)) {
+                    result += HL_KEYWORD + currentWord + HL_RESET;
                 } else if (std::isdigit(static_cast<unsigned char>(currentWord[0]))) {
-                    result += "\033[33m" + currentWord + "\033[0m";
+                    result += HL_NUMBER + currentWord + HL_RESET;
                 } else {
                     result += currentWord;
                 }
@@ -248,13 +308,15 @@ std::string FtxuiMarkdown::highlightLine(const std::string& line, const std::str
             }
             result += std::string(1, c);
         }
+        ++i;
     }
 
+    // Flush trailing word
     if (!currentWord.empty()) {
-        if (isKeyword(currentWord, lang)) {
-            result += "\033[35m" + currentWord + "\033[0m";
+        if (syn->isKeyword(currentWord)) {
+            result += HL_KEYWORD + currentWord + HL_RESET;
         } else if (std::isdigit(static_cast<unsigned char>(currentWord[0]))) {
-            result += "\033[33m" + currentWord + "\033[0m";
+            result += HL_NUMBER + currentWord + HL_RESET;
         } else {
             result += currentWord;
         }
