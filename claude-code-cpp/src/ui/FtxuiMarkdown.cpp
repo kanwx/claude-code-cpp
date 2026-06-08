@@ -1220,17 +1220,24 @@ bool FtxuiMarkdown::hasMarkdownSyntax(const std::string& text) {
     return std::regex_search(text, mdSyntax);
 }
 
-std::vector<Element> FtxuiMarkdown::render(const std::string& markdown) {
+std::vector<Element> FtxuiMarkdown::render(const std::string& markdown, const RenderOptions& options) {
     // Fast path: skip the parser for plain text with no Markdown syntax
     if (!hasMarkdownSyntax(markdown)) {
-        return {ftxui::paragraph(markdown)};
+        auto elem = ftxui::paragraph(markdown);
+        if (options.dimAll) {
+            return {std::move(elem) | ftxui::dim};
+        }
+        return {std::move(elem)};
     }
 
     // Check cache — static messages re-entering the viewport after OffscreenFreeze
     // don't need re-parsing; cache the fully rendered Elements for instant reuse.
-    auto key = contentHash(markdown);
-    if (auto cached = g_markdownCache.get(key)) {
-        return *cached;
+    // Note: dimAll changes rendering, so skip cache when dimAll is set
+    if (!options.dimAll) {
+        auto key = contentHash(markdown);
+        if (auto cached = g_markdownCache.get(key)) {
+            return *cached;
+        }
     }
 
     // Parse and render
@@ -1242,8 +1249,18 @@ std::vector<Element> FtxuiMarkdown::render(const std::string& markdown) {
         result.push_back(renderBlock(block));
     }
 
-    // Store in cache for future hits
-    g_markdownCache.put(key, result);
+    // Apply dim to all elements when requested (e.g. for thinking content)
+    if (options.dimAll) {
+        for (auto& elem : result) {
+            elem = std::move(elem) | ftxui::dim;
+        }
+    }
+
+    // Store in cache for future hits (only non-dim renders, which are the common case)
+    if (!options.dimAll) {
+        auto key = contentHash(markdown);
+        g_markdownCache.put(key, result);
+    }
 
     return result;
 }

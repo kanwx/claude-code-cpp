@@ -6,13 +6,18 @@
 
 namespace claude {
 
+/// Options for controlling how FtxuiMarkdown renders content
+struct RenderOptions {
+    bool dimAll = false;  // Apply dim decorator to all rendered elements
+};
+
 /// Markdown → FTXUI Element renderer
 /// Supports: code blocks, inline code, bold, italic, headers, bullet lists,
 /// numbered lists, blockquotes, links, horizontal rules, tables, task lists, nested lists
 class FtxuiMarkdown {
 public:
     /// Render a markdown string to a vector of FTXUI Elements (one per visual block)
-    static std::vector<ftxui::Element> render(const std::string& markdown);
+    static std::vector<ftxui::Element> render(const std::string& markdown, const RenderOptions& options = {});
 
     /// Render a single inline text segment (handles bold/italic/code/links)
     static ftxui::Element renderInline(const std::string& text);
