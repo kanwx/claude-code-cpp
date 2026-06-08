@@ -123,6 +123,77 @@ size_t findClosing(const std::string& line, size_t pos,
     return (next == std::string::npos) ? std::string::npos : next + close.size();
 }
 
+/// Convert an ANSI-embedded string (from highlightLine) into a single ftxui Element.
+/// Parses the SGR escape sequences (\033[XXm) used by the highlighter and builds
+/// an hbox of text segments, each with the appropriate ftxui::color() decorator.
+Element ansiToFtxuiElement(const std::string& ansiStr) {
+    // Mapping from ANSI SGR codes to ftxui Colors (mirrors HL_* constants above)
+    static const auto sgrToColor = [](int code) -> ftxui::Color {
+        switch (code) {
+            case 35: return ftxui::Color::RGB(180, 80, 180);   // magenta  (keyword)
+            case 36: return ftxui::Color::RGB(80, 180, 180);   // cyan     (type)
+            case 32: return ftxui::Color::RGB(80, 180, 80);    // green    (string)
+            case 33: return ftxui::Color::RGB(210, 186, 140);  // yellow   (number) — matches MdGold
+            case 90: return ftxui::Color::RGB(120, 120, 120);  // bright-black (comment)
+            case 37: return ftxui::Color::RGB(180, 180, 180);  // white    (punctuation)
+            case 0:  return ftxui::Color{};                     // reset = default
+            default: return ftxui::Color{};
+        }
+    };
+
+    std::vector<Element> segments;
+    std::string currentText;
+    ftxui::Color currentColor;   // default-constructed = "no override"
+    bool hasColor = false;
+
+    auto flush = [&]() {
+        if (!currentText.empty()) {
+            Element e = ftxui::text(std::move(currentText));
+            currentText.clear();
+            if (hasColor) {
+                e = std::move(e) | color(currentColor);
+            }
+            segments.push_back(std::move(e));
+        }
+    };
+
+    size_t i = 0;
+    while (i < ansiStr.size()) {
+        // Look for ESC[ ... m
+        if (ansiStr[i] == '\033' && i + 1 < ansiStr.size() && ansiStr[i+1] == '[') {
+            size_t mPos = ansiStr.find('m', i + 2);
+            if (mPos != std::string::npos) {
+                flush();
+                // Parse the SGR code(s) — take the last numeric value
+                std::string codeStr = ansiStr.substr(i + 2, mPos - i - 2);
+                int code = 0;
+                // Handle compound codes like "0;35" — use the last number
+                size_t lastSemi = codeStr.rfind(';');
+                if (lastSemi != std::string::npos) {
+                    code = std::atoi(codeStr.c_str() + lastSemi + 1);
+                } else if (!codeStr.empty()) {
+                    code = std::atoi(codeStr.c_str());
+                }
+                if (code == 0) {
+                    hasColor = false;
+                } else {
+                    currentColor = sgrToColor(code);
+                    hasColor = true;
+                }
+                i = mPos + 1;
+                continue;
+            }
+        }
+        currentText += ansiStr[i];
+        ++i;
+    }
+    flush();
+
+    if (segments.empty()) return ftxui::text("");
+    if (segments.size() == 1) return std::move(segments[0]);
+    return hbox(std::move(segments));
+}
+
 } // anonymous namespace
 
 std::string FtxuiMarkdown::highlightLine(const std::string& line, const std::string& lang) {
@@ -801,7 +872,14 @@ Element FtxuiMarkdown::renderCodeBlock(const CodeBlock& code) {
         std::string numStr = std::to_string(lineNum);
         while (static_cast<int>(numStr.size()) < width) numStr = " " + numStr;
 
-        auto lineElem = ftxui::text(rawLine.empty() ? std::string(" ") : rawLine);
+        Element lineElem;
+        if (!code.lang.empty() && !rawLine.empty()) {
+            // Apply syntax highlighting: highlightLine returns ANSI-embedded text,
+            // ansiToFtxuiElement converts it to properly colored ftxui Elements.
+            lineElem = ansiToFtxuiElement(highlightLine(rawLine, code.lang));
+        } else {
+            lineElem = ftxui::text(rawLine.empty() ? std::string(" ") : rawLine);
+        }
 
         lines.push_back(hbox({
             ftxui::text(numStr + " │ ") | dim | color(MdShadow),
