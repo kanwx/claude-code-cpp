@@ -130,10 +130,10 @@ struct AnsiStyle {
     static String toolFgColor(const String& toolName) {
         if (toolName == "Read" || toolName == "ReadTool") return "\033[32m";       // green
         if (toolName == "Write" || toolName == "WriteTool") return "\033[33m";     // yellow/orange
-        if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") return "\033[33m"; // warm
+        if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") return "\033[33m"; // warm
         if (toolName == "Bash" || toolName == "BashTool") return "\033[34m";       // blue
-        if (toolName == "Grep" || toolName == "GrepTool") return "\033[36m";       // cyan
-        if (toolName == "Glob" || toolName == "GlobTool") return "\033[36m";       // cyan
+        if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") return "\033[36m";       // cyan
+        if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") return "\033[36m";       // cyan
         if (toolName == "WebFetch" || toolName == "WebFetchTool") return "\033[35m"; // magenta
         if (toolName == "WebSearch" || toolName == "WebSearchTool") return "\033[35m"; // magenta
         if (toolName == "Agent" || toolName == "AgentTool") return "\033[35m";     // pink/magenta
@@ -146,10 +146,10 @@ struct AnsiStyle {
     static String toolBgColor(const String& toolName) {
         if (toolName == "Read" || toolName == "ReadTool") return "\033[48;2;20;60;20m";        // dark green
         if (toolName == "Write" || toolName == "WriteTool") return "\033[48;2;80;50;10m";      // dark orange
-        if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") return "\033[48;2;80;55;15m"; // dark warm
+        if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") return "\033[48;2;80;55;15m"; // dark warm
         if (toolName == "Bash" || toolName == "BashTool") return "\033[48;2;15;30;70m";        // dark blue
-        if (toolName == "Grep" || toolName == "GrepTool") return "\033[48;2;15;60;60m";        // dark cyan
-        if (toolName == "Glob" || toolName == "GlobTool") return "\033[48;2;15;60;60m";        // dark cyan
+        if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") return "\033[48;2;15;60;60m";        // dark cyan
+        if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") return "\033[48;2;15;60;60m";        // dark cyan
         if (toolName == "WebFetch" || toolName == "WebFetchTool") return "\033[48;2;60;20;60m"; // dark magenta
         if (toolName == "WebSearch" || toolName == "WebSearchTool") return "\033[48;2;60;20;60m"; // dark magenta
         if (toolName == "Agent" || toolName == "AgentTool") return "\033[48;2;70;20;50m";      // dark pink
@@ -162,10 +162,10 @@ struct AnsiStyle {
     static void toolFgRGB(const String& toolName, int& r, int& g, int& b) {
         if (toolName == "Read" || toolName == "ReadTool")           { r=80;  g=200; b=120; }
         else if (toolName == "Write" || toolName == "WriteTool")    { r=220; g=160; b=80;  }
-        else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") { r=220; g=150; b=80; }
+        else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") { r=220; g=150; b=80; }
         else if (toolName == "Bash" || toolName == "BashTool")      { r=100; g=160; b=220; }
-        else if (toolName == "Grep" || toolName == "GrepTool")      { r=80;  g=200; b=200; }
-        else if (toolName == "Glob" || toolName == "GlobTool")      { r=80;  g=200; b=200; }
+        else if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search")      { r=80;  g=200; b=200; }
+        else if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search")      { r=80;  g=200; b=200; }
         else if (toolName == "WebFetch" || toolName == "WebFetchTool")   { r=180; g=120; b=200; }
         else if (toolName == "WebSearch" || toolName == "WebSearchTool") { r=180; g=120; b=200; }
         else if (toolName == "Agent" || toolName == "AgentTool")    { r=220; g=110; b=160; }
@@ -178,10 +178,10 @@ struct AnsiStyle {
     static void toolBgRGB(const String& toolName, int& r, int& g, int& b) {
         if (toolName == "Read" || toolName == "ReadTool")           { r=20;  g=60;  b=20;  }
         else if (toolName == "Write" || toolName == "WriteTool")    { r=80;  g=50;  b=10;  }
-        else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") { r=80; g=55; b=15; }
+        else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") { r=80; g=55; b=15; }
         else if (toolName == "Bash" || toolName == "BashTool")      { r=15;  g=30;  b=70;  }
-        else if (toolName == "Grep" || toolName == "GrepTool")      { r=15;  g=60;  b=60;  }
-        else if (toolName == "Glob" || toolName == "GlobTool")      { r=15;  g=60;  b=60;  }
+        else if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search")      { r=15;  g=60;  b=60;  }
+        else if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search")      { r=15;  g=60;  b=60;  }
         else if (toolName == "WebFetch" || toolName == "WebFetchTool")   { r=60; g=20;  b=60;  }
         else if (toolName == "WebSearch" || toolName == "WebSearchTool") { r=60; g=20;  b=60;  }
         else if (toolName == "Agent" || toolName == "AgentTool")    { r=70;  g=20;  b=50;  }

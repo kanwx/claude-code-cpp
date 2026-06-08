@@ -155,7 +155,7 @@ std::string DisplayMessage::searchableText() const {
 
 bool isReadSearchTool(const String& toolName) {
     return toolName == "Read" || toolName == "Grep" || toolName == "Glob" ||
-           toolName == "Bash" ||
+           toolName == "Search" || toolName == "Bash" ||
            toolName == "GlobTool" || toolName == "GrepTool" || toolName == "FileReadTool" ||
            toolName == "BashTool";
 }

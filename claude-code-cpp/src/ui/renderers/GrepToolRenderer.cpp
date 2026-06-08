@@ -29,7 +29,7 @@ static std::string extractField(const std::string& json, const std::string& key)
 ftxui::Element makeGrepBadge() {
     auto fg = ftxui_colors::toolFgColor("Grep");
     auto bg = ftxui_colors::toolBgColor("Grep");
-    return ftxui::text(" Grep ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
+    return ftxui::text(" Search ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
 }
 
 int countLines(const std::string& result) {
@@ -86,7 +86,7 @@ std::string GrepToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
         : pattern;
     return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
-           AnsiStyle::BOLD + " Grep " + AnsiStyle::RESET + " " + desc;
+           AnsiStyle::BOLD + " Search " + AnsiStyle::RESET + " " + desc;
 }
 
 // ── Success result ──────────────────────────────────────────────────
@@ -244,7 +244,7 @@ Element GrepToolRenderer::renderToolRejected(const ToolUseBlock& tool,
 }
 
 std::string GrepToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Grep (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Search (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -259,7 +259,7 @@ Element GrepToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
 }
 
 std::string GrepToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Grep (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Search (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -291,7 +291,7 @@ Element GrepToolRenderer::renderToolQueued(const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
     return hbox({
         text("  ○ ") | dim | ftxui::color(ctx.theme.dimBorder),
-        text("Grep") | dim | ftxui::color(ctx.theme.muted),
+        text("Search") | dim | ftxui::color(ctx.theme.muted),
         text(" (queued)") | dim | ftxui::color(ctx.theme.dimBorder),
     });
 }
@@ -321,7 +321,7 @@ std::string GrepToolRenderer::getToolUseSummary(const ToolUseBlock& tool) {
 }
 
 std::string GrepToolRenderer::userFacingName(const ToolUseBlock& /*tool*/) {
-    return "Grep";
+    return "Search";
 }
 
 bool GrepToolRenderer::isResultTruncatable(const ToolResultBlock& result) const {

@@ -29,7 +29,7 @@ static std::string extractField(const std::string& json, const std::string& key)
 ftxui::Element makeGlobBadge() {
     auto fg = ftxui_colors::toolFgColor("Glob");
     auto bg = ftxui_colors::toolBgColor("Glob");
-    return ftxui::text(" Glob ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
+    return ftxui::text(" Search ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
 }
 
 int countFiles(const std::string& result) {
@@ -75,7 +75,7 @@ std::string GlobToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
         : pattern;
     return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
-           AnsiStyle::BOLD + " Glob " + AnsiStyle::RESET + " " + desc;
+           AnsiStyle::BOLD + " Search " + AnsiStyle::RESET + " " + desc;
 }
 
 // ── Success result ──────────────────────────────────────────────────
@@ -166,7 +166,7 @@ Element GlobToolRenderer::renderToolRejected(const ToolUseBlock& tool,
 }
 
 std::string GlobToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Glob (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Search (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -181,7 +181,7 @@ Element GlobToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
 }
 
 std::string GlobToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Glob (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Search (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -213,7 +213,7 @@ Element GlobToolRenderer::renderToolQueued(const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
     return hbox({
         text("  ○ ") | dim | ftxui::color(ctx.theme.dimBorder),
-        text("Glob") | dim | ftxui::color(ctx.theme.muted),
+        text("Search") | dim | ftxui::color(ctx.theme.muted),
         text(" (queued)") | dim | ftxui::color(ctx.theme.dimBorder),
     });
 }
@@ -243,7 +243,7 @@ std::string GlobToolRenderer::getToolUseSummary(const ToolUseBlock& tool) {
 }
 
 std::string GlobToolRenderer::userFacingName(const ToolUseBlock& /*tool*/) {
-    return "Glob";
+    return "Search";
 }
 
 bool GlobToolRenderer::isResultTruncatable(const ToolResultBlock& result) const {

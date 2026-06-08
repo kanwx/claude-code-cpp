@@ -29,7 +29,7 @@ static std::string extractField(const std::string& json, const std::string& key)
 ftxui::Element makeEditBadge() {
     auto fg = ftxui_colors::toolFgColor("Edit");
     auto bg = ftxui_colors::toolBgColor("Edit");
-    return ftxui::text(" Edit ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
+    return ftxui::text(" Update ") | ftxui::color(fg) | ftxui::bgcolor(bg) | ftxui::bold;
 }
 
 /// Count lines starting with '+' (excluding '+++' headers) and '-' (excluding '---' headers).
@@ -92,7 +92,7 @@ std::string EditToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
         : filePath;
     return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  " + AnsiStyle::RESET +
            AnsiStyle::toolBgColor(tool.toolName) + AnsiStyle::toolFgColor(tool.toolName) +
-           AnsiStyle::BOLD + " Edit " + AnsiStyle::RESET + " " + desc;
+           AnsiStyle::BOLD + " Update " + AnsiStyle::RESET + " " + desc;
 }
 
 // ── Success result ──────────────────────────────────────────────────
@@ -185,7 +185,7 @@ Element EditToolRenderer::renderToolRejected(const ToolUseBlock& tool,
 }
 
 std::string EditToolRenderer::renderToolRejectedAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Edit (rejected)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Update (rejected)" +
            AnsiStyle::RESET;
 }
 
@@ -200,7 +200,7 @@ Element EditToolRenderer::renderToolCanceled(const ToolUseBlock& tool,
 }
 
 std::string EditToolRenderer::renderToolCanceledAnsi(const ToolUseBlock& /*tool*/) {
-    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Edit (canceled)" +
+    return std::string(AnsiStyle::Semantic::TOOL_PREFIX) + "  ⎿  Update (canceled)" +
            AnsiStyle::RESET;
 }
 
@@ -232,7 +232,7 @@ Element EditToolRenderer::renderToolQueued(const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
     return hbox({
         text("  ○ ") | dim | ftxui::color(ctx.theme.dimBorder),
-        text("Edit") | dim | ftxui::color(ctx.theme.muted),
+        text("Update") | dim | ftxui::color(ctx.theme.muted),
         text(" (queued)") | dim | ftxui::color(ctx.theme.dimBorder),
     });
 }
@@ -262,7 +262,7 @@ std::string EditToolRenderer::getToolUseSummary(const ToolUseBlock& tool) {
 }
 
 std::string EditToolRenderer::userFacingName(const ToolUseBlock& /*tool*/) {
-    return "Edit";
+    return "Update";
 }
 
 bool EditToolRenderer::isResultTruncatable(const ToolResultBlock& result) const {

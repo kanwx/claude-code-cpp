@@ -12,8 +12,8 @@ enum class ToolCategory { Read, Search, List, Bash, Memory, Hook, MCP, Other };
 
 ToolCategory classifyTool(const String& toolName) {
     if (toolName == "Read" || toolName == "FileReadTool") return ToolCategory::Read;
-    if (toolName == "Grep" || toolName == "GrepTool") return ToolCategory::Search;
-    if (toolName == "Glob" || toolName == "GlobTool") return ToolCategory::Search;
+    if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") return ToolCategory::Search;
+    if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") return ToolCategory::Search;
     if (toolName == "LS" || toolName == "ListTool") return ToolCategory::List;
     if (toolName == "Bash" || toolName == "BashTool") return ToolCategory::Bash;
     if (toolName == "MemoryTool" || toolName.find("memory_") == 0) return ToolCategory::Memory;

@@ -84,7 +84,7 @@ ToolInputInfo parseToolInput(const String& toolName, const String& inputJson) {
         if (offset > 0) info.extra["offset"] = std::to_string(offset);
     } else if (toolName == "Write" || toolName == "WriteTool" || toolName == "FileWriteTool") {
         info.filePath = extractJsonString(inputJson, "file_path");
-    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") {
+    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") {
         info.filePath = extractJsonString(inputJson, "file_path");
         String oldText = extractJsonString(inputJson, "old_string");
         String newText = extractJsonString(inputJson, "new_string");
@@ -93,11 +93,11 @@ ToolInputInfo parseToolInput(const String& toolName, const String& inputJson) {
         bool replaceAll = inputJson.find("\"replace_all\":true") != String::npos ||
                           inputJson.find("\"replace_all\": true") != String::npos;
         if (replaceAll) info.extra["replace_all"] = "true";
-    } else if (toolName == "Grep" || toolName == "GrepTool") {
+    } else if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") {
         info.pattern = extractJsonString(inputJson, "pattern");
         if (info.pattern.empty()) info.pattern = extractJsonString(inputJson, "query");
         info.filePath = extractJsonString(inputJson, "path");
-    } else if (toolName == "Glob" || toolName == "GlobTool") {
+    } else if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") {
         info.pattern = extractJsonString(inputJson, "pattern");
         info.filePath = extractJsonString(inputJson, "path");
     } else if (toolName == "WebFetch" || toolName == "WebFetchTool") {
@@ -155,8 +155,16 @@ void ToolStatusRenderer::renderPrefix() {
 }
 
 void ToolStatusRenderer::renderBadge(const String& toolName) {
+    // Resolve user-facing name via ToolRegistry if available
+    String displayName = toolName;
+    if (toolRegistry_) {
+        auto* tool = toolRegistry_->findByName(toolName);
+        if (tool) {
+            displayName = tool->userFacingName();
+        }
+    }
     out_ << AnsiStyle::toolBgColor(toolName) << AnsiStyle::toolFgColor(toolName)
-         << " " << toolName << " " << AnsiStyle::RESET;
+         << " " << displayName << " " << AnsiStyle::RESET;
 }
 
 void ToolStatusRenderer::renderStart(const String& toolName, const String& args) {
@@ -184,20 +192,20 @@ void ToolStatusRenderer::renderStart(const String& toolName, const ToolInputInfo
         if (!info.filePath.empty()) {
             out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
         }
-    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") {
+    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") {
         if (!info.filePath.empty()) {
             out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
             if (info.extra.count("replace_all") && info.extra.at("replace_all") == "true") {
                 out_ << AnsiStyle::DIM << " (replace all)" << AnsiStyle::RESET;
             }
         }
-    } else if (toolName == "Grep" || toolName == "GrepTool") {
+    } else if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") {
         if (!info.pattern.empty()) {
             out_ << " " << AnsiStyle::DIM << "\"" << truncate(info.pattern, 30) << "\"";
             if (!info.filePath.empty()) out_ << " in " << info.filePath;
             out_ << AnsiStyle::RESET;
         }
-    } else if (toolName == "Glob" || toolName == "GlobTool") {
+    } else if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") {
         if (!info.pattern.empty()) {
             out_ << " " << AnsiStyle::DIM << truncate(info.pattern, 30);
             if (!info.filePath.empty()) out_ << " in " << info.filePath;
@@ -311,11 +319,11 @@ void ToolStatusRenderer::renderToolResult(const String& toolName, const String& 
         renderReadResult(result, info, isError);
     } else if (toolName == "Write" || toolName == "WriteTool" || toolName == "FileWriteTool") {
         renderWriteResult(result, info, isError);
-    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool") {
+    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") {
         renderEditResult(result, info, isError);
-    } else if (toolName == "Grep" || toolName == "GrepTool") {
+    } else if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") {
         renderGrepResult(result, info, isError, durationSeconds);
-    } else if (toolName == "Glob" || toolName == "GlobTool") {
+    } else if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") {
         renderGlobResult(result, info, isError);
     } else if (toolName == "WebFetch" || toolName == "WebFetchTool") {
         renderWebFetchResult(result, isError, durationSeconds);
@@ -461,7 +469,7 @@ void ToolStatusRenderer::renderEditResult(const String& result, const ToolInputI
     }
 
     out_ << toolStateDot(false, false, false, false, false);
-    out_ << " " << AnsiStyle::DIM << "Edit" << AnsiStyle::RESET;
+    out_ << " " << AnsiStyle::DIM << "Update" << AnsiStyle::RESET;
 
     if (!info.filePath.empty()) {
         out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
@@ -522,7 +530,7 @@ void ToolStatusRenderer::renderGrepResult(const String& result, const ToolInputI
     if (result.empty()) matchCount = 0;
 
     out_ << toolStateDot(false, false, false, false, false);
-    out_ << " " << AnsiStyle::DIM << "Grep" << AnsiStyle::RESET;
+    out_ << " " << AnsiStyle::DIM << "Search" << AnsiStyle::RESET;
 
     if (!info.pattern.empty()) {
         out_ << " " << AnsiStyle::DIM << "\"" << truncate(info.pattern, 20) << "\"" << AnsiStyle::RESET;
@@ -552,7 +560,7 @@ void ToolStatusRenderer::renderGlobResult(const String& result, const ToolInputI
     if (result.empty()) fileCount = 0;
 
     out_ << toolStateDot(false, false, false, false, false);
-    out_ << " " << AnsiStyle::DIM << "Glob" << AnsiStyle::RESET;
+    out_ << " " << AnsiStyle::DIM << "Search" << AnsiStyle::RESET;
 
     if (!info.pattern.empty()) {
         out_ << " " << AnsiStyle::DIM << truncate(info.pattern, 20) << AnsiStyle::RESET;

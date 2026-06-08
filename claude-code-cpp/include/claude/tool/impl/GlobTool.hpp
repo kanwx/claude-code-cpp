@@ -32,6 +32,8 @@ public:
 
     bool alwaysLoad() const override { return true; }
 
+    String userFacingName() const override { return "Search"; }
+
     bool isCollapsible() const override { return true; }
     bool isSearchTool() const override { return true; }
     ToolResultSummary renderToolResult(const String& result, bool isError,

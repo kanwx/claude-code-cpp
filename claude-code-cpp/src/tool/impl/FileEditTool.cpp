@@ -34,6 +34,10 @@ bool isSystemPath(const String& path) {
 
 } // anonymous namespace
 
+String FileEditTool::userFacingName() const {
+    return "Update";
+}
+
 PermissionResult FileEditTool::checkPermission(const Json& input, ToolContext& context) {
     String filePath = input.value("file_path", "");
     if (filePath.empty()) {

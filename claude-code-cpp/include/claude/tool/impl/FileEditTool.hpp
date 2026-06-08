@@ -49,6 +49,8 @@ public:
         return "✂️ Edit " + input.value("file_path", "");
     }
 
+    String userFacingName() const override;
+
     bool alwaysLoad() const override { return true; }
 
     ToolResultSummary renderToolResult(const String& result, bool isError,
