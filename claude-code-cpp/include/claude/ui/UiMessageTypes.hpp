@@ -20,6 +20,7 @@ struct ToolUseBlock {
     String toolId;      // Unique ID for tool_use/tool_result pairing
     String toolName;
     String input;       // JSON string of arguments
+    ToolProgress progress = ToolProgress::None;  // Streaming progress state
 };
 
 struct ToolResultBlock {
@@ -27,6 +28,7 @@ struct ToolResultBlock {
     String toolName;    // Denormalized for rendering convenience
     String result;
     bool isError = false;
+    String input;       // Denormalized from paired ToolUseBlock for renderer access
 };
 
 struct ThinkingBlock {
@@ -43,15 +45,23 @@ struct RedactedThinkingBlock {
 // into a single summary line in the UI.
 
 struct CollapsedToolGroup {
+    // TS-matched count fields (order matches summary output)
     int searchCount = 0;
     int readCount = 0;
     int listCount = 0;
     int bashCount = 0;
+    int mcpCallCount = 0;
+    int gitCount = 0;
+    int pushCount = 0;
+    int mergeCount = 0;
+    int prCount = 0;
+    int replCount = 0;
+    int commitCount = 0;
+    // Extended counts (not in TS summary, kept for future use)
     int writeCount = 0;
     int editCount = 0;
     int memoryCount = 0;
     int hookCount = 0;
-    int mcpCallCount = 0;
     std::vector<String> readFilePaths;
     std::vector<String> searchPatterns;
     String latestHint;
@@ -59,21 +69,55 @@ struct CollapsedToolGroup {
     std::vector<size_t> toolIndices;   // Indices into the message list for expanded view
     bool active = false;               // Still receiving tool calls
 
+    /// Helper: build a pluralized count phrase like "2 patterns" or "1 pattern"
+    static String countPhrase(int count, const String& singular, const String& plural = "") {
+        return std::to_string(count) + " " + (count != 1 ? (plural.empty() ? singular + "s" : plural) : singular);
+    }
+
     String summaryText() const {
+        // TS verb tense format:
+        //   Active:      ● Searching for 2 patterns, Reading 3 files, Running 1 bash command
+        //   Finalized:   • Searched for 2 patterns, Read 3 files, Ran 1 bash command
+        // Order: Git ops → Pushes → Merges → PR → Search → Read → List → REPL → MCP → Bash
         std::vector<String> parts;
-        if (readCount > 0) parts.push_back(active ? ("Reading " + std::to_string(readCount) + " file" + (readCount != 1 ? "s" : "")) : ("Read " + std::to_string(readCount) + " file" + (readCount != 1 ? "s" : "")));
-        if (searchCount > 0) parts.push_back(active ? ("Searching " + std::to_string(searchCount) + " pattern" + (searchCount != 1 ? "s" : "")) : ("Searched " + std::to_string(searchCount) + " pattern" + (searchCount != 1 ? "s" : "")));
-        if (listCount > 0) parts.push_back(active ? ("Listing " + std::to_string(listCount) + " director" + (listCount != 1 ? "ies" : "y")) : ("Listed " + std::to_string(listCount) + " director" + (listCount != 1 ? "ies" : "y")));
-        if (writeCount > 0) parts.push_back(active ? ("Writing " + std::to_string(writeCount) + " file" + (writeCount != 1 ? "s" : "")) : ("Wrote " + std::to_string(writeCount) + " file" + (writeCount != 1 ? "s" : "")));
-        if (editCount > 0) parts.push_back(active ? ("Editing " + std::to_string(editCount) + " file" + (editCount != 1 ? "s" : "")) : ("Edited " + std::to_string(editCount) + " file" + (editCount != 1 ? "s" : "")));
-        if (bashCount > 0) parts.push_back(active ? ("Running " + std::to_string(bashCount) + " command" + (bashCount != 1 ? "s" : "")) : ("Ran " + std::to_string(bashCount) + " command" + (bashCount != 1 ? "s" : "")));
-        if (mcpCallCount > 0) parts.push_back(active ? ("Calling " + std::to_string(mcpCallCount) + " MCP tool" + (mcpCallCount != 1 ? "s" : "")) : ("Called " + std::to_string(mcpCallCount) + " MCP tool" + (mcpCallCount != 1 ? "s" : "")));
-        if (memoryCount > 0) parts.push_back(active ? ("Saving " + std::to_string(memoryCount) + " memor" + (memoryCount != 1 ? "ies" : "y")) : ("Saved " + std::to_string(memoryCount) + " memor" + (memoryCount != 1 ? "ies" : "y")));
-        if (hookCount > 0) parts.push_back(active ? ("Running " + std::to_string(hookCount) + " hook" + (hookCount != 1 ? "s" : "")) : ("Ran " + std::to_string(hookCount) + " hook" + (hookCount != 1 ? "s" : "")));
+
+        // Git ops (generic git add/stash/etc.)
+        if (gitCount > 0) parts.push_back(
+            (active ? "Running " : "Ran ") + countPhrase(gitCount, "git op", "git ops"));
+        // Pushes
+        if (pushCount > 0) parts.push_back(
+            "Pushed to " + countPhrase(pushCount, "remote", "remotes"));
+        // Merges
+        if (mergeCount > 0) parts.push_back(
+            (active ? "Merging " : "Merged ") + countPhrase(mergeCount, "branch", "branches"));
+        // PR
+        if (prCount > 0) parts.push_back(
+            (active ? "Creating " : "Created ") + countPhrase(prCount, "PR"));
+        // Search: "Searching for" / "Searched for"
+        if (searchCount > 0) parts.push_back(
+            (active ? "Searching for " : "Searched for ") + countPhrase(searchCount, "pattern", "patterns"));
+        // Read: "Reading" / "Read"
+        if (readCount > 0) parts.push_back(
+            (active ? "Reading " : "Read ") + countPhrase(readCount, "file", "files"));
+        // List: "Listing" / "Listed"
+        if (listCount > 0) parts.push_back(
+            (active ? "Listing " : "Listed ") + countPhrase(listCount, "directory", "directories"));
+        // REPL: "REPL'ing" / "REPL'd"
+        if (replCount > 0) parts.push_back(
+            (active ? "REPL'ing " : "REPL'd ") + countPhrase(replCount, "time", "times"));
+        // MCP: "Querying" / "Queried"
+        if (mcpCallCount > 0) parts.push_back(
+            (active ? "Querying " : "Queried ") + countPhrase(mcpCallCount, "MCP tool", "MCP tools"));
+        // Bash: "Running" / "Ran" — uses "bash command" to match TS
+        if (bashCount > 0) parts.push_back(
+            (active ? "Running " : "Ran ") + countPhrase(bashCount, "bash command", "bash commands"));
+        // Commit: "Committed" for both active and finalized
+        if (commitCount > 0) parts.push_back(
+            "Committed " + countPhrase(commitCount, "change", "changes"));
+
         if (parts.empty()) return "[0 tool uses]";
         String result = parts[0];
         for (size_t i = 1; i < parts.size(); ++i) result += ", " + parts[i];
-        if (active) result += "...";
         return result;
     }
 };
@@ -259,7 +303,8 @@ struct DisplayMessage {
 
     static DisplayMessage userToolSuccess(const String& toolUseId,
                                            const String& toolName,
-                                           const String& result) {
+                                           const String& result,
+                                           const String& input = "") {
         DisplayMessage msg;
         msg.type = Type::UserToolSuccess;
         msg.messageId = MessageIdGenerator::next();
@@ -267,12 +312,14 @@ struct DisplayMessage {
         msg.toolResult.toolName = toolName;
         msg.toolResult.result = result;
         msg.toolResult.isError = false;
+        msg.toolResult.input = input;
         return msg;
     }
 
     static DisplayMessage userToolError(const String& toolUseId,
                                          const String& toolName,
-                                         const String& result) {
+                                         const String& result,
+                                         const String& input = "") {
         DisplayMessage msg;
         msg.type = Type::UserToolError;
         msg.messageId = MessageIdGenerator::next();
@@ -280,28 +327,33 @@ struct DisplayMessage {
         msg.toolResult.toolName = toolName;
         msg.toolResult.result = result;
         msg.toolResult.isError = true;
+        msg.toolResult.input = input;
         return msg;
     }
 
     static DisplayMessage userToolRejected(const String& toolUseId,
-                                            const String& toolName) {
+                                            const String& toolName,
+                                            const String& input = "") {
         DisplayMessage msg;
         msg.type = Type::UserToolRejected;
         msg.messageId = MessageIdGenerator::next();
         msg.toolResult.toolUseId = toolUseId;
         msg.toolResult.toolName = toolName;
         msg.toolResult.result = "Rejected";
+        msg.toolResult.input = input;
         return msg;
     }
 
     static DisplayMessage userToolCanceled(const String& toolUseId,
-                                            const String& toolName) {
+                                            const String& toolName,
+                                            const String& input = "") {
         DisplayMessage msg;
         msg.type = Type::UserToolCanceled;
         msg.messageId = MessageIdGenerator::next();
         msg.toolResult.toolUseId = toolUseId;
         msg.toolResult.toolName = toolName;
         msg.toolResult.result = "Canceled";
+        msg.toolResult.input = input;
         return msg;
     }
 

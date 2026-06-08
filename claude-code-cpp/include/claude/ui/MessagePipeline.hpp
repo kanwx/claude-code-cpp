@@ -112,6 +112,7 @@ public:
 private:
     bool verboseMode_ = false;
     bool needsRegroup_ = false;
+    bool isStreaming_ = false;   // True between StreamStart and StreamEnd
 
     /// Scan messages and collapse consecutive read/search tools
     void applyGrouping(std::vector<DisplayMessage>& messages);

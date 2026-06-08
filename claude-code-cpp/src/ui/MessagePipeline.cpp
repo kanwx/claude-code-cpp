@@ -8,16 +8,23 @@ namespace {
 
 using claude::String;
 
-enum class ToolCategory { Read, Search, List, Bash, Memory, Hook, MCP, Other };
+enum class ToolCategory { Read, Search, List, Bash, Memory, Hook, MCP,
+                           Git, Push, Merge, PR, REPL, Commit, Other };
 
 ToolCategory classifyTool(const String& toolName) {
     if (toolName == "Read" || toolName == "FileReadTool") return ToolCategory::Read;
     if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") return ToolCategory::Search;
-    if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") return ToolCategory::Search;
+    if (toolName == "Glob" || toolName == "GlobTool") return ToolCategory::Search;
     if (toolName == "LS" || toolName == "ListTool") return ToolCategory::List;
     if (toolName == "Bash" || toolName == "BashTool") return ToolCategory::Bash;
     if (toolName == "MemoryTool" || toolName.find("memory_") == 0) return ToolCategory::Memory;
     if (toolName.find("mcp__") == 0) return ToolCategory::MCP;
+    if (toolName == "Git" || toolName == "GitTool") return ToolCategory::Git;
+    if (toolName == "Push" || toolName == "PushTool") return ToolCategory::Push;
+    if (toolName == "Merge" || toolName == "MergeTool") return ToolCategory::Merge;
+    if (toolName == "PR" || toolName == "CreatePR" || toolName == "CreatePRTool") return ToolCategory::PR;
+    if (toolName == "REPL" || toolName == "REPLTool") return ToolCategory::REPL;
+    if (toolName == "Commit" || toolName == "CommitTool") return ToolCategory::Commit;
     return ToolCategory::Other;
 }
 
@@ -35,7 +42,11 @@ String extractJsonField(const String& json, const String& field) {
 /// Check if a tool category should be collapsed into a CollapsedReadSearch group.
 bool isCollapsibleCategory(ToolCategory cat) {
     return cat == ToolCategory::Read || cat == ToolCategory::Search ||
-           cat == ToolCategory::List || cat == ToolCategory::Memory;
+           cat == ToolCategory::List || cat == ToolCategory::Memory ||
+           cat == ToolCategory::Bash || cat == ToolCategory::MCP ||
+           cat == ToolCategory::Git || cat == ToolCategory::Push ||
+           cat == ToolCategory::Merge || cat == ToolCategory::PR ||
+           cat == ToolCategory::REPL || cat == ToolCategory::Commit;
 }
 
 bool isToolResultSubtype(claude::DisplayMessage::Type type) {
@@ -99,7 +110,7 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
             }
 
             auto msg = DisplayMessage::assistantToolUse(
-                ToolUseBlock{event.toolId, event.toolName, event.toolInput});
+                ToolUseBlock{event.toolId, event.toolName, event.toolInput, ToolProgress::Running});
             msg.messageId = MessageIdGenerator::next();
             messages.push_back(std::move(msg));
             pendingToolUseIndex_[event.toolId] = messages.size() - 1;
@@ -115,10 +126,11 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
                 streamingText_.clear();
             }
 
-            // Update the tool_use message with complete input
+            // Update the tool_use message with complete input and clear progress
             auto it = pendingToolUseIndex_.find(event.toolId);
             if (it != pendingToolUseIndex_.end() && it->second < messages.size()) {
                 messages[it->second].toolUse.input = event.toolInput;
+                messages[it->second].toolUse.progress = ToolProgress::None;
             }
             return true;
         }
@@ -134,11 +146,12 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
                 streamingText_.clear();
             }
 
-            // Find paired tool_use to get input for denormalization
+            // Find paired tool_use to get input for denormalization, clear progress
             String toolInput;
             auto it = pendingToolUseIndex_.find(event.toolId);
             if (it != pendingToolUseIndex_.end() && it->second < messages.size()) {
                 toolInput = messages[it->second].toolUse.input;
+                messages[it->second].toolUse.progress = ToolProgress::None;
             }
 
             DisplayMessage resultMsg;
@@ -268,8 +281,14 @@ bool NormalizeStage::processEvent(const StreamEvent& event,
 bool GroupStage::processEvent(const StreamEvent& event,
                               std::vector<DisplayMessage>& messages) {
     switch (event.type) {
-        case StreamEvent::Type::ToolResultReady:
+        case StreamEvent::Type::StreamStart:
+            isStreaming_ = true;
+            break;
         case StreamEvent::Type::StreamEnd:
+            isStreaming_ = false;
+            needsRegroup_ = true;
+            break;
+        case StreamEvent::Type::ToolResultReady:
         case StreamEvent::Type::ToolChunkReady:
             needsRegroup_ = true;
             break;
@@ -341,7 +360,7 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
         if (messages[i].type == DisplayMessage::Type::AssistantToolUse &&
             isCollapsibleCategory(classifyTool(messages[i].toolUse.toolName))) {
             CollapsedToolGroup group;
-            group.active = false;
+            group.active = isStreaming_;
             std::vector<DisplayMessage> groupMsgs;
             size_t groupStart = i;
 
@@ -392,6 +411,24 @@ void GroupStage::applyGrouping(std::vector<DisplayMessage>& messages) {
                             break;
                         case ToolCategory::Hook:
                             group.hookCount++;
+                            break;
+                        case ToolCategory::Git:
+                            group.gitCount++;
+                            break;
+                        case ToolCategory::Push:
+                            group.pushCount++;
+                            break;
+                        case ToolCategory::Merge:
+                            group.mergeCount++;
+                            break;
+                        case ToolCategory::PR:
+                            group.prCount++;
+                            break;
+                        case ToolCategory::REPL:
+                            group.replCount++;
+                            break;
+                        case ToolCategory::Commit:
+                            group.commitCount++;
                             break;
                         case ToolCategory::Other:
                             break;
