@@ -4,7 +4,6 @@
 #include <claude/ui/FtxuiMarkdown.hpp>
 #include "../FtxuiColors.hpp"
 #include <ftxui/dom/elements.hpp>
-#include <sstream>
 
 namespace claude::ui {
 
