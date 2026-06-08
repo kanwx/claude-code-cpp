@@ -93,22 +93,27 @@ Element LspToolRenderer::renderToolResult(const ToolResultBlock& result,
     std::string label = operation.empty() ? tool.toolName : operation;
     if (!symbol.empty()) label += " " + symbol;
 
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact: operation + symbol + brief result
         auto brief = truncateResult(result.result);
         return hbox({
             text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(brief) | ftxui::color(ctx.theme.success),
+            text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: label + full result
+    // Verbose/expanded: label + full result + collapse hint
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
             text(label) | ftxui::color(ctx.theme.muted) | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

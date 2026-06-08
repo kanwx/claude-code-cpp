@@ -82,17 +82,18 @@ std::string ReadToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
 Element ReadToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
-    if (!ctx.verbose) {
-        // Compact: "Read {N} lines" (N bold)
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
+        // Compact: "Read {N} lines [Ctrl+O to expand]" (N bold)
         auto lines = countLines(result.result);
         return hbox({
             text("  ⎿  ") | dim,
             text("Read ") | dim,
             text(std::to_string(lines)) | bold,
             text(" lines") | dim,
+            text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: "Read {N} lines" + full content
+    // Verbose/expanded: "Read {N} lines" + full content + collapse hint
     auto lines = countLines(result.result);
     return vbox({
         hbox({
@@ -102,6 +103,10 @@ Element ReadToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(" lines") | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

@@ -80,17 +80,18 @@ Element WriteToolRenderer::renderToolResult(const ToolResultBlock& result,
     auto label = filePath.empty() ? tool.toolName : filePath;
     auto lines = countLines(result.result);
 
-    if (!ctx.verbose) {
-        // Compact: "Wrote {N} lines to {path}" (N bold, path bold)
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
+        // Compact: "Wrote {N} lines to {path} [Ctrl+O to expand]" (N bold, path bold)
         return hbox({
             text("  ⎿  ") | dim,
             text("Wrote ") | dim,
             text(std::to_string(lines)) | bold,
             text(" lines to ") | dim,
             text(label) | bold,
+            text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: summary + content
+    // Verbose/expanded: summary + content + collapse hint
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
@@ -100,6 +101,10 @@ Element WriteToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(label) | bold,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

@@ -108,7 +108,7 @@ Element GrepToolRenderer::renderToolResult(const ToolResultBlock& result,
         });
     }
 
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact formats based on output_mode
         if (outputMode == "files_with_matches") {
             auto files = countFileNames(result.result);
@@ -142,7 +142,7 @@ Element GrepToolRenderer::renderToolResult(const ToolResultBlock& result,
             });
         }
     }
-    // Verbose: summary + full output
+    // Verbose/expanded: summary + full output + collapse hint
     if (outputMode == "files_with_matches") {
         auto files = countFileNames(result.result);
         return vbox({
@@ -153,6 +153,10 @@ Element GrepToolRenderer::renderToolResult(const ToolResultBlock& result,
                 text(" files") | dim,
             }),
             text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+            hbox({
+                text("  ⎿  ") | dim,
+                text("[Ctrl+O to collapse]") | dim,
+            }),
         });
     } else if (outputMode == "count") {
         auto files = countFileNames(result.result);
@@ -166,6 +170,10 @@ Element GrepToolRenderer::renderToolResult(const ToolResultBlock& result,
                 text(" files") | dim,
             }),
             text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+            hbox({
+                text("  ⎿  ") | dim,
+                text("[Ctrl+O to collapse]") | dim,
+            }),
         });
     } else {
         return vbox({
@@ -176,6 +184,10 @@ Element GrepToolRenderer::renderToolResult(const ToolResultBlock& result,
                 text(" lines") | dim,
             }),
             text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+            hbox({
+                text("  ⎿  ") | dim,
+                text("[Ctrl+O to collapse]") | dim,
+            }),
         });
     }
 }

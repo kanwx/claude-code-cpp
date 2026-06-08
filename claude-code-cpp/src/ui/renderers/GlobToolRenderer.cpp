@@ -93,7 +93,7 @@ Element GlobToolRenderer::renderToolResult(const ToolResultBlock& result,
         });
     }
 
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact: "Found {N} files [Ctrl+O to expand]" (N bold)
         return hbox({
             text("  ⎿  ") | dim,
@@ -103,7 +103,7 @@ Element GlobToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: "Found {N} files" + file list
+    // Verbose/expanded: "Found {N} files" + file list + collapse hint
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
@@ -112,6 +112,10 @@ Element GlobToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(" files") | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

@@ -45,6 +45,12 @@ struct AppLayoutState {
     int tickCounter = 0;
     // Verbose tools toggle
     bool verboseTools = false;
+    // Collapsible tool result focus tracking
+    // Index into the list of collapsible tool results in the message list.
+    // -1 means no collapsible result is focused.
+    int collapsibleFocusIndex = -1;
+    // Total count of collapsible tool results in the current message list
+    int collapsibleCount = 0;
     // Last completion input (for cycling detection)
     std::string lastCompletionInput;
     // Text selection state (Shift+drag)

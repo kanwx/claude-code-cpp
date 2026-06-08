@@ -89,15 +89,16 @@ Element WebSearchToolRenderer::renderToolResult(const ToolResultBlock& result,
     auto resultCount = countSearchResults(result.result);
     std::string resultStr = std::to_string(resultCount) + " results";
 
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact: query + result count
         return hbox({
             text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(resultStr) | ftxui::color(ctx.theme.success),
+            text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: query, result count, and results
+    // Verbose/expanded: query, result count, and results + collapse hint
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
@@ -105,6 +106,10 @@ Element WebSearchToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(resultStr) | ftxui::color(ctx.theme.success),
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

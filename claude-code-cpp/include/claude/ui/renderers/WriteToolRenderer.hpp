@@ -36,7 +36,7 @@ public:
         const RenderContext& ctx) override;
     std::string getToolUseSummary(const ToolUseBlock& tool) override;
     std::string userFacingName(const ToolUseBlock& tool) override;
-    bool isCollapsible() const override { return false; }
+    bool isCollapsible() const override { return true; }
     bool isResultTruncatable(const ToolResultBlock& result) const override;
 };
 

@@ -18,7 +18,7 @@ ftxui::Element CollapsedReadSearchComponent::OnRender() {
         text("  ⎿ ") | color(MacSky),
         text(summary) | color(MacSky),
         text(g.active ? "" : " ") | dim,
-        text("(ctrl+o to expand)") | dim | color(MacShadow),
+        text("[Ctrl+O to expand]") | dim | color(MacShadow),
     });
 }
 

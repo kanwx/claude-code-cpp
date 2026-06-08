@@ -43,7 +43,7 @@ Element DefaultToolRenderer::renderToolResult(const ToolResultBlock& result,
                                                const ToolUseBlock& tool,
                                                const RenderContext& ctx) {
     // Compact one-line summary in non-verbose mode
-    if (!ctx.verbose && result.result.size() < 200) {
+    if (!ctx.verbose && !ctx.toolResultExpanded && result.result.size() < 200) {
         return hbox({
             text("  ⎿  ") | dim,
             text(result.result) | ftxui::color(ctx.theme.muted),

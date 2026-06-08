@@ -91,7 +91,7 @@ Element AgentToolRenderer::renderToolResult(const ToolResultBlock& result,
     auto description = extractField(tool.input, "description");
     auto label = description.empty() ? tool.toolName : truncateDesc(description);
 
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact: sub-agent result summary (first line)
         auto firstNl = result.result.find('\n');
         std::string summary = (firstNl == std::string::npos)

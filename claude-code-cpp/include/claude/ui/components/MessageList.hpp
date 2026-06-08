@@ -14,9 +14,11 @@ ftxui::Component MessageListComponent(
 
 /// Internal: render message list as a single Element.
 /// Used by both MessageListComponent and ContentAreaComponent.
+/// @param collapsibleFocusIndex  Index of the focused collapsible tool result (-1 = none)
 ftxui::Element RenderMessageList(
     const std::vector<DisplayMessage>* messages,
-    const RenderContext* ctx);
+    const RenderContext* ctx,
+    int collapsibleFocusIndex = -1);
 
 } // namespace claude::ui
 

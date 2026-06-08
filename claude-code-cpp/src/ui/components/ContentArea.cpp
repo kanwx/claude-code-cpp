@@ -35,7 +35,7 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
 
         // Message list — dispatches to per-type components
         if (msgs && !msgs->empty()) {
-            contentEls.push_back(RenderMessageList(msgs, ctxPtr));
+            contentEls.push_back(RenderMessageList(msgs, ctxPtr, -1));
         }
 
         // Streaming text — live assistant text with blinking cursor

@@ -81,7 +81,7 @@ std::string BashToolRenderer::renderToolUseAnsi(const ToolUseBlock& tool) {
 Element BashToolRenderer::renderToolResult(const ToolResultBlock& result,
                                             const ToolUseBlock& tool,
                                             const RenderContext& ctx) {
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact: "Done" (dim) if no output, first line otherwise
         auto line = firstLine(result.result);
         if (line.empty()) {

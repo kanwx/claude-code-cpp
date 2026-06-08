@@ -3,6 +3,7 @@
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/ui/ThinkingFilter.hpp"
 #include "claude/ui/components/AppLayout.hpp"
+#include "claude/ui/ToolRendererRegistry.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
@@ -102,6 +103,33 @@ void FtxuiRepl::syncLayoutState() {
 
     // Verbose tools
     ls.verboseTools = verboseTools_;
+
+    // Collapsible tool result focus tracking
+    // Count collapsible tool results and track which message is focused
+    ls.collapsibleCount = 0;
+    int focusSeq = 0;
+    for (const auto& m : messages_) {
+        auto isToolResult = (m.type == DisplayMessage::Type::UserToolResult ||
+                             m.type == DisplayMessage::Type::UserToolSuccess ||
+                             m.type == DisplayMessage::Type::UserToolError);
+        if (isToolResult) {
+            auto* renderer = ui::ToolRendererRegistry::instance().getRenderer(m.toolResult.toolName);
+            if (renderer && renderer->isCollapsible()) {
+                if (ls.collapsibleFocusIndex == focusSeq) {
+                    // This is the focused collapsible result
+                }
+                focusSeq++;
+                ls.collapsibleCount++;
+            }
+        }
+    }
+    // Clamp focus index
+    if (ls.collapsibleCount > 0) {
+        if (ls.collapsibleFocusIndex < 0) ls.collapsibleFocusIndex = 0;
+        if (ls.collapsibleFocusIndex >= ls.collapsibleCount) ls.collapsibleFocusIndex = ls.collapsibleCount - 1;
+    } else {
+        ls.collapsibleFocusIndex = -1;
+    }
 
     // Text selection
     ls.selectionActive = selectionActive_;
@@ -525,17 +553,63 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             return true;
         }
 
-        // Ctrl+O: toggle expanded tool view
+        // Ctrl+O: toggle expand/collapse for focused collapsible tool result
+        // or toggle all thinking/collapsed-groups if no tool result focused.
+        // Only active in non-streaming state (matching TS behavior).
         if (event == Event::CtrlO) {
-            r->verboseTools_ = !r->verboseTools_;
-            ls->verboseTools = r->verboseTools_;
-            for (auto& m : r->messages_) {
-                if (m.type == DisplayMessage::Type::AssistantThinking ||
-                    m.type == DisplayMessage::Type::CollapsedReadSearch) {
-                    m.expanded = r->verboseTools_;
+            if (r->isStreaming_) {
+                return true;  // consume but ignore during streaming
+            }
+            if (ls->collapsibleCount > 0 && ls->collapsibleFocusIndex >= 0) {
+                // Find the focused collapsible tool result and toggle it
+                int focusSeq = 0;
+                for (auto& m : r->messages_) {
+                    auto isToolResult = (m.type == DisplayMessage::Type::UserToolResult ||
+                                         m.type == DisplayMessage::Type::UserToolSuccess ||
+                                         m.type == DisplayMessage::Type::UserToolError);
+                    if (isToolResult) {
+                        auto* renderer = ui::ToolRendererRegistry::instance().getRenderer(m.toolResult.toolName);
+                        if (renderer && renderer->isCollapsible()) {
+                            if (focusSeq == ls->collapsibleFocusIndex) {
+                                m.expanded = !m.expanded;
+                                break;
+                            }
+                            focusSeq++;
+                        }
+                    }
+                }
+            } else {
+                // Fallback: toggle all thinking/collapsed-groups (original behavior)
+                r->verboseTools_ = !r->verboseTools_;
+                ls->verboseTools = r->verboseTools_;
+                for (auto& m : r->messages_) {
+                    if (m.type == DisplayMessage::Type::AssistantThinking ||
+                        m.type == DisplayMessage::Type::CollapsedReadSearch) {
+                        m.expanded = r->verboseTools_;
+                    }
                 }
             }
             return true;
+        }
+
+        // [ and ] keys: cycle focus between collapsible tool results
+        // Only active in non-streaming state
+        if (!r->isStreaming_ && ls->collapsibleCount > 0) {
+            if (event == Event::Character('[') && r->messages_.empty() == false) {
+                // Only handle '[' when input is empty to avoid interfering with typing
+                if (ls->input.text.empty()) {
+                    ls->collapsibleFocusIndex = (ls->collapsibleFocusIndex <= 0)
+                        ? ls->collapsibleCount - 1
+                        : ls->collapsibleFocusIndex - 1;
+                    return true;
+                }
+            }
+            if (event == Event::Character(']') && r->messages_.empty() == false) {
+                if (ls->input.text.empty()) {
+                    ls->collapsibleFocusIndex = (ls->collapsibleFocusIndex + 1) % ls->collapsibleCount;
+                    return true;
+                }
+            }
         }
 
         // Permission prompt — MUST be checked BEFORE isStreaming_

@@ -20,13 +20,29 @@
 #include <claude/ui/components/UserToolRejectedComponent.hpp>
 #include <claude/ui/components/UserToolCanceledComponent.hpp>
 #include <claude/ui/components/AssistantRedactedThinkingComponent.hpp>
+#include <claude/ui/ToolRendererRegistry.hpp>
 
 #include <ftxui/dom/elements.hpp>
 
 namespace claude::ui {
 
+namespace {
+
+/// Check if a tool result message type is collapsible based on its renderer.
+bool isCollapsibleResult(const DisplayMessage& msg) {
+    auto isToolResult = (msg.type == DisplayMessage::Type::UserToolResult ||
+                         msg.type == DisplayMessage::Type::UserToolSuccess ||
+                         msg.type == DisplayMessage::Type::UserToolError);
+    if (!isToolResult) return false;
+    auto* renderer = ToolRendererRegistry::instance().getRenderer(msg.toolResult.toolName);
+    return renderer && renderer->isCollapsible();
+}
+
+} // anonymous namespace
+
 ftxui::Element RenderMessageList(const std::vector<DisplayMessage>* messages,
-                                  const RenderContext* ctx) {
+                                  const RenderContext* ctx,
+                                  int collapsibleFocusIndex) {
     using namespace ftxui;
     Elements els;
 
@@ -38,74 +54,94 @@ ftxui::Element RenderMessageList(const std::vector<DisplayMessage>* messages,
                t == DisplayMessage::Type::UserToolCanceled;
     };
 
-    auto renderSingle = [ctx](const DisplayMessage& msg) -> Element {
+    // Pre-compute the collapsible sequence index for each message.
+    // This allows us to know which collapsible result is focused.
+    // We'll pass the focus info through RenderContext::collapsibleFocusIndex.
+    int collapsibleSeq = 0;
+
+    auto renderSingle = [ctx, collapsibleFocusIndex, &collapsibleSeq, isToolResultType](const DisplayMessage& msg) -> Element {
+        // Make a mutable copy of the context for this message
+        RenderContext localCtx = *ctx;
+
+        // For tool results, set expand/focus state in the context
+        if (isToolResultType(msg.type)) {
+            // Set per-message expand state
+            localCtx.toolResultExpanded = msg.expanded;
+            // Set focus state for collapsible results
+            if (isCollapsibleResult(msg)) {
+                localCtx.collapsibleFocusIndex = (collapsibleSeq == collapsibleFocusIndex)
+                    ? collapsibleSeq : -1;
+                collapsibleSeq++;
+            }
+        }
+
         switch (msg.type) {
             case DisplayMessage::Type::UserPrompt: {
-                UserPromptComponent c(msg, *ctx);
+                UserPromptComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::AssistantText: {
-                AssistantTextComponent c(msg, *ctx);
+                AssistantTextComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::AssistantThinking: {
-                AssistantThinkingComponent c(msg, *ctx);
+                AssistantThinkingComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::AssistantToolUse: {
-                ToolUseComponent c(msg, *ctx);
+                ToolUseComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::UserToolResult: {
-                ToolResultComponent c(msg, *ctx);
+                ToolResultComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::SystemInfo: {
-                SystemInfoComponent c(msg, *ctx);
+                SystemInfoComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::SystemError: {
-                SystemErrorComponent c(msg, *ctx);
+                SystemErrorComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::TurnDuration: {
-                TurnDurationComponent c(msg, *ctx);
+                TurnDurationComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::CompactBoundary: {
-                CompactBoundaryComponent c(msg, *ctx);
+                CompactBoundaryComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::CollapsedReadSearch: {
-                CollapsedReadSearchComponent c(msg, *ctx);
+                CollapsedReadSearchComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::GroupedToolUse: {
-                GroupedToolUseComponent c(msg, *ctx);
+                GroupedToolUseComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::AgentProgress: {
-                AgentProgressComponent c(msg, *ctx);
+                AgentProgressComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::UserToolSuccess: {
-                UserToolSuccessComponent c(msg, *ctx);
+                UserToolSuccessComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::UserToolError: {
-                UserToolErrorComponent c(msg, *ctx);
+                UserToolErrorComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::UserToolRejected: {
-                UserToolRejectedComponent c(msg, *ctx);
+                UserToolRejectedComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::UserToolCanceled: {
-                UserToolCanceledComponent c(msg, *ctx);
+                UserToolCanceledComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::AssistantRedactedThinking: {
-                AssistantRedactedThinkingComponent c(msg, *ctx);
+                AssistantRedactedThinkingComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::PermissionPrompt:

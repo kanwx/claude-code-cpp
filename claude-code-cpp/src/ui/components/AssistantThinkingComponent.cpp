@@ -32,6 +32,12 @@ ftxui::Element AssistantThinkingComponent::OnRender() {
             }));
         }
 
+        // Collapse hint at the bottom
+        lines.push_back(hbox({
+            text("  ") | dim,
+            text("[Ctrl+O to collapse]") | dim | color(thinkingColor),
+        }));
+
         return vbox(std::move(lines));
     } else {
         // Collapsed: "∴ Thinking  (Ctrl+O to expand)" — all dim, capital O

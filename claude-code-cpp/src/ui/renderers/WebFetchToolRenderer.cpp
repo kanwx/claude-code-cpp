@@ -77,15 +77,16 @@ Element WebFetchToolRenderer::renderToolResult(const ToolResultBlock& result,
     auto contentLen = result.result.size();
     std::string lenStr = std::to_string(contentLen) + " chars";
 
-    if (!ctx.verbose) {
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
         // Compact: URL + content length
         return hbox({
             text("  ⎿  ") | dim,
             text(label + " ") | ftxui::color(ctx.theme.muted),
             text(lenStr) | ftxui::color(ctx.theme.success),
+            text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: URL, content length, and fetched content
+    // Verbose/expanded: URL, content length, and fetched content + collapse hint
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
@@ -93,6 +94,10 @@ Element WebFetchToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(lenStr) | ftxui::color(ctx.theme.success),
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

@@ -103,8 +103,8 @@ Element EditToolRenderer::renderToolResult(const ToolResultBlock& result,
     int added = 0, removed = 0;
     countDiffLines(result.result, added, removed);
 
-    if (!ctx.verbose) {
-        // Compact: "Added {N} lines, Removed {M} lines" (N/M bold)
+    if (!ctx.verbose && !ctx.toolResultExpanded) {
+        // Compact: "Added {N} lines, Removed {M} lines [Ctrl+O to expand]" (N/M bold)
         return hbox({
             text("  ⎿  ") | dim,
             text("Added ") | dim,
@@ -112,9 +112,10 @@ Element EditToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(" lines, Removed ") | dim,
             text(std::to_string(removed)) | bold,
             text(" lines") | dim,
+            text(" [Ctrl+O to expand]") | dim,
         });
     }
-    // Verbose: summary + actual diff lines
+    // Verbose/expanded: summary + actual diff lines + collapse hint
     return vbox({
         hbox({
             text("  ⎿  ") | dim,
@@ -125,6 +126,10 @@ Element EditToolRenderer::renderToolResult(const ToolResultBlock& result,
             text(" lines") | dim,
         }),
         text(result.result) | ftxui::color(ctx.theme.muted) | dim,
+        hbox({
+            text("  ⎿  ") | dim,
+            text("[Ctrl+O to collapse]") | dim,
+        }),
     });
 }
 

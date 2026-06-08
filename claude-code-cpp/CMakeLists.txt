@@ -494,6 +494,7 @@ set(UI_SOURCES
     src/ui/components/CollapsedReadSearchComponent.cpp
     src/ui/components/GroupedToolUseComponent.cpp
     src/ui/components/AgentProgressComponent.cpp
+    src/ui/components/CollapsibleToolResult.cpp
     src/ui/components/StreamingText.cpp
     src/ui/components/ThinkingIndicator.cpp
     src/ui/components/MessageList.cpp

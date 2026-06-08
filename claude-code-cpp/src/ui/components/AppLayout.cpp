@@ -304,7 +304,7 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
 
             // Message list
             if (s->content.messages && !s->content.messages->empty()) {
-                contentEls.push_back(RenderMessageList(s->content.messages, ctxPtr));
+                contentEls.push_back(RenderMessageList(s->content.messages, ctxPtr, s->collapsibleFocusIndex));
             }
 
             // Streaming text — use cached elements from StreamingRenderer when available
