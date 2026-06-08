@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <regex>
 #include <algorithm>
+#include <sstream>
 
 namespace claude {
 
@@ -216,13 +217,31 @@ bool GlobTool::matchesGlob(const String& name, const String& pattern) {
     return true;
 }
 
+namespace {
+
+int parseFileCount(const String& result) {
+    std::regex countRegex(R"(Found (\d+) matching file)");
+    std::smatch match;
+    if (std::regex_search(result, match, countRegex)) {
+        return std::stoi(match[1].str());
+    }
+    // Fallback: count non-empty, non-header lines
+    int count = 0;
+    std::istringstream stream(result);
+    String line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.find("matching") == String::npos) count++;
+    }
+    return count;
+}
+
+} // anonymous namespace
+
 ToolResultSummary GlobTool::renderToolResult(const String& result, bool isError,
                                   bool isCancelled, bool isRejected) const {
     if (isError) return ToolResultSummary::error("Error searching files");
     if (isCancelled || isRejected) return ToolResultSummary{};
-    int files = 0;
-    for (char c : result) { if (c == '\n') files++; }
-    if (!result.empty()) files++;
+    int files = parseFileCount(result);
     if (files == 0) return ToolResultSummary::dim("No files found");
     return ToolResultSummary::success("Found " + std::to_string(files) + " files", /*bold=*/true, "", "[Ctrl+O to expand]");
 }

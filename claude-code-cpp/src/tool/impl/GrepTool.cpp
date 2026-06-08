@@ -235,13 +235,33 @@ String GrepTool::executeWithRegex(const Json& input, ToolContext& context) {
     return output.str();
 }
 
+namespace {
+
+int parseMatchCount(const String& result) {
+    // Try to extract count from "Found N matching lines" or "Found N matching files"
+    std::regex countRegex(R"(Found (\d+) matching)");
+    std::smatch match;
+    if (std::regex_search(result, match, countRegex)) {
+        return std::stoi(match[1].str());
+    }
+    // Fallback: count non-empty lines that look like grep output (filepath:line:content)
+    int count = 0;
+    std::istringstream stream(result);
+    String line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.find("matching") == String::npos
+            && line.find("Files matching") == String::npos) count++;
+    }
+    return count;
+}
+
+} // anonymous namespace
+
 ToolResultSummary GrepTool::renderToolResult(const String& result, bool isError,
                                   bool isCancelled, bool isRejected) const {
     if (isError) return ToolResultSummary::error("Error searching files");
     if (isCancelled || isRejected) return ToolResultSummary{};
-    int matches = 0;
-    for (char c : result) { if (c == '\n') matches++; }
-    if (!result.empty()) matches++;
+    int matches = parseMatchCount(result);
     if (matches == 0) return ToolResultSummary::dim("No matches found");
     return ToolResultSummary::success("Found " + std::to_string(matches) + " matches", /*bold=*/true, "", "[Ctrl+O to expand]");
 }

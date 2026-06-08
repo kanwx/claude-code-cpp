@@ -4,6 +4,8 @@
 #include <claude/lsp/LspManager.hpp>
 #include <fstream>
 #include <cstdlib>
+#include <regex>
+#include <sstream>
 
 namespace claude {
 
@@ -61,6 +63,29 @@ bool isHiddenFileInHome(const String& path) {
     }
 
     return true;
+}
+
+int parseWriteLineCount(const String& result) {
+    std::regex lineRegex(R"((\d+) lines)");
+    std::smatch match;
+    if (std::regex_search(result, match, lineRegex)) {
+        return std::stoi(match[1].str());
+    }
+    return 0;
+}
+
+String parseWritePath(const String& result) {
+    // Extract path from "Successfully wrote to /path/to/file (...)"
+    auto pos = result.find("Successfully wrote to ");
+    if (pos != String::npos) {
+        String after = result.substr(pos + 22); // len of "Successfully wrote to "
+        auto endPos = after.find(" (");
+        if (endPos != String::npos) return after.substr(0, endPos);
+        // Fallback: trim trailing whitespace/newline
+        while (!after.empty() && (after.back() == '\n' || after.back() == ' ')) after.pop_back();
+        return after;
+    }
+    return "";
 }
 
 } // anonymous namespace
@@ -130,8 +155,13 @@ String FileWriteTool::execute(const Json& input, ToolContext& context) {
     auto& lspManager = lsp::LspManager::instance();
     lspManager.notifyDidChange(path, content);
 
+    // Count lines in content
+    int lineCount = 0;
+    for (char c : content) { if (c == '\n') lineCount++; }
+    if (!content.empty() && content.back() != '\n') lineCount++;
+
     return "Successfully wrote to " + path.string() +
-           " (" + std::to_string(content.size()) + " bytes)";
+           " (" + std::to_string(content.size()) + " bytes, " + std::to_string(lineCount) + " lines)";
 }
 
 ToolResultSummary FileWriteTool::renderToolResult(const String& result, bool isError,
@@ -139,7 +169,9 @@ ToolResultSummary FileWriteTool::renderToolResult(const String& result, bool isE
     if (isError) return ToolResultSummary::error("Error writing file");
     if (isCancelled) return ToolResultSummary::dim("Interrupted" "\xe2\x88\x99" " What should Claude do instead?");
     if (isRejected) return ToolResultSummary::dim("Tool use rejected");
-    return ToolResultSummary::success("File written");
+    int lines = parseWriteLineCount(result);
+    String writePath = parseWritePath(result);
+    return ToolResultSummary::success("Wrote " + std::to_string(lines) + " lines", /*bold=*/true, "to " + writePath);
 }
 
 } // namespace claude

@@ -273,7 +273,7 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
         }()
     ) : ("Running " + call.name + "...");
     if (onToolStart_) {
-        onToolStart_(call.name, description);
+        onToolStart_(call.name, description, call.id);
     }
 
     // Parse input
@@ -433,6 +433,11 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
         result = *postCtx.result;
     }
 
+    // ====== Post-execution cancellation check ======
+    // If cancellation was requested while the tool was executing,
+    // mark the response as cancelled so the UI renders it correctly.
+    bool wasCancelled = cancelled_.load(std::memory_order_relaxed);
+
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - startTime);
 
@@ -440,7 +445,7 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     if (onToolComplete_) onToolComplete_(call.name, !isError);
 
     return {
-        ToolResponse{call.id, call.name, result, isError},
+        ToolResponse{call.id, call.name, result, isError, wasCancelled, false},
         duration, parallel, order
     };
 }

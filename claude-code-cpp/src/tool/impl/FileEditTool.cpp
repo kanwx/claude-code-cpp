@@ -219,6 +219,24 @@ String FileEditTool::execute(const Json& input, ToolContext& context) {
     return result.str();
 }
 
+namespace {
+
+std::pair<int,int> parseEditStats(const String& result) {
+    int added = 0, removed = 0;
+    std::istringstream stream(result);
+    String line;
+    while (std::getline(stream, line)) {
+        if (line.size() > 1 && line[0] == '+') added++;
+        else if (line.size() > 1 && line[0] == '-') removed++;
+    }
+    // Subtract file header lines (+++ and ---)
+    if (added > 0) added--;
+    if (removed > 0) removed--;
+    return {std::max(0, added), std::max(0, removed)};
+}
+
+} // anonymous namespace
+
 ToolResultSummary FileEditTool::renderToolResult(const String& result, bool isError,
                                       bool isCancelled, bool isRejected) const {
     if (isError) {
@@ -228,7 +246,8 @@ ToolResultSummary FileEditTool::renderToolResult(const String& result, bool isEr
     }
     if (isCancelled) return ToolResultSummary::dim("Interrupted" "\xe2\x88\x99" " What should Claude do instead?");
     if (isRejected) return ToolResultSummary::dim("Tool use rejected");
-    return ToolResultSummary::success("Edit applied");
+    auto [added, removed] = parseEditStats(result);
+    return ToolResultSummary::success("Added " + std::to_string(added) + " lines, Removed " + std::to_string(removed) + " lines", /*bold=*/true);
 }
 
 } // namespace claude
