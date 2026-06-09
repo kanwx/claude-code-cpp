@@ -1,12 +1,22 @@
 #pragma once
 
 #include "../core/Types.hpp"
+#include "../core/ApiTypes.hpp"
 #include <chrono>
 #include <vector>
 #include <string>
 #include <atomic>
 
 namespace claude {
+
+// ========== Tool Progress States ==========
+enum class ToolProgress {
+    None,
+    Running,        // "Running…"
+    Waiting,        // "  ⎿  Waiting…"
+    Permission,     // "Waiting for permission…"
+    Classifier,     // "Auto classifier checking…"
+};
 
 // ========== Content Block Types ==========
 // Mirror the Anthropic API content block structure.

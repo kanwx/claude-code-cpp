@@ -27,7 +27,7 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
     // Store parent permission callback in ToolContext for sub-agent delegation
     impl_->toolContext.set("parentPermissionCallback", permCb);
 
-    executor.setOnToolStart([this](const String& toolName, const String& description) {
+    executor.setOnToolStart([this](const String& toolName, const String& description, const String& toolId) {
         notifyToolEvent(ToolEventPhase::Start, toolName, description);
     });
 
