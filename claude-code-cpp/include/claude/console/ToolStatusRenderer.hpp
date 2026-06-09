@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/Types.hpp"
+#include "../core/ApiTypes.hpp"
 
 #include <ostream>
 #include <vector>
@@ -38,6 +39,11 @@ public:
 
     /// Render tool invocation start with pre-parsed input info
     void renderStart(const String& toolName, const ToolInputInfo& info);
+
+    /// Render in-progress tool invocation with progress state text
+    /// Shows animated dot + badge + activity + dim progress text (e.g. "Running…")
+    void renderProgress(const String& toolName, const String& args,
+                        ToolProgress progress, bool shouldAnimateDot = true);
 
     /// Render tool invocation end (result)
     void renderEnd(const String& toolName, const String& result,

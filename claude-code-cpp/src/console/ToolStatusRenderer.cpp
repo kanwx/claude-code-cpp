@@ -231,6 +231,83 @@ void ToolStatusRenderer::renderStart(const String& toolName, const ToolInputInfo
     out_ << "\n";
 }
 
+void ToolStatusRenderer::renderProgress(const String& toolName, const String& args,
+                                         ToolProgress progress, bool shouldAnimateDot) {
+    auto info = parseToolInput(toolName, args);
+
+    // Animated in-progress dot
+    out_ << toolStateDot(/*isInProgress=*/true, /*isError=*/false,
+                         /*isCancelled=*/false, /*isRejected=*/false,
+                         shouldAnimateDot);
+    out_ << " ";
+    renderBadge(toolName);
+
+    // Tool-specific input summary (same as renderStart)
+    if (toolName == "Bash" || toolName == "BashTool") {
+        if (!info.command.empty()) {
+            out_ << " " << AnsiStyle::DIM << truncate(info.command, 60) << AnsiStyle::RESET;
+        }
+    } else if (toolName == "Read" || toolName == "ReadTool" || toolName == "FileReadTool") {
+        if (!info.filePath.empty()) {
+            out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
+            if (info.extra.count("offset")) {
+                out_ << AnsiStyle::DIM << " (line " << info.extra.at("offset") << ")" << AnsiStyle::RESET;
+            }
+        }
+    } else if (toolName == "Write" || toolName == "WriteTool" || toolName == "FileWriteTool") {
+        if (!info.filePath.empty()) {
+            out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
+        }
+    } else if (toolName == "Edit" || toolName == "EditTool" || toolName == "FileEditTool" || toolName == "Update") {
+        if (!info.filePath.empty()) {
+            out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
+        }
+    } else if (toolName == "Grep" || toolName == "GrepTool" || toolName == "Search") {
+        if (!info.pattern.empty()) {
+            out_ << " " << AnsiStyle::DIM << "\"" << truncate(info.pattern, 30) << "\"";
+            if (!info.filePath.empty()) out_ << " in " << info.filePath;
+            out_ << AnsiStyle::RESET;
+        }
+    } else if (toolName == "Glob" || toolName == "GlobTool" || toolName == "Search") {
+        if (!info.pattern.empty()) {
+            out_ << " " << AnsiStyle::DIM << truncate(info.pattern, 30);
+            if (!info.filePath.empty()) out_ << " in " << info.filePath;
+            out_ << AnsiStyle::RESET;
+        }
+    } else if (toolName == "WebFetch" || toolName == "WebFetchTool") {
+        if (!info.filePath.empty()) {
+            out_ << " " << AnsiStyle::DIM << truncate(info.filePath, 50) << AnsiStyle::RESET;
+        }
+    } else if (toolName == "WebSearch" || toolName == "WebSearchTool") {
+        if (!info.pattern.empty()) {
+            out_ << " " << AnsiStyle::DIM << "\"" << truncate(info.pattern, 40) << "\"" << AnsiStyle::RESET;
+        }
+    } else if (toolName == "Agent" || toolName == "AgentTool") {
+        if (!info.description.empty()) {
+            out_ << " " << AnsiStyle::DIM << truncate(info.description, 60) << AnsiStyle::RESET;
+        }
+    } else if (toolName == "LSP" || toolName == "LSPTool") {
+        if (!info.filePath.empty()) {
+            out_ << " " << AnsiStyle::DIM << info.filePath << AnsiStyle::RESET;
+        }
+    }
+
+    // Progress text
+    const char* progStr = "";
+    switch (progress) {
+        case ToolProgress::Running:    progStr = "Running\xe2\x80\xa6"; break;      // …
+        case ToolProgress::Waiting:    progStr = "  \xe2\x8e\xbf  Waiting\xe2\x80\xa6"; break;  // ⎿
+        case ToolProgress::Permission: progStr = "Waiting for permission\xe2\x80\xa6"; break;
+        case ToolProgress::Classifier: progStr = "Auto classifier checking\xe2\x80\xa6"; break;
+        default: break;
+    }
+    if (progStr[0] != '\0') {
+        out_ << " " << AnsiStyle::DIM << progStr << AnsiStyle::RESET;
+    }
+
+    out_ << "\n";
+}
+
 void ToolStatusRenderer::renderEnd(const String& toolName, const String& result,
                                     bool isError, double durationSeconds,
                                     bool isCancelled, bool isRejected) {
