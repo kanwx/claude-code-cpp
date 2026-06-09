@@ -211,3 +211,19 @@ catch_discover_tests(test_permission_renderer)
 add_executable(test_thinking_filter test_thinking_filter.cpp)
 target_link_libraries(test_thinking_filter PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_thinking_filter)
+
+add_executable(test_TypedStreamEvent stream/test_TypedStreamEvent.cpp)
+target_link_libraries(test_TypedStreamEvent PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_TypedStreamEvent)
+
+add_executable(test_StreamToolEvent stream/test_StreamToolEvent.cpp)
+target_link_libraries(test_StreamToolEvent PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_StreamToolEvent)
+
+add_executable(test_ContentBlock stream/test_ContentBlock.cpp)
+target_link_libraries(test_ContentBlock PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ContentBlock)
+
+add_executable(test_DisplayEvent stream/test_DisplayEvent.cpp)
+target_link_libraries(test_DisplayEvent PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_DisplayEvent)
