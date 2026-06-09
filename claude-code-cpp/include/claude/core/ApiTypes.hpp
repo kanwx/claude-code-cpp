@@ -76,6 +76,15 @@ enum class ToolEventPhase {
     End     // Tool execution ended
 };
 
+/// Tool progress state for streaming display
+enum class ToolProgress {
+    None,
+    Running,        // "Running…"
+    Waiting,        // "  ⎿  Waiting…"
+    Permission,     // "Waiting for permission…"
+    Classifier,     // "Auto classifier checking…"
+};
+
 // ========== Structs ==========
 
 /// Cache control
@@ -164,6 +173,7 @@ struct ToolUseRenderData {
     bool isCancelled = false;
     bool isRejected = false;
     bool isInProgress = false;
+    ToolResultSummary displaySummary;  // structured summary for collapsed rendering
 };
 
 /// Message
@@ -268,6 +278,29 @@ struct ToolEvent {
     String toolId;                     // ID for pairing tool_use with tool_result
     bool isError = false;              // Whether the result is an error
     std::optional<String> error;
+};
+
+/// Stream tool event type (for new 5-layer pipeline)
+enum class StreamToolEventType {
+    Queued,
+    Started,
+    Progress,
+    Completed,
+    Error,
+    Rejected,
+    Cancelled,
+};
+
+/// Stream tool event (for new 5-layer pipeline)
+struct StreamToolEvent {
+    StreamToolEventType type = StreamToolEventType::Queued;
+    String toolCallId;
+    String toolName;
+    String activity;
+    ToolResultSummary summary;
+    String rawResultPath;
+    bool isParallel = false;
+    double durationMs = 0;
 };
 
 /// Model settings
