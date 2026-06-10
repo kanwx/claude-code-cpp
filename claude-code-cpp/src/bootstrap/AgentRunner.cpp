@@ -22,8 +22,6 @@
 #include <claude/mcp/McpManager.hpp>
 #include <claude/mcp/McpClient.hpp>
 #include <claude/services/OAuthService.hpp>
-#include <claude/stream/StreamBuffer.hpp>
-#include <claude/stream/AnswerPostProcessor.hpp>
 
 #ifdef HAS_FTXUI
 #include <claude/ui/FtxuiRepl.hpp>
