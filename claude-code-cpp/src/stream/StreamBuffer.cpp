@@ -13,20 +13,37 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
             break;
 
         case StreamEventType::TextDelta: {
-            // Strip any <thinking>...</thinking> tags that may appear in text
-            // (defensive — Anthropic API uses separate thinking_delta events,
-            // but some models may include raw tags in text)
+            // Strip thinking tags from text output.
+            // Some models (GLM, etc.) include <thinking>/<think> tags in regular
+            // text instead of using separate thinking events. We must remove these.
             String cleanText = event.text;
-            static const String openTag = "<thinking>";
-            static const String closeTag = "</thinking>";
-            size_t pos;
-            while ((pos = cleanText.find(openTag)) != String::npos) {
-                size_t endPos = cleanText.find(closeTag, pos);
+            if (inThinkingTag_) {
+                // Currently inside a thinking block — discard until close tag
+                auto endPos = cleanText.find("</thinking>");
+                if (endPos == String::npos) endPos = cleanText.find("</think>");
                 if (endPos != String::npos) {
-                    cleanText.erase(pos, endPos + closeTag.size() - pos);
+                    inThinkingTag_ = false;
+                    cleanText = cleanText.substr(endPos + (cleanText[endPos+2] == 't' ? 12 : 8));
                 } else {
-                    cleanText.erase(pos);
-                    break;
+                    break;  // Still inside thinking, discard entire chunk
+                }
+            }
+            // Check for opening thinking tags
+            for (const auto& tag : {"<thinking>", "<think>"}) {
+                size_t tagLen = strlen(tag);
+                size_t pos;
+                while ((pos = cleanText.find(tag)) != String::npos) {
+                    const char* closeTag = (tagLen == 11) ? "</thinking>" : "</think>";
+                    size_t closeLen = (tagLen == 11) ? 12 : 8;
+                    auto endPos = cleanText.find(closeTag, pos + tagLen);
+                    if (endPos != String::npos) {
+                        cleanText.erase(pos, endPos + closeLen - pos);
+                    } else {
+                        // Unclosed tag — discard from opening tag onward
+                        cleanText.erase(pos);
+                        inThinkingTag_ = true;
+                        break;
+                    }
                 }
             }
             if (cleanText.empty()) break;

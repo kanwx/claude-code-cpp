@@ -3,6 +3,7 @@
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/core/UnifiedTaskStore.hpp"
 #include "claude/ui/FtxuiMarkdown.hpp"
+#include "claude/ui/ThinkingFilter.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
@@ -115,7 +116,6 @@ void FtxuiRepl::appendStreamText(const String& chunk) {
 void FtxuiRepl::finishStream(bool success, const String& error) {
     if (!screen_) return;
 
-    // Calculate duration
     int durationMs = 0;
     if (startTime_.time_since_epoch().count() > 0) {
         durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -123,32 +123,42 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
     }
 
     screen_->Post([this, success, err = String(error), durationMs]() {
-        // New pipeline: AnswerEnd already committed streaming text via handleDisplayEvent.
-        // If for some reason AnswerEnd didn't fire (e.g. error case), commit any remaining text.
-        if (!streamingText_.empty()) {
-            auto msg = DisplayMessage::assistantText(std::move(streamingText_));
-            msg.messageId = MessageIdGenerator::next();
-            messages_.push_back(std::move(msg));
-            streamingText_.clear();
-            streamingRenderer_.reset();
+        // Clear streaming text — pipeline commits it via StreamEnd
+        streamingText_.clear();
+        streamingRenderer_.reset();
+
+        // If AnswerEnd didn't fire (error case), commit via pipeline's StreamEnd
+        if (isStreaming_) {
+            StreamEvent endEvent;
+            endEvent.type = StreamEvent::Type::StreamEnd;
+            endEvent.success = success;
+            endEvent.text = err;
+            if (messagePipeline_.processEvent(endEvent)) {
+                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+            }
         }
 
-        if (!success && !err.empty()) {
-            auto msg = DisplayMessage::systemError(err);
-            msg.messageId = MessageIdGenerator::next();
-            messages_.push_back(std::move(msg));
+        if (!success && !err.empty() && !isStreaming_) {
+            StreamEvent errEvent;
+            errEvent.type = StreamEvent::Type::ErrorMessage;
+            errEvent.text = err;
+            if (messagePipeline_.processEvent(errEvent)) {
+                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+            }
         }
 
         isStreaming_ = false;
         isThinking_ = false;
 
-        // Turn duration message (>2s)
         if (success && durationMs > 2000) {
             int seconds = durationMs / 1000;
             String tmsg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-            auto msg = DisplayMessage::turnDuration(std::move(tmsg));
-            msg.messageId = MessageIdGenerator::next();
-            messages_.push_back(std::move(msg));
+            StreamEvent durEvent;
+            durEvent.type = StreamEvent::Type::TurnDuration;
+            durEvent.text = std::move(tmsg);
+            if (messagePipeline_.processEvent(durEvent)) {
+                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+            }
         }
 
         stopRefreshThread();

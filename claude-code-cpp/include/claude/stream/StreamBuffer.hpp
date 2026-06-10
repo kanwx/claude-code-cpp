@@ -47,6 +47,7 @@ private:
 
     // Internal state
     bool answerStarted_ = false;
+    bool inThinkingTag_ = false;  // Track unclosed thinking tags across chunks<arg_key>text</arg_key><arg_value> tags across chunks
     std::chrono::steady_clock::time_point answerStartTime_;
 
     void emit(DisplayEvent&& event);

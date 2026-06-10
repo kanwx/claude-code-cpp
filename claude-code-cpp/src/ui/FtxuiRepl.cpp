@@ -23,127 +23,139 @@ using namespace ftxui_colors;
 void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
     if (!screen_) return;
 
-    // Post all event handling to the UI thread for thread safety.
-    // The agent thread calls this from the background; all UI state
-    // (messages_, streamingText_, etc.) must only be modified on the UI thread.
+    // Convert DisplayEvent → StreamEvent and route through MessagePipeline.
+    // TextPartial is the only event handled directly (for smooth per-token rendering).
+    // All structural events (tool use/result, thinking, stream start/end) go through
+    // the pipeline's Normalize → Group → Collapse stages for correct pairing,
+    // collapsing, and rendering.
     screen_->Post([this, ev = std::move(event)]() mutable {
         switch (ev.type) {
-            case DisplayEventType::TextParagraph: {
-                // Paragraph boundary — commit accumulated streaming text into messages_
-                if (!streamingText_.empty()) {
-                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
-                    msg.messageId = MessageIdGenerator::next();
-                    messages_.push_back(std::move(msg));
-                    streamingText_.clear();
-                    streamingRenderer_.reset();
-                }
-                break;
-            }
             case DisplayEventType::TextPartial:
-                // Per-token streaming — append to streamingText_ for smooth incremental rendering
+                // Per-token streaming — update streamingText_ directly for smooth rendering.
+                // The pipeline also accumulates this via TextDelta; sync happens on flush.
                 streamingText_ += ev.text;
                 streamingRenderer_.append(ev.text);
                 if (isThinking_) isThinking_ = false;
                 lastOutputTime_ = std::chrono::steady_clock::now();
-                break;
-            case DisplayEventType::ThinkingBlock:
-                isThinking_ = true;
-                thinkingSummary_ = ev.thinkingText.substr(
-                    0, ev.thinkingText.find('\n') != String::npos
-                        ? ev.thinkingText.find('\n') : 60);
-                break;
-            case DisplayEventType::ToolProgress: {
-                // Commit any pending streaming text before tool progress
-                if (!streamingText_.empty()) {
-                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
-                    msg.messageId = MessageIdGenerator::next();
-                    messages_.push_back(std::move(msg));
-                    streamingText_.clear();
-                    streamingRenderer_.reset();
-                }
-                auto msg = DisplayMessage::assistantToolUse(ToolUseBlock{
-                    .toolId = ev.toolCallId,
-                    .toolName = ev.toolName,
-                    .input = "",
-                    .progress = ToolProgress::Running
-                });
-                msg.messageId = MessageIdGenerator::next();
-                messages_.push_back(std::move(msg));
-                break;
-            }
-            case DisplayEventType::ToolResult: {
-                // Commit any pending streaming text before tool result
-                if (!streamingText_.empty()) {
-                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
-                    msg.messageId = MessageIdGenerator::next();
-                    messages_.push_back(std::move(msg));
-                    streamingText_.clear();
-                    streamingRenderer_.reset();
-                }
-                auto msg = DisplayMessage::userToolSuccess(
-                    ev.toolCallId, ev.toolName, ev.summary.primaryText);
-                msg.messageId = MessageIdGenerator::next();
-                messages_.push_back(std::move(msg));
-                break;
-            }
-            case DisplayEventType::ToolGroup: {
-                // Commit any pending streaming text before tool group
-                if (!streamingText_.empty()) {
-                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
-                    msg.messageId = MessageIdGenerator::next();
-                    messages_.push_back(std::move(msg));
-                    streamingText_.clear();
-                    streamingRenderer_.reset();
-                }
-                CollapsedToolGroup group;
-                group.active = false;
-                group.readCount = 1;
-                group.readFilePaths.push_back(ev.summary.primaryText);
-                group.latestHint = ev.summary.primaryText;
-                auto msg = DisplayMessage::collapsedReadSearch(std::move(group));
-                msg.messageId = MessageIdGenerator::next();
-                messages_.push_back(std::move(msg));
-                break;
-            }
-            case DisplayEventType::SystemNotice:
-                layoutState_.status.systemNotice = std::move(ev.noticeText);
-                break;
-            case DisplayEventType::Tombstone:
-                for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-                    if ((it->type == DisplayMessage::Type::UserToolResult ||
-                         it->type == DisplayMessage::Type::UserToolSuccess) &&
-                        it->toolResult.toolUseId == ev.toolCallId) {
-                        messages_.erase(std::prev(it.base()));
-                        break;
+                // Also feed to pipeline so it tracks the text internally
+                {
+                    StreamEvent deltaEvent;
+                    deltaEvent.type = StreamEvent::Type::TextDelta;
+                    deltaEvent.text = ev.text;
+                    if (messagePipeline_.processEvent(deltaEvent)) {
+                        messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
                     }
                 }
                 break;
+
+            case DisplayEventType::TextParagraph:
+                // Paragraph boundary — flush streaming text to pipeline
+                streamingText_.clear();
+                streamingRenderer_.reset();
+                // Pipeline already accumulated TextDelta events, so no extra action needed.
+                // The text will be committed as AssistantText on the next structural event
+                // (ToolUseStart, StreamEnd, etc.)
+                break;
+
+            case DisplayEventType::ThinkingBlock: {
+                StreamEvent thinkEvent;
+                thinkEvent.type = StreamEvent::Type::ThinkingDelta;
+                thinkEvent.text = std::move(ev.thinkingText);
+                if (messagePipeline_.processEvent(thinkEvent)) {
+                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                }
+                break;
+            }
+
+            case DisplayEventType::ToolProgress: {
+                // Clear streaming text before tool event (pipeline does this too, but
+                // we must also clear the UI streaming buffer to avoid double-display)
+                streamingText_.clear();
+                streamingRenderer_.reset();
+                StreamEvent toolEvent;
+                toolEvent.type = StreamEvent::Type::ToolUseStart;
+                toolEvent.toolId = std::move(ev.toolCallId);
+                toolEvent.toolName = std::move(ev.toolName);
+                toolEvent.toolInput = "";
+                if (messagePipeline_.processEvent(toolEvent)) {
+                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                }
+                break;
+            }
+
+            case DisplayEventType::ToolResult: {
+                streamingText_.clear();
+                streamingRenderer_.reset();
+                StreamEvent resultEvent;
+                resultEvent.type = StreamEvent::Type::ToolResultReady;
+                resultEvent.toolId = std::move(ev.toolCallId);
+                resultEvent.toolName = std::move(ev.toolName);
+                resultEvent.toolResult = ev.summary.primaryText;
+                resultEvent.toolIsError = ev.summary.isError;
+                if (messagePipeline_.processEvent(resultEvent)) {
+                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                }
+                break;
+            }
+
+            case DisplayEventType::ToolGroup: {
+                // ToolGroup from AnswerPostProcessor — no direct pipeline equivalent.
+                // Ignore; pipeline's GroupStage handles collapsing internally.
+                break;
+            }
+
+            case DisplayEventType::SystemNotice:
+                layoutState_.status.systemNotice = std::move(ev.noticeText);
+                break;
+
+            case DisplayEventType::Tombstone: {
+                StreamEvent tombEvent;
+                tombEvent.type = StreamEvent::Type::Tombstone;
+                if (messagePipeline_.processEvent(tombEvent)) {
+                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                }
+                break;
+            }
+
             case DisplayEventType::Error:
                 addErrorMessage(ev.text);
                 break;
+
             case DisplayEventType::AnswerStart:
                 isStreaming_ = true;
                 isThinking_ = true;
                 streamingText_.clear();
                 streamingRenderer_.reset();
+                {
+                    StreamEvent startEvent;
+                    startEvent.type = StreamEvent::Type::StreamStart;
+                    if (messagePipeline_.processEvent(startEvent)) {
+                        messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                    }
+                }
                 startRefreshThread();
                 break;
-            case DisplayEventType::AnswerEnd:
-                // Commit any remaining streaming text into messages_
-                if (!streamingText_.empty()) {
-                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
-                    msg.messageId = MessageIdGenerator::next();
-                    messages_.push_back(std::move(msg));
-                    streamingText_.clear();
-                    streamingRenderer_.reset();
+
+            case DisplayEventType::AnswerEnd: {
+                // Clear streaming text — pipeline commits it as AssistantText via StreamEnd
+                streamingText_.clear();
+                streamingRenderer_.reset();
+                StreamEvent endEvent;
+                endEvent.type = StreamEvent::Type::StreamEnd;
+                endEvent.success = true;
+                if (messagePipeline_.processEvent(endEvent)) {
+                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
                 }
                 isStreaming_ = false;
                 isThinking_ = false;
                 stopRefreshThread();
                 break;
+            }
+
             case DisplayEventType::TurnMetadata:
                 newPipelineStatusMetadata_ = std::move(ev.metadata);
                 break;
+
             default:
                 break;
         }

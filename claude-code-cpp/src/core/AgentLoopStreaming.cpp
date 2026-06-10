@@ -204,6 +204,14 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 tc.name = contentBlock.contains("name") && contentBlock["name"].is_string() ? contentBlock["name"].get<String>() : "";
                 tc.arguments = "";
                 anthropicToolCalls[index] = tc;
+                // Emit ToolUseStart for new pipeline
+                if (typedEventCb) {
+                    typedEventCb(TypedStreamEvent{
+                        .type = StreamEventType::ToolUseStart,
+                        .blockIndex = index,
+                        .toolCall = ToolCall{.id = tc.id, .name = tc.name, .arguments = ""}
+                    });
+                }
             } else if (blockType == "text") {
                 currentTextBlockIndex = index;
             } else if (blockType == "thinking") {
@@ -243,15 +251,31 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                             return impl_->onStreamStart;
                         }();
                         if (cb) cb();
+                        // Emit StreamStart for new pipeline
+                        if (typedEventCb) {
+                            typedEventCb(TypedStreamEvent{.type = StreamEventType::StreamStart});
+                        }
                     }
                     textBuffer += text;
                     if (onToken) onToken(text);
+                    // Emit TextDelta for new pipeline
+                    if (typedEventCb) {
+                        typedEventCb(TypedStreamEvent{.type = StreamEventType::TextDelta, .text = text});
+                    }
                 }
             } else if (deltaType == "input_json_delta") {
                 String partialJson = delta.contains("partial_json") && delta["partial_json"].is_string()
                     ? delta["partial_json"].get<String>() : "";
                 if (anthropicToolCalls.contains(index)) {
                     anthropicToolCalls[index].arguments += partialJson;
+                }
+                // Emit InputJsonDelta for new pipeline
+                if (typedEventCb) {
+                    typedEventCb(TypedStreamEvent{
+                        .type = StreamEventType::InputJsonDelta,
+                        .text = partialJson,
+                        .blockIndex = index
+                    });
                 }
             } else if (deltaType == "thinking_delta") {
                 String thinking = delta.contains("thinking") && delta["thinking"].is_string()
@@ -261,11 +285,13 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     if (thinkingBlocks.contains(index)) {
                         thinkingBlocks[index].first += thinking;
                     }
-                    auto cb = [&] {
-                        std::lock_guard lock2(impl_->callbackMutex);
-                        return impl_->onThinking;
-                    }();
-                    if (cb) cb(thinking);
+                    // Emit ThinkingDelta for new pipeline
+                    if (typedEventCb) {
+                        typedEventCb(TypedStreamEvent{
+                            .type = StreamEventType::ThinkingDelta,
+                            .text = thinking
+                        });
+                    }
                 }
             } else if (deltaType == "signature_delta") {
                 String sig = delta.contains("signature") && delta["signature"].is_string()
@@ -317,9 +343,15 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
 
             // Redacted thinking blocks are preserved in redactedThinkingBlocks for
             // API conversation continuity but must NOT be displayed to the user.
-            // Skip UI callbacks for redacted_thinking entirely.
             if (blockType == "redacted_thinking") {
                 // Already captured in redactedThinkingBlocks at content_block_start
+            } else if (blockType == "thinking") {
+                // Emit ThinkingBlockStop for new pipeline
+                if (typedEventCb) {
+                    typedEventCb(TypedStreamEvent{
+                        .type = StreamEventType::ThinkingBlockStop
+                    });
+                }
             } else {
                 auto cb = [&] {
                     std::lock_guard lock2(impl_->callbackMutex);
@@ -347,12 +379,31 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             }
         }
 
-        // message_delta event - capture stop_reason
+        // message_delta event - capture stop_reason, emit ToolUseComplete and StreamEnd
         if (type == "message_delta") {
             if (chunk.contains("delta") && chunk["delta"].is_object()) {
                 const auto& delta = chunk["delta"];
                 if (delta.contains("stop_reason") && delta["stop_reason"].is_string()) {
                     stopReason = delta["stop_reason"].get<String>();
+
+                    // Emit ToolUseComplete for any pending Anthropic tool calls
+                    if (typedEventCb && stopReason == "tool_use") {
+                        for (auto& [idx, tc] : anthropicToolCalls) {
+                            typedEventCb(TypedStreamEvent{
+                                .type = StreamEventType::ToolUseComplete,
+                                .blockIndex = idx,
+                                .toolCall = tc
+                            });
+                        }
+                    }
+
+                    // Emit StreamEnd for new pipeline
+                    if (typedEventCb) {
+                        typedEventCb(TypedStreamEvent{
+                            .type = StreamEventType::StreamEnd,
+                            .stopReason = stopReason
+                        });
+                    }
                 }
             }
             // Also capture final usage from message_delta
