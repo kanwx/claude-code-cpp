@@ -3,6 +3,7 @@
 #include "ApiClient.hpp"
 #include "RateLimitTracker.hpp"
 #include "../core/Types.hpp"
+#include "../stream/TypedStreamEvent.hpp"
 #include "../utils/CircuitBreaker.hpp"
 #include "../core/Cache.hpp"
 #include <httplib.h>
@@ -162,6 +163,17 @@ public:
         const Json& tools,
         std::function<void(const Json& chunk)> onChunk = nullptr
     );
+
+    // ========== Typed streaming ==========
+
+    /// Callback invoked for each typed stream event during streaming.
+    /// Set this before calling streamWithState() to receive TypedStreamEvent
+    /// emission alongside the raw onChunk callback.
+    std::function<void(TypedStreamEvent&&)> onTypedEvent;
+
+    /// Convert a non-streaming API response into a sequence of TypedStreamEvents.
+    /// Used by the fallback path to emit typed events from a non-streaming response.
+    static std::vector<TypedStreamEvent> convertNonStreamingResponse(const Json& response);
 
     // ========== 扩展功能 ==========
 

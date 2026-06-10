@@ -2,6 +2,7 @@
 #include <claude/api/ApiDebugTracker.hpp>
 #include <claude/api/BetaHeaders.hpp>
 #include <claude/api/MessageRepair.hpp>
+#include <claude/stream/TypedStreamEvent.hpp>
 #include <claude/utils/ConnectionPool.hpp>
 #include <claude/utils/SseParser.hpp>
 #include <claude/utils/SystemPrompt.hpp>
@@ -965,6 +966,144 @@ Result<StreamingState> AnthropicClient::streamWithState(
             // Process into streaming state
             processSseEvent(*json, state);
 
+            // Emit typed stream events if callback is registered
+            if (onTypedEvent) {
+                String sseType = json->is_object() ? json->value("type", "") : "";
+
+                if (sseType == "message_start") {
+                    onTypedEvent(TypedStreamEvent{
+                        .type = StreamEventType::StreamStart,
+                        .usage = UsageInfo{
+                            .promptTokens = state.usage.promptTokens,
+                            .completionTokens = state.usage.completionTokens,
+                            .cacheReadTokens = state.usage.cacheReadTokens,
+                            .cacheCreationTokens = state.usage.cacheCreationTokens
+                        }
+                    });
+                }
+                else if (sseType == "content_block_start") {
+                    String blockType = state.currentBlockType;
+                    if (blockType == "tool_use" || blockType == "server_tool_use") {
+                        onTypedEvent(TypedStreamEvent{
+                            .type = StreamEventType::ToolUseStart,
+                            .blockIndex = state.currentBlockIndex,
+                            .toolCall = ToolCall{
+                                .id = state.currentBlockId,
+                                .name = state.currentBlockName,
+                                .arguments = {}
+                            }
+                        });
+                    }
+                    else if (blockType == "text") {
+                        onTypedEvent(TypedStreamEvent{
+                            .type = StreamEventType::TextBlockStart,
+                            .blockIndex = state.currentBlockIndex
+                        });
+                    }
+                    else if (blockType == "thinking") {
+                        onTypedEvent(TypedStreamEvent{
+                            .type = StreamEventType::ThinkingBlockStart,
+                            .blockIndex = state.currentBlockIndex
+                        });
+                    }
+                }
+                else if (sseType == "content_block_delta") {
+                    if (json->contains("delta") && (*json)["delta"].is_object()) {
+                        const auto& delta = (*json)["delta"];
+                        String deltaType = delta.value("type", "");
+                        if (deltaType == "text_delta") {
+                            onTypedEvent(TypedStreamEvent{
+                                .type = StreamEventType::TextDelta,
+                                .text = delta.value("text", ""),
+                                .blockIndex = state.currentBlockIndex
+                            });
+                        }
+                        else if (deltaType == "thinking_delta") {
+                            onTypedEvent(TypedStreamEvent{
+                                .type = StreamEventType::ThinkingDelta,
+                                .text = delta.value("thinking", ""),
+                                .blockIndex = state.currentBlockIndex
+                            });
+                        }
+                        else if (deltaType == "input_json_delta") {
+                            onTypedEvent(TypedStreamEvent{
+                                .type = StreamEventType::InputJsonDelta,
+                                .text = delta.value("partial_json", ""),
+                                .blockIndex = state.currentBlockIndex
+                            });
+                        }
+                    }
+                }
+                else if (sseType == "content_block_stop") {
+                    int index = json->value("index", state.currentBlockIndex);
+                    // NOTE: processSseEvent resets currentBlockType on content_block_stop,
+                    // so check state.contentBlocks[index]["type"] instead.
+                    String blockType;
+                    if (index >= 0 && static_cast<size_t>(index) < state.contentBlocks.size()) {
+                        blockType = state.contentBlocks[index].value("type", "");
+                    }
+                    if (blockType == "tool_use" || blockType == "server_tool_use") {
+                        // Parse the input to produce the arguments string
+                        String argsStr = "{}";
+                        if (state.contentBlocks[index].contains("input")) {
+                            argsStr = state.contentBlocks[index]["input"].dump();
+                        }
+                        onTypedEvent(TypedStreamEvent{
+                            .type = StreamEventType::ToolUseComplete,
+                            .blockIndex = index,
+                            .toolCall = ToolCall{
+                                .id = state.contentBlocks[index].value("id", ""),
+                                .name = state.contentBlocks[index].value("name", ""),
+                                .arguments = std::move(argsStr)
+                            }
+                        });
+                    }
+                    else if (blockType == "text") {
+                        onTypedEvent(TypedStreamEvent{
+                            .type = StreamEventType::TextBlockStop,
+                            .blockIndex = index
+                        });
+                    }
+                    else if (blockType == "thinking") {
+                        onTypedEvent(TypedStreamEvent{
+                            .type = StreamEventType::ThinkingBlockStop,
+                            .blockIndex = index
+                        });
+                    }
+                }
+                else if (sseType == "message_delta") {
+                    onTypedEvent(TypedStreamEvent{
+                        .type = StreamEventType::UsageUpdate,
+                        .usage = UsageInfo{
+                            .promptTokens = state.usage.promptTokens,
+                            .completionTokens = state.usage.completionTokens,
+                            .cacheReadTokens = state.usage.cacheReadTokens,
+                            .cacheCreationTokens = state.usage.cacheCreationTokens
+                        }
+                    });
+                }
+                else if (sseType == "message_stop") {
+                    onTypedEvent(TypedStreamEvent{
+                        .type = StreamEventType::StreamEnd,
+                        .stopReason = state.stopReason
+                    });
+                }
+                else if (sseType == "error") {
+                    String errMsg = "unknown streaming error";
+                    if (json->contains("error")) {
+                        if ((*json)["error"].is_object() && (*json)["error"].contains("message")) {
+                            errMsg = (*json)["error"]["message"].get<String>();
+                        } else if ((*json)["error"].is_string()) {
+                            errMsg = (*json)["error"].get<String>();
+                        }
+                    }
+                    onTypedEvent(TypedStreamEvent{
+                        .type = StreamEventType::Error,
+                        .error = std::move(errMsg)
+                    });
+                }
+            }
+
             // Forward to user callback
             if (onChunk) {
                 onChunk(*json);
@@ -1093,6 +1232,66 @@ Result<StreamingState> AnthropicClient::streamWithState(
     }
 
     return state;
+}
+
+// ============================================================================
+// Convert non-streaming response to TypedStreamEvents
+// ============================================================================
+
+std::vector<TypedStreamEvent> AnthropicClient::convertNonStreamingResponse(const Json& response) {
+    std::vector<TypedStreamEvent> events;
+    events.push_back(TypedStreamEvent{.type = StreamEventType::StreamStart});
+
+    if (response.contains("usage") && response["usage"].is_object()) {
+        const auto& u = response["usage"];
+        events.back().usage = UsageInfo{
+            .promptTokens = u.value("input_tokens", int64_t(0)),
+            .completionTokens = u.value("output_tokens", int64_t(0)),
+            .cacheReadTokens = u.value("cache_read_input_tokens", int64_t(0)),
+            .cacheCreationTokens = u.value("cache_creation_input_tokens", int64_t(0))
+        };
+    }
+
+    if (response.contains("content") && response["content"].is_array()) {
+        for (auto& block : response["content"]) {
+            String blockType = block.value("type", "");
+            if (blockType == "text") {
+                String text = block.value("text", "");
+                size_t pos = 0;
+                size_t last = 0;
+                while ((pos = text.find("\n\n", last)) != String::npos) {
+                    String chunk = text.substr(last, pos - last);
+                    if (!chunk.empty()) {
+                        events.push_back(TypedStreamEvent{.type = StreamEventType::TextDelta, .text = std::move(chunk)});
+                    }
+                    last = pos + 2;
+                }
+                if (last < text.size()) {
+                    events.push_back(TypedStreamEvent{.type = StreamEventType::TextDelta, .text = text.substr(last)});
+                }
+            } else if (blockType == "thinking") {
+                events.push_back(TypedStreamEvent{
+                    .type = StreamEventType::ThinkingDelta,
+                    .text = block.value("thinking", "")
+                });
+            } else if (blockType == "tool_use") {
+                events.push_back(TypedStreamEvent{
+                    .type = StreamEventType::ToolUseComplete,
+                    .toolCall = ToolCall{
+                        .id = block.value("id", ""),
+                        .name = block.value("name", ""),
+                        .arguments = block.contains("input") ? block["input"].dump() : "{}"
+                    }
+                });
+            }
+        }
+    }
+
+    events.push_back(TypedStreamEvent{
+        .type = StreamEventType::StreamEnd,
+        .stopReason = response.value("stop_reason", "")
+    });
+    return events;
 }
 
 } // namespace claude
