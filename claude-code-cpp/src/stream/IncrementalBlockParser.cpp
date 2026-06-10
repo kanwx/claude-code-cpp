@@ -56,6 +56,7 @@ bool IncrementalBlockParser::processLine(const String& line) {
         if (isListItemStart(line))   { context_ = LineContext::Normal; return true; }
         if (isBlockquoteStart(line)) { context_ = LineContext::Normal; return true; }
         if (isHorizontalRule(line))  { context_ = LineContext::Normal; return true; }
+        if (isTableDelimiter(line)) { context_ = LineContext::Normal; return true; }
     }
 
     if (context_ == LineContext::Normal && isCodeFenceOpen(line)) {
@@ -102,6 +103,11 @@ bool IncrementalBlockParser::isBlockquoteStart(const String& line) const {
 
 bool IncrementalBlockParser::isHorizontalRule(const String& line) const {
     static std::regex re("^\\s*([-*_])\\s*(\\1\\s*){2,}$");
+    return std::regex_search(line, re);
+}
+
+bool IncrementalBlockParser::isTableDelimiter(const String& line) const {
+    static std::regex re("^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)*\\|?\\s*$");
     return std::regex_search(line, re);
 }
 

@@ -46,3 +46,9 @@ TEST_CASE("No boundary in continuous text", "[blockparser]") {
     CHECK_FALSE(parser.append("Just a single line"));
     CHECK(parser.lastBoundaryPos() == 0);
 }
+
+TEST_CASE("Table delimiter row triggers boundary after blank line", "[blockparser]") {
+    IncrementalBlockParser parser;
+    CHECK_FALSE(parser.append("Header | Header\n"));
+    CHECK(parser.append("\n| --- | --- |"));
+}

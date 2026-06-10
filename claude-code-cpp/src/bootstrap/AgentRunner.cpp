@@ -393,9 +393,19 @@ void setupCallbacks(AgentLoop& loop,
     streamBuffer->setDisplayCallback(
         [useFtxui, ftxuiRepl, postProcessor](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
-                // Run through AnswerPostProcessor for thinking-tag cleanup and grouping
-                auto processed = postProcessor->process(std::move(event));
-                ftxuiRepl->handleDisplayEvent(std::move(processed));
+                if (event.type == DisplayEventType::AnswerEnd) {
+                    // On AnswerEnd, run finalize() for grouping + reordering,
+                    // then send the final structural events before the AnswerEnd itself.
+                    auto finalEvents = postProcessor->finalize();
+                    for (auto& fe : finalEvents) {
+                        ftxuiRepl->handleDisplayEvent(std::move(fe));
+                    }
+                    // Now send the AnswerEnd itself
+                    ftxuiRepl->handleDisplayEvent(std::move(event));
+                } else {
+                    auto processed = postProcessor->process(std::move(event));
+                    ftxuiRepl->handleDisplayEvent(std::move(processed));
+                }
             }
         });
 

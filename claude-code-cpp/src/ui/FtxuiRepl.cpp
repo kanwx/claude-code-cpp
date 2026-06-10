@@ -55,6 +55,35 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             addToolMessage(event.toolName, "", resultText);
             break;
         }
+        case DisplayEventType::ToolGroup: {
+            ContentBlock group{
+                .type = ContentBlock::ToolGroup,
+                .summary = event.summary
+            };
+            contentBlocks_.push_back(std::move(group));
+            addToolMessage("Group", "", event.summary.primaryText);
+            break;
+        }
+        case DisplayEventType::SystemNotice:
+            newPipelineStatusMetadata_.durationStr = "";  // preserve existing
+            layoutState_.status.systemNotice = std::move(event.noticeText);
+            break;
+        case DisplayEventType::Tombstone:
+            // Remove previously rendered ContentBlock by toolCallId
+            for (auto it = contentBlocks_.begin(); it != contentBlocks_.end(); ++it) {
+                if (it->type == ContentBlock::ToolResult && it->rawResultPath == event.toolCallId) {
+                    contentBlocks_.erase(it);
+                    break;
+                }
+            }
+            break;
+        case DisplayEventType::Error:
+            addErrorMessage(event.text);
+            contentBlocks_.push_back(ContentBlock{
+                .type = ContentBlock::ErrorMessage,
+                .text = std::move(event.text)
+            });
+            break;
         case DisplayEventType::AnswerStart:
             break;
         case DisplayEventType::AnswerEnd:

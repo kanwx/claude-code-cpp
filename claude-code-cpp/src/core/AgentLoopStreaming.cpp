@@ -146,6 +146,10 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     std::vector<Json> redactedThinkingBlocks;  // Preserve for re-emission in API requests
 
     // Wire onTypedEvent to the API client if callback is set
+    auto typedEventCb = [&] {
+        std::lock_guard lock(impl_->callbackMutex);
+        return impl_->onTypedEvent;
+    }();
     {
         std::lock_guard lock(impl_->callbackMutex);
         if (impl_->onTypedEvent) {
@@ -156,6 +160,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     cb(std::move(event));
                 };
             }
+            // For OpenAI/non-Anthropic clients, typed events are emitted
+            // inline in the stream callback below.
         }
     }
 
@@ -377,9 +383,18 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                                     return impl_->onStreamStart;
                                 }();
                                 if (streamStartCb) streamStartCb();
+                                // Emit StreamStart for new pipeline
+                                if (typedEventCb) {
+                                    typedEventCb(TypedStreamEvent{.type = StreamEventType::StreamStart});
+                                }
                             }
                             textBuffer += text;
                             if (onToken) onToken(text);
+
+                            // Emit TextDelta for new pipeline
+                            if (typedEventCb) {
+                                typedEventCb(TypedStreamEvent{.type = StreamEventType::TextDelta, .text = text});
+                            }
 
                             estimatedOutputTokens = textBuffer.length() / 4;
                             if (estimatedOutputTokens > 0) {
@@ -402,6 +417,19 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
 
                             if (!id.empty()) {
                                 toolCalls[tcIndex].id = id;
+                                // Emit ToolUseStart when we first see the tool call ID
+                                if (typedEventCb) {
+                                    String name;
+                                    if (tc.contains("function") && tc["function"].is_object() &&
+                                        tc["function"].contains("name") && tc["function"]["name"].is_string()) {
+                                        name = tc["function"]["name"].get<String>();
+                                    }
+                                    typedEventCb(TypedStreamEvent{
+                                        .type = StreamEventType::ToolUseStart,
+                                        .blockIndex = tcIndex,
+                                        .toolCall = ToolCall{.id = id, .name = name, .arguments = ""}
+                                    });
+                                }
                             }
 
                             if (tc.contains("function") && tc["function"].is_object()) {
@@ -410,7 +438,16 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                                     toolCalls[tcIndex].name = func["name"].get<String>();
                                 }
                                 if (func.contains("arguments") && func["arguments"].is_string()) {
-                                    toolCalls[tcIndex].arguments += func["arguments"].get<String>();
+                                    String partialJson = func["arguments"].get<String>();
+                                    toolCalls[tcIndex].arguments += partialJson;
+                                    // Emit InputJsonDelta for new pipeline
+                                    if (typedEventCb) {
+                                        typedEventCb(TypedStreamEvent{
+                                            .type = StreamEventType::InputJsonDelta,
+                                            .text = partialJson,
+                                            .blockIndex = tcIndex
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -427,6 +464,25 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                         stopReason = "max_tokens";
                     } else if (!finish.empty() && finish != "null") {
                         stopReason = finish;
+                    }
+
+                    // Emit ToolUseComplete for any pending tool calls
+                    if (typedEventCb && finish == "tool_calls") {
+                        for (size_t i = 0; i < toolCalls.size(); ++i) {
+                            typedEventCb(TypedStreamEvent{
+                                .type = StreamEventType::ToolUseComplete,
+                                .blockIndex = static_cast<int>(i),
+                                .toolCall = toolCalls[i]
+                            });
+                        }
+                    }
+
+                    // Emit StreamEnd for new pipeline
+                    if (typedEventCb) {
+                        typedEventCb(TypedStreamEvent{
+                            .type = StreamEventType::StreamEnd,
+                            .stopReason = stopReason
+                        });
                     }
 
                     // content_block_stop equivalent for OpenAI format

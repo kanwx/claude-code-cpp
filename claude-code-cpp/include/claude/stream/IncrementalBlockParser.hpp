@@ -28,6 +28,7 @@ private:
     bool isListItemStart(const String& line) const;
     bool isBlockquoteStart(const String& line) const;
     bool isHorizontalRule(const String& line) const;
+    bool isTableDelimiter(const String& line) const;
 };
 
 } // namespace claude
