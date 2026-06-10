@@ -50,7 +50,8 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
                     results[j] = {
                         ToolResponse{toolCalls[j].id, toolCalls[j].name,
                                      "Cancelled by user", false, true, false},
-                        std::chrono::milliseconds{0}, false, static_cast<int>(j)
+                        std::chrono::milliseconds{0}, false, static_cast<int>(j),
+                        ToolResultSummary::dim("Interrupted")
                     };
                 }
                 break;
@@ -71,7 +72,8 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
                     results[j] = {
                         ToolResponse{toolCalls[j].id, toolCalls[j].name,
                                      "Cancelled by user", false, true, false},
-                        std::chrono::milliseconds{0}, true, static_cast<int>(j)
+                        std::chrono::milliseconds{0}, true, static_cast<int>(j),
+                        ToolResultSummary::dim("Interrupted")
                     };
                 }
                 break;
@@ -117,7 +119,8 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
                         results[idx] = {
                             ToolResponse{parallelGroup[j].first.id, parallelGroup[j].first.name,
                                          "Cancelled by user", false, true, false},
-                            std::chrono::milliseconds{0}, true, idx
+                            std::chrono::milliseconds{0}, true, idx,
+                            ToolResultSummary::dim("Interrupted")
                         };
                     }
                     break;
@@ -142,7 +145,8 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
             if (cancelled_.load(std::memory_order_relaxed)) {
                 results[idx] = {
                     ToolResponse{call.id, call.name, "Cancelled by user", false, true, false},
-                    std::chrono::milliseconds{0}, false, idx
+                    std::chrono::milliseconds{0}, false, idx,
+                    ToolResultSummary::dim("Interrupted")
                 };
                 continue;
             }
@@ -178,7 +182,8 @@ void StreamingToolExecutor::enqueue(ToolCall call, int index) {
         std::promise<ToolExecutionResult> promise;
         promise.set_value({
             ToolResponse{call.id, call.name, "Cancelled by user", false, true, false},
-            std::chrono::milliseconds{0}, false, index
+            std::chrono::milliseconds{0}, false, index,
+            ToolResultSummary::dim("Interrupted")
         });
         pendingFutures_.push_back({index, promise.get_future()});
         return;
@@ -212,6 +217,7 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::collectResults() {
             errResult.response.content = "Error: " + String(e.what());
             errResult.response.isError = true;
             errResult.executionOrder = p.index;
+            errResult.displaySummary = ToolResultSummary::error(String(e.what()).substr(0, 80));
             ordered[p.index] = std::move(errResult);
         }
     }
@@ -286,7 +292,8 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
         return {
             ToolResponse{call.id, call.name,
                          "Error: Invalid JSON arguments: " + String(e.what()), true},
-            std::chrono::milliseconds{0}, parallel, order
+            std::chrono::milliseconds{0}, parallel, order,
+            ToolResultSummary::error("Invalid JSON arguments")
         };
     }
 
@@ -297,7 +304,8 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
         return {
             ToolResponse{call.id, call.name,
                          "Error: Unknown tool '" + call.name + "'", true},
-            std::chrono::milliseconds{0}, parallel, order
+            std::chrono::milliseconds{0}, parallel, order,
+            ToolResultSummary::error("Unknown tool '" + call.name + "'")
         };
     }
 
@@ -316,7 +324,8 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
                          "Tool blocked by pre-tool hook", false, false, true},
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - startTime),
-            parallel, order
+            parallel, order,
+            ToolResultSummary::dim("Blocked by hook")
         };
     }
 
@@ -378,7 +387,8 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
             ToolResponse{call.id, call.name, denyReason, false, false, true},
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - startTime),
-            parallel, order
+            parallel, order,
+            ToolResultSummary::dim("Rejected")
         };
     }
 
@@ -390,7 +400,8 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
             ToolResponse{call.id, call.name, "Cancelled by user", false, true, false},
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - startTime),
-            parallel, order
+            parallel, order,
+            ToolResultSummary::dim("Interrupted")
         };
     }
 
@@ -444,10 +455,30 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     activeCount_.fetch_sub(1, std::memory_order_relaxed);
     if (onToolComplete_) onToolComplete_(call.name, !isError);
 
-    return {
+    ToolExecutionResult execResult{
         ToolResponse{call.id, call.name, result, isError, wasCancelled, false},
         duration, parallel, order
     };
+
+    // Populate displaySummary from tool's render method
+    execResult.displaySummary = tool->renderToolResult(result, isError, wasCancelled, /*isRejected=*/false);
+
+    // Fallback for empty summary
+    if (execResult.displaySummary.empty()) {
+        if (isError) {
+            String errText = result.size() > 80 ? result.substr(0, 80) + "..." : result;
+            execResult.displaySummary = ToolResultSummary::error(errText);
+        } else if (wasCancelled) {
+            execResult.displaySummary = ToolResultSummary::dim("Interrupted");
+        } else {
+            auto nl = result.find('\n');
+            String firstLine = (nl != String::npos) ? result.substr(0, nl) : result;
+            if (firstLine.size() > 80) firstLine = firstLine.substr(0, 80) + "...";
+            execResult.displaySummary = ToolResultSummary::success(firstLine);
+        }
+    }
+
+    return execResult;
 }
 
 // ========== Permission check ==========
@@ -537,14 +568,16 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeParallel(
             (*sharedResults)[i] = {
                 ToolResponse{call.id, call.name,
                              "Error: " + String(e.what()), true},
-                std::chrono::milliseconds{0}, true, calls[i].second
+                std::chrono::milliseconds{0}, true, calls[i].second,
+                ToolResultSummary::error(String(e.what()).substr(0, 80))
             };
         } catch (...) {
             const auto& call = calls[i].first;
             (*sharedResults)[i] = {
                 ToolResponse{call.id, call.name,
                              "Error: Unknown exception in parallel execution", true},
-                std::chrono::milliseconds{0}, true, calls[i].second
+                std::chrono::milliseconds{0}, true, calls[i].second,
+                ToolResultSummary::error("Unknown exception in parallel execution")
             };
         }
     }
