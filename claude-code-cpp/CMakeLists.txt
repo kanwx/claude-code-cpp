@@ -396,6 +396,13 @@ set(VOICE_SOURCES
     src/voice/VoiceInput.cpp
 )
 
+# Stream源文件
+set(STREAM_SOURCES
+    src/stream/IncrementalBlockParser.cpp
+    src/stream/StreamBuffer.cpp
+    src/stream/AnswerPostProcessor.cpp
+)
+
 # Bridge源文件
 set(BRIDGE_SOURCES
     src/bridge/BridgeClient.cpp
@@ -558,6 +565,7 @@ add_library(claude_core STATIC
     ${PLUGIN_SOURCES}
     ${VIM_SOURCES}
     ${VOICE_SOURCES}
+    ${STREAM_SOURCES}
     ${BRIDGE_SOURCES}
     ${COMPUTER_USE_SOURCES}
     ${KEYBINDINGS_SOURCES}

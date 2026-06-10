@@ -227,3 +227,19 @@ catch_discover_tests(test_ContentBlock)
 add_executable(test_DisplayEvent stream/test_DisplayEvent.cpp)
 target_link_libraries(test_DisplayEvent PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_DisplayEvent)
+
+add_executable(test_NonStreamingFallback api/test_NonStreamingFallback.cpp)
+target_link_libraries(test_NonStreamingFallback PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_NonStreamingFallback)
+
+add_executable(test_IncrementalBlockParser stream/test_IncrementalBlockParser.cpp)
+target_link_libraries(test_IncrementalBlockParser PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_IncrementalBlockParser)
+
+add_executable(test_StreamBuffer stream/test_StreamBuffer.cpp)
+target_link_libraries(test_StreamBuffer PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_StreamBuffer)
+
+add_executable(test_AnswerPostProcessor stream/test_AnswerPostProcessor.cpp)
+target_link_libraries(test_AnswerPostProcessor PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_AnswerPostProcessor)
