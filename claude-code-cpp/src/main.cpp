@@ -745,8 +745,9 @@ private:
                 g_agentStreaming.store(true, std::memory_order_release);
                 try {
                     auto result = agentLoop_->runStreaming(input,
-                        [replPtr](const String& token) {
-                            replPtr->appendStreamText(token);
+                        [](const String&) {
+                            // Token output now handled by new 5-layer pipeline
+                            // via TypedStreamEvent → StreamBuffer → FtxuiRepl
                         });
                     if (!result.has_value()) {
                         if (result.error() == "Cancelled by user") {

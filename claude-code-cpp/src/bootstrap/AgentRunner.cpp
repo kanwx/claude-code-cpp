@@ -312,29 +312,13 @@ void setupCallbacks(AgentLoop& loop,
         if (spinner) spinner->stop();
     });
 
-    // Thinking callback -- update thinking summary for FTXUI
-    loop.setOnThinking([useFtxui, ftxuiRepl](const String& thinking) {
-#ifdef HAS_FTXUI
-        if (ftxuiRepl && useFtxui) {
-            ftxuiRepl->updateThinkingSummary(thinking);
-        }
-#endif
-    });
+    // Thinking callback — now handled by new 5-layer pipeline via TypedStreamEvent.
+    // Kept as no-op to prevent crashes from AgentLoop's callback dispatch.
+    loop.setOnThinking([](const String&) {});
 
-    // Content block stop callback
-    loop.setOnContentBlockStop([useFtxui, ftxuiRepl](const String& blockType, int index, const String& content) {
-#ifdef HAS_FTXUI
-        if (useFtxui && ftxuiRepl) {
-            if (blockType == "tool_use") {
-                spdlog::debug("Content block stop: tool_use at index {}", index);
-            } else if (blockType == "thinking") {
-                if (!content.empty()) {
-                    ftxuiRepl->addThinkingMessage(content);
-                }
-            }
-        }
-#endif
-    });
+    // Content block stop callback — now handled by new 5-layer pipeline.
+    // Kept as no-op to prevent duplicate thinking/tool rendering.
+    loop.setOnContentBlockStop([](const String&, int, const String&) {});
 
     // Tool result streaming callback — now handled by new 5-layer pipeline.
     // Kept as no-op to prevent crashes from emitStreamEvent() fallback dispatch.

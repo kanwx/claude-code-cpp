@@ -25,12 +25,15 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
         case DisplayEventType::TextParagraph:
         case DisplayEventType::TextPartial:
             newPipelineStreamingText_ += event.text;
-            // Also forward to existing appendStreamText for backward compat
-            appendStreamText(event.text);
+            streamingText_ = newPipelineStreamingText_;
+            streamingRenderer_.append(event.text);
             break;
         case DisplayEventType::ThinkingBlock:
             newPipelineThinkingContent_ = std::move(event.thinkingText);
-            updateThinkingSummary(newPipelineThinkingContent_);
+            isThinking_ = true;
+            thinkingSummary_ = newPipelineThinkingContent_.substr(
+                0, newPipelineThinkingContent_.find('\n') != String::npos
+                    ? newPipelineThinkingContent_.find('\n') : 60);
             break;
         case DisplayEventType::ToolProgress: {
             ContentBlock block{
@@ -39,7 +42,6 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 .activity = event.activity
             };
             contentBlocks_.push_back(std::move(block));
-            addToolMessage(event.toolName, event.activity, "");
             break;
         }
         case DisplayEventType::ToolResult: {
@@ -50,9 +52,6 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 .rawResultPath = event.rawResultPath
             };
             contentBlocks_.push_back(std::move(block));
-            // Use summary text for backward compat display
-            String resultText = event.summary.isError ? event.summary.errorText : event.summary.primaryText;
-            addToolMessage(event.toolName, "", resultText);
             break;
         }
         case DisplayEventType::ToolGroup: {
@@ -61,7 +60,6 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 .summary = event.summary
             };
             contentBlocks_.push_back(std::move(group));
-            addToolMessage("Group", "", event.summary.primaryText);
             break;
         }
         case DisplayEventType::SystemNotice:
@@ -85,15 +83,19 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             });
             break;
         case DisplayEventType::AnswerStart:
+            isStreaming_ = true;
             break;
         case DisplayEventType::AnswerEnd:
+            isStreaming_ = false;
             if (!newPipelineStreamingText_.empty()) {
                 contentBlocks_.push_back(ContentBlock{
                     .type = ContentBlock::AnswerText,
                     .text = std::move(newPipelineStreamingText_)
                 });
                 newPipelineStreamingText_.clear();
+                streamingText_.clear();
             }
+            isThinking_ = false;
             break;
         case DisplayEventType::TurnMetadata:
             newPipelineStatusMetadata_ = std::move(event.metadata);
