@@ -12,14 +12,32 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
             emit(DisplayEvent{.type = DisplayEventType::TurnMetadata, .metadata = {.isStreaming = true}});
             break;
 
-        case StreamEventType::TextDelta:
-            textAccumulator_ += event.text;
-            if (blockParser_.append(event.text)) {
+        case StreamEventType::TextDelta: {
+            // Strip any <thinking>...</thinking> tags that may appear in text
+            // (defensive — Anthropic API uses separate thinking_delta events,
+            // but some models may include raw tags in text)
+            String cleanText = event.text;
+            static const String openTag = "<thinking>";
+            static const String closeTag = "</thinking>";
+            size_t pos;
+            while ((pos = cleanText.find(openTag)) != String::npos) {
+                size_t endPos = cleanText.find(closeTag, pos);
+                if (endPos != String::npos) {
+                    cleanText.erase(pos, endPos + closeTag.size() - pos);
+                } else {
+                    cleanText.erase(pos);
+                    break;
+                }
+            }
+            if (cleanText.empty()) break;
+
+            textAccumulator_ += cleanText;
+            emit(DisplayEvent{.type = DisplayEventType::TextPartial, .text = cleanText});
+            if (blockParser_.append(cleanText)) {
                 flushTextBuffer(false);
-            } else if (textAccumulator_.size() > FLUSH_THRESHOLD) {
-                emit(DisplayEvent{.type = DisplayEventType::TextPartial, .text = textAccumulator_});
             }
             break;
+        }
 
         case StreamEventType::ThinkingDelta:
             thinkingAccumulator_ += event.text;
@@ -165,6 +183,9 @@ void StreamBuffer::flush() {
 
 void StreamBuffer::flushTextBuffer(bool isComplete) {
     if (textAccumulator_.empty()) return;
+    // TextPartial already emitted per-token above. On paragraph boundary,
+    // emit TextParagraph to signal the UI that the paragraph is complete
+    // (so it can finalize the streaming block into a committed message).
     emit(DisplayEvent{
         .type = DisplayEventType::TextParagraph,
         .text = std::move(textAccumulator_)

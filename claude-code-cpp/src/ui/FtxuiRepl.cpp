@@ -21,88 +21,133 @@ using namespace ftxui_colors;
 // ========== New 5-layer pipeline display event handler ==========
 
 void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
-    switch (event.type) {
-        case DisplayEventType::TextParagraph:
-        case DisplayEventType::TextPartial:
-            newPipelineStreamingText_ += event.text;
-            streamingText_ = newPipelineStreamingText_;
-            streamingRenderer_.append(event.text);
-            break;
-        case DisplayEventType::ThinkingBlock:
-            newPipelineThinkingContent_ = std::move(event.thinkingText);
-            isThinking_ = true;
-            thinkingSummary_ = newPipelineThinkingContent_.substr(
-                0, newPipelineThinkingContent_.find('\n') != String::npos
-                    ? newPipelineThinkingContent_.find('\n') : 60);
-            break;
-        case DisplayEventType::ToolProgress: {
-            ContentBlock block{
-                .type = ContentBlock::ToolProgress,
-                .toolName = event.toolName,
-                .activity = event.activity
-            };
-            contentBlocks_.push_back(std::move(block));
-            break;
-        }
-        case DisplayEventType::ToolResult: {
-            ContentBlock block{
-                .type = ContentBlock::ToolResult,
-                .toolName = event.toolName,
-                .summary = event.summary,
-                .rawResultPath = event.rawResultPath
-            };
-            contentBlocks_.push_back(std::move(block));
-            break;
-        }
-        case DisplayEventType::ToolGroup: {
-            ContentBlock group{
-                .type = ContentBlock::ToolGroup,
-                .summary = event.summary
-            };
-            contentBlocks_.push_back(std::move(group));
-            break;
-        }
-        case DisplayEventType::SystemNotice:
-            newPipelineStatusMetadata_.durationStr = "";  // preserve existing
-            layoutState_.status.systemNotice = std::move(event.noticeText);
-            break;
-        case DisplayEventType::Tombstone:
-            // Remove previously rendered ContentBlock by toolCallId
-            for (auto it = contentBlocks_.begin(); it != contentBlocks_.end(); ++it) {
-                if (it->type == ContentBlock::ToolResult && it->rawResultPath == event.toolCallId) {
-                    contentBlocks_.erase(it);
-                    break;
+    if (!screen_) return;
+
+    // Post all event handling to the UI thread for thread safety.
+    // The agent thread calls this from the background; all UI state
+    // (messages_, streamingText_, etc.) must only be modified on the UI thread.
+    screen_->Post([this, ev = std::move(event)]() mutable {
+        switch (ev.type) {
+            case DisplayEventType::TextParagraph: {
+                // Paragraph boundary — commit accumulated streaming text into messages_
+                if (!streamingText_.empty()) {
+                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
+                    msg.messageId = MessageIdGenerator::next();
+                    messages_.push_back(std::move(msg));
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
                 }
+                break;
             }
-            break;
-        case DisplayEventType::Error:
-            addErrorMessage(event.text);
-            contentBlocks_.push_back(ContentBlock{
-                .type = ContentBlock::ErrorMessage,
-                .text = std::move(event.text)
-            });
-            break;
-        case DisplayEventType::AnswerStart:
-            isStreaming_ = true;
-            break;
-        case DisplayEventType::AnswerEnd:
-            isStreaming_ = false;
-            if (!newPipelineStreamingText_.empty()) {
-                contentBlocks_.push_back(ContentBlock{
-                    .type = ContentBlock::AnswerText,
-                    .text = std::move(newPipelineStreamingText_)
+            case DisplayEventType::TextPartial:
+                // Per-token streaming — append to streamingText_ for smooth incremental rendering
+                streamingText_ += ev.text;
+                streamingRenderer_.append(ev.text);
+                if (isThinking_) isThinking_ = false;
+                lastOutputTime_ = std::chrono::steady_clock::now();
+                break;
+            case DisplayEventType::ThinkingBlock:
+                isThinking_ = true;
+                thinkingSummary_ = ev.thinkingText.substr(
+                    0, ev.thinkingText.find('\n') != String::npos
+                        ? ev.thinkingText.find('\n') : 60);
+                break;
+            case DisplayEventType::ToolProgress: {
+                // Commit any pending streaming text before tool progress
+                if (!streamingText_.empty()) {
+                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
+                    msg.messageId = MessageIdGenerator::next();
+                    messages_.push_back(std::move(msg));
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                }
+                auto msg = DisplayMessage::assistantToolUse(ToolUseBlock{
+                    .toolId = ev.toolCallId,
+                    .toolName = ev.toolName,
+                    .input = "",
+                    .progress = ToolProgress::Running
                 });
-                newPipelineStreamingText_.clear();
-                streamingText_.clear();
+                msg.messageId = MessageIdGenerator::next();
+                messages_.push_back(std::move(msg));
+                break;
             }
-            isThinking_ = false;
-            break;
-        case DisplayEventType::TurnMetadata:
-            newPipelineStatusMetadata_ = std::move(event.metadata);
-            break;
-        default:
-            break;
-    }
+            case DisplayEventType::ToolResult: {
+                // Commit any pending streaming text before tool result
+                if (!streamingText_.empty()) {
+                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
+                    msg.messageId = MessageIdGenerator::next();
+                    messages_.push_back(std::move(msg));
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                }
+                auto msg = DisplayMessage::userToolSuccess(
+                    ev.toolCallId, ev.toolName, ev.summary.primaryText);
+                msg.messageId = MessageIdGenerator::next();
+                messages_.push_back(std::move(msg));
+                break;
+            }
+            case DisplayEventType::ToolGroup: {
+                // Commit any pending streaming text before tool group
+                if (!streamingText_.empty()) {
+                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
+                    msg.messageId = MessageIdGenerator::next();
+                    messages_.push_back(std::move(msg));
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                }
+                CollapsedToolGroup group;
+                group.active = false;
+                group.readCount = 1;
+                group.readFilePaths.push_back(ev.summary.primaryText);
+                group.latestHint = ev.summary.primaryText;
+                auto msg = DisplayMessage::collapsedReadSearch(std::move(group));
+                msg.messageId = MessageIdGenerator::next();
+                messages_.push_back(std::move(msg));
+                break;
+            }
+            case DisplayEventType::SystemNotice:
+                layoutState_.status.systemNotice = std::move(ev.noticeText);
+                break;
+            case DisplayEventType::Tombstone:
+                for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+                    if ((it->type == DisplayMessage::Type::UserToolResult ||
+                         it->type == DisplayMessage::Type::UserToolSuccess) &&
+                        it->toolResult.toolUseId == ev.toolCallId) {
+                        messages_.erase(std::prev(it.base()));
+                        break;
+                    }
+                }
+                break;
+            case DisplayEventType::Error:
+                addErrorMessage(ev.text);
+                break;
+            case DisplayEventType::AnswerStart:
+                isStreaming_ = true;
+                isThinking_ = true;
+                streamingText_.clear();
+                streamingRenderer_.reset();
+                startRefreshThread();
+                break;
+            case DisplayEventType::AnswerEnd:
+                // Commit any remaining streaming text into messages_
+                if (!streamingText_.empty()) {
+                    auto msg = DisplayMessage::assistantText(std::move(streamingText_));
+                    msg.messageId = MessageIdGenerator::next();
+                    messages_.push_back(std::move(msg));
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                }
+                isStreaming_ = false;
+                isThinking_ = false;
+                stopRefreshThread();
+                break;
+            case DisplayEventType::TurnMetadata:
+                newPipelineStatusMetadata_ = std::move(ev.metadata);
+                break;
+            default:
+                break;
+        }
+    });
 }
 
 namespace {

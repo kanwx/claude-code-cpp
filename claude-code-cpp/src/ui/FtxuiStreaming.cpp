@@ -3,7 +3,6 @@
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/core/UnifiedTaskStore.hpp"
 #include "claude/ui/FtxuiMarkdown.hpp"
-#include "claude/ui/ThinkingFilter.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
@@ -54,48 +53,6 @@ void FtxuiRepl::refreshLoop() {
 
         if (!screen_ || !running_) break;
 
-        // Safety net: flush any stream buffer that appendStreamText didn't flush
-        // This catches cases where tokens arrive faster than we can Post
-        {
-            String batch;
-            {
-                std::lock_guard lock(streamMutex_);
-                if (!streamBuffer_.empty()) {
-                    batch = std::move(streamBuffer_);
-                    streamBuffer_.clear();
-                }
-            }
-            if (!batch.empty()) {
-                screen_->Post([this, b = std::move(batch)]() {
-                    if (isThinking_) isThinking_ = false;
-                    streamingText_ += b;
-                    streamingRenderer_.append(b);
-                });
-            }
-        }
-
-        // Safety net: flush thinking buffer
-        {
-            String batch;
-            {
-                std::lock_guard lock(thinkingMutex_);
-                if (!thinkingBuffer_.empty()) {
-                    batch = std::move(thinkingBuffer_);
-                    thinkingBuffer_.clear();
-                }
-            }
-            if (!batch.empty()) {
-                screen_->Post([this, b = std::move(batch)]() {
-                    if (b.size() > 60) {
-                        thinkingSummary_ = "..." + b.substr(b.size() - 57);
-                    } else {
-                        thinkingSummary_ = std::move(b);
-                    }
-                    lastOutputTime_ = std::chrono::steady_clock::now();
-                });
-            }
-        }
-
         // Check background task status every ~2 seconds (40 ticks at 50ms)
         if (bgCheckCounter >= 40) {
             bgCheckCounter = 0;
@@ -118,12 +75,10 @@ void FtxuiRepl::refreshLoop() {
             }
 
             if (runningCount > 0 && !isStreaming_) {
-                // Assign message IDs before posting (Post callback may be const)
                 for (auto& m : progressMsgs) {
                     m.messageId = MessageIdGenerator::next();
                 }
                 screen_->Post([this, msgs = std::move(progressMsgs)]() {
-                    // Replace existing AgentProgress messages instead of accumulating
                     messages_.erase(
                         std::remove_if(messages_.begin(), messages_.end(),
                             [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
@@ -134,7 +89,6 @@ void FtxuiRepl::refreshLoop() {
                     }
                 });
             } else if (runningCount == 0) {
-                // Remove any stale AgentProgress messages
                 screen_->Post([this]() {
                     messages_.erase(
                         std::remove_if(messages_.begin(), messages_.end(),
@@ -146,9 +100,6 @@ void FtxuiRepl::refreshLoop() {
         }
 
         // Request animation frame for spinner tick
-        // This is the CORRECT way to trigger redraw in FTXUI:
-        // It sets animation_requested_ = true which makes RunOnceBlocking
-        // return after a timeout instead of blocking indefinitely
         screen_->RequestAnimationFrame();
     }
     refreshActive_ = false;
@@ -157,24 +108,8 @@ void FtxuiRepl::refreshLoop() {
 // ========== Streaming — the key to smooth output ==========
 
 void FtxuiRepl::appendStreamText(const String& chunk) {
-    if (!screen_ || chunk.empty()) return;
-
-    // === PRIMARY PATH: Immediate Post to UI thread ===
-    // Each token is immediately Posted to the UI thread.
-    // screen_->Post() sends a Task to the Receiver, which notify_one() wakes
-    // RunOnceBlocking(). FTXUI then processes the task and draws one frame.
-    screen_->Post([this, c = String(chunk)]() {
-        if (isThinking_) isThinking_ = false;
-        streamingText_ += c;
-        streamingRenderer_.append(c);
-        // Feed to pipeline (pipeline tracks streaming text internally,
-        // no need to sync messages_ mid-stream — we sync on finishStream)
-        StreamEvent deltaEvent;
-        deltaEvent.type = StreamEvent::Type::TextDelta;
-        deltaEvent.text = c;
-        messagePipeline_.processEvent(deltaEvent);
-        lastOutputTime_ = std::chrono::steady_clock::now();
-    });
+    // DEPRECATED: New pipeline handles text via handleDisplayEvent(TextPartial).
+    // Kept as no-op to prevent crashes from AgentLoop callback dispatch.
 }
 
 void FtxuiRepl::finishStream(bool success, const String& error) {
@@ -187,59 +122,33 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
             std::chrono::steady_clock::now() - startTime_).count();
     }
 
-    // Final flush of thinking buffer
-    {
-        String batch;
-        {
-            std::lock_guard lock(thinkingMutex_);
-            batch = std::move(thinkingBuffer_);
-            thinkingBuffer_.clear();
-        }
-        if (!batch.empty()) {
-            screen_->Post([this, b = std::move(batch)]() {
-                if (b.size() > 60) {
-                    thinkingSummary_ = "..." + b.substr(b.size() - 57);
-                } else {
-                    thinkingSummary_ = std::move(b);
-                }
-            });
-        }
-    }
-
-    // State update on UI thread
     screen_->Post([this, success, err = String(error), durationMs]() {
-        if (!isStreaming_ && !isThinking_) return;
+        // New pipeline: AnswerEnd already committed streaming text via handleDisplayEvent.
+        // If for some reason AnswerEnd didn't fire (e.g. error case), commit any remaining text.
+        if (!streamingText_.empty()) {
+            auto msg = DisplayMessage::assistantText(std::move(streamingText_));
+            msg.messageId = MessageIdGenerator::next();
+            messages_.push_back(std::move(msg));
+            streamingText_.clear();
+            streamingRenderer_.reset();
+        }
+
+        if (!success && !err.empty()) {
+            auto msg = DisplayMessage::systemError(err);
+            msg.messageId = MessageIdGenerator::next();
+            messages_.push_back(std::move(msg));
+        }
 
         isStreaming_ = false;
         isThinking_ = false;
 
-        streamingText_.clear();
-        streamingRenderer_.reset();
-
-        // Note: streaming text was already fed incrementally via appendStreamText()
-        // TextDelta events. Do NOT re-feed finalText here — that would double the
-        // pipeline's streamingText_ accumulator.
-
-        // Commit via StreamEnd — NormalizeStage commits both thinking and text
-        StreamEvent endEvent;
-        endEvent.type = StreamEvent::Type::StreamEnd;
-        endEvent.success = success;
-        endEvent.text = err;
-
-        if (messagePipeline_.processEvent(endEvent)) {
-            messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-        }
-
-        // Turn duration message (>2s) — route through pipeline
+        // Turn duration message (>2s)
         if (success && durationMs > 2000) {
             int seconds = durationMs / 1000;
             String tmsg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-            StreamEvent durEvent;
-            durEvent.type = StreamEvent::Type::TurnDuration;
-            durEvent.text = std::move(tmsg);
-            if (messagePipeline_.processEvent(durEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-            }
+            auto msg = DisplayMessage::turnDuration(std::move(tmsg));
+            msg.messageId = MessageIdGenerator::next();
+            messages_.push_back(std::move(msg));
         }
 
         stopRefreshThread();
@@ -249,26 +158,11 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
 // ========== Thread-safe thinking update ==========
 
 void FtxuiRepl::updateThinkingSummary(const String& summary) {
-    if (!screen_) return;
-    {
-        std::lock_guard lock(thinkingMutex_);
-        thinkingBuffer_ += summary;
-    }
+    // DEPRECATED: New pipeline handles thinking via handleDisplayEvent(ThinkingBlock).
 }
 
 void FtxuiRepl::addThinkingMessage(const String& chunk) {
-    if (!screen_) return;
-    screen_->Post([this, c = String(chunk)]() {
-        thinkingText_ += c;
-        // Feed to pipeline as ThinkingDelta — NormalizeStage accumulates
-        // into pendingThinkingText_ and commits as AssistantThinking on StreamEnd
-        StreamEvent event;
-        event.type = StreamEvent::Type::ThinkingDelta;
-        event.text = std::move(c);
-        if (messagePipeline_.processEvent(event)) {
-            messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-        }
-    });
+    // DEPRECATED: New pipeline handles thinking via handleDisplayEvent(ThinkingBlock).
 }
 
 } // namespace claude

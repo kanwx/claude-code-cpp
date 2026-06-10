@@ -5,7 +5,6 @@
 #include <claude/api/ApiClient.hpp>
 #include <claude/api/AnthropicClient.hpp>
 #include <claude/stream/StreamBuffer.hpp>
-#include <claude/stream/AnswerPostProcessor.hpp>
 #include <claude/stream/ContentBlock.hpp>
 #include <claude/ui/ContentBlockRenderer.hpp>
 #include <claude/api/OpenAIClient.hpp>
@@ -370,83 +369,60 @@ void setupCallbacks(AgentLoop& loop,
     // Permission confirmation callback
     loop.setOnPermissionRequest(std::move(permissionCallback));
 
-    // ===== New 5-layer pipeline (running alongside old callbacks) =====
-    // Pipeline: TypedStreamEvent/StreamToolEvent → StreamBuffer → AnswerPostProcessor → FtxuiRepl
+    // ===== New 5-layer pipeline =====
+    // Pipeline: TypedStreamEvent/StreamToolEvent → StreamBuffer → FtxuiRepl/ANSI
     auto streamBuffer = std::make_shared<StreamBuffer>();
-    auto postProcessor = std::make_shared<AnswerPostProcessor>();
 
-    // StreamBuffer → AnswerPostProcessor → UI renderer (FTXUI or ANSI)
     streamBuffer->setDisplayCallback(
-        [useFtxui, ftxuiRepl, postProcessor](DisplayEvent&& event) {
+        [useFtxui, ftxuiRepl](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
-                if (event.type == DisplayEventType::AnswerEnd) {
-                    auto finalEvents = postProcessor->finalize();
-                    for (auto& fe : finalEvents) {
-                        ftxuiRepl->handleDisplayEvent(std::move(fe));
-                    }
-                    ftxuiRepl->handleDisplayEvent(std::move(event));
-                } else {
-                    auto processed = postProcessor->process(std::move(event));
-                    ftxuiRepl->handleDisplayEvent(std::move(processed));
-                }
+                // FTXUI: handleDisplayEvent posts to UI thread internally
+                ftxuiRepl->handleDisplayEvent(std::move(event));
             } else {
                 // ANSI mode: render DisplayEvents directly to stdout
-                auto renderAnsiEvent = [](const DisplayEvent& ev) {
-                    switch (ev.type) {
-                        case DisplayEventType::TextParagraph:
-                        case DisplayEventType::TextPartial:
-                            std::cout << ev.text << std::flush;
-                            break;
-                        case DisplayEventType::ThinkingBlock:
-                            std::cout << "\n" << AnsiStyle::DIM
-                                      << "Thinking..." << AnsiStyle::RESET
-                                      << "\n" << std::flush;
-                            break;
-                        case DisplayEventType::ToolProgress:
-                            std::cout << "\n" << AnsiStyle::DIM
-                                      << "  ⎿ ● " << ev.activity
-                                      << AnsiStyle::RESET << "\n" << std::flush;
-                            break;
-                        case DisplayEventType::ToolResult: {
-                            ContentBlock cb;
-                            cb.type = ContentBlock::ToolResult;
-                            cb.toolName = ev.toolName;
-                            cb.summary = ev.summary;
-                            std::cout << "\n" << ContentBlockRenderer::renderAnsi(cb)
-                                      << "\n" << std::flush;
-                            break;
-                        }
-                        case DisplayEventType::ToolGroup: {
-                            ContentBlock cb;
-                            cb.type = ContentBlock::ToolGroup;
-                            cb.toolName = ev.toolName;
-                            cb.summary = ev.summary;
-                            std::cout << "\n" << ContentBlockRenderer::renderAnsi(cb)
-                                      << "\n" << std::flush;
-                            break;
-                        }
-                        case DisplayEventType::Error:
-                            std::cout << "\n" << AnsiStyle::RED
-                                      << "✕ " << ev.text
-                                      << AnsiStyle::RESET << "\n" << std::flush;
-                            break;
-                        case DisplayEventType::AnswerEnd:
-                            std::cout << "\n" << std::flush;
-                            break;
-                        default:
-                            break;
+                switch (event.type) {
+                    case DisplayEventType::TextParagraph:
+                    case DisplayEventType::TextPartial:
+                        std::cout << event.text << std::flush;
+                        break;
+                    case DisplayEventType::ThinkingBlock:
+                        std::cout << "\n" << AnsiStyle::DIM
+                                  << "Thinking..." << AnsiStyle::RESET
+                                  << "\n" << std::flush;
+                        break;
+                    case DisplayEventType::ToolProgress:
+                        std::cout << "\n" << AnsiStyle::DIM
+                                  << "  ⎿ ● " << event.activity
+                                  << AnsiStyle::RESET << "\n" << std::flush;
+                        break;
+                    case DisplayEventType::ToolResult: {
+                        ContentBlock cb;
+                        cb.type = ContentBlock::ToolResult;
+                        cb.toolName = event.toolName;
+                        cb.summary = event.summary;
+                        std::cout << "\n" << ContentBlockRenderer::renderAnsi(cb)
+                                  << "\n" << std::flush;
+                        break;
                     }
-                };
-
-                if (event.type == DisplayEventType::AnswerEnd) {
-                    auto finalEvents = postProcessor->finalize();
-                    for (auto& fe : finalEvents) {
-                        renderAnsiEvent(fe);
+                    case DisplayEventType::ToolGroup: {
+                        ContentBlock cb;
+                        cb.type = ContentBlock::ToolGroup;
+                        cb.toolName = event.toolName;
+                        cb.summary = event.summary;
+                        std::cout << "\n" << ContentBlockRenderer::renderAnsi(cb)
+                                  << "\n" << std::flush;
+                        break;
                     }
-                    renderAnsiEvent(event);
-                } else {
-                    auto processed = postProcessor->process(std::move(event));
-                    renderAnsiEvent(processed);
+                    case DisplayEventType::Error:
+                        std::cout << "\n" << AnsiStyle::RED
+                                  << "✕ " << event.text
+                                  << AnsiStyle::RESET << "\n" << std::flush;
+                        break;
+                    case DisplayEventType::AnswerEnd:
+                        std::cout << "\n" << std::flush;
+                        break;
+                    default:
+                        break;
                 }
             }
         });
