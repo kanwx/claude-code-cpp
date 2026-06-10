@@ -243,3 +243,7 @@ catch_discover_tests(test_StreamBuffer)
 add_executable(test_AnswerPostProcessor stream/test_AnswerPostProcessor.cpp)
 target_link_libraries(test_AnswerPostProcessor PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_AnswerPostProcessor)
+
+add_executable(test_ContentBlockRenderer stream/test_ContentBlockRenderer.cpp)
+target_link_libraries(test_ContentBlockRenderer PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ContentBlockRenderer)

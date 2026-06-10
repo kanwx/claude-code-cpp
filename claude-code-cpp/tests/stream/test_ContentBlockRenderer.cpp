@@ -1,0 +1,56 @@
+#include <catch2/catch_test_macros.hpp>
+#include "claude/ui/ContentBlockRenderer.hpp"
+#include "claude/stream/ContentBlock.hpp"
+
+using namespace claude;
+
+TEST_CASE("ContentBlockAnsi renders ToolResult summary not raw", "[renderer]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolResult,
+        .summary = ToolResultSummary::success("Read 42 lines"),
+        .rawResultPath = "/tmp/claude-results/abc123"
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Read 42 lines") != String::npos);
+    CHECK(rendered.find("/tmp/claude-results") == String::npos);
+}
+
+TEST_CASE("ContentBlockAnsi renders UserMessage", "[renderer]") {
+    ContentBlock block{.type = ContentBlock::UserMessage, .text = "List Python files"};
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("List Python files") != String::npos);
+}
+
+TEST_CASE("ContentBlockAnsi renders ThinkingBlock collapsed", "[renderer]") {
+    ContentBlock block{.type = ContentBlock::ThinkingBlock, .detailText = "Deep thoughts", .dimmed = true};
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Thinking") != String::npos);
+    CHECK(rendered.find("Deep thoughts") == String::npos);
+}
+
+TEST_CASE("ContentBlockAnsi renders ToolGroup summary", "[renderer]") {
+    ContentBlock group{
+        .type = ContentBlock::ToolGroup,
+        .summary = ToolResultSummary::success("Read 3 files, Searched 1 pattern"),
+        .children = {
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("Read 42 lines")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("Read 15 lines")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("Read 8 lines")},
+        }
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(group);
+    CHECK(rendered.find("Read 3 files") != String::npos);
+    CHECK(rendered.find("Ctrl+O") != String::npos);
+}
+
+TEST_CASE("ContentBlockAnsi renders ErrorMessage", "[renderer]") {
+    ContentBlock block{.type = ContentBlock::ErrorMessage, .text = "Something went wrong", .detailText = "Stack trace..."};
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Something went wrong") != String::npos);
+}
+
+TEST_CASE("ContentBlock ToolResult with expand hint", "[renderer]") {
+    ContentBlock block{.type = ContentBlock::ToolResult, .summary = ToolResultSummary::success("Read 42 lines")};
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Ctrl+O") != String::npos);
+}

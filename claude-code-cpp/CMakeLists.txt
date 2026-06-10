@@ -520,6 +520,8 @@ set(UI_SOURCES
     src/ui/renderers/WebFetchToolRenderer.cpp
     src/ui/renderers/WebSearchToolRenderer.cpp
     src/ui/renderers/LspToolRenderer.cpp
+    src/ui/renderers/ContentBlockAnsi.cpp
+    src/ui/renderers/ContentBlockFtxui.cpp
     src/ui/SearchOverlay.cpp
     src/ui/PermissionRendererRegistry.cpp
     src/ui/permissions/DefaultPermissionRenderer.cpp
