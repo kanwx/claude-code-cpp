@@ -18,6 +18,62 @@ namespace claude {
 
 using namespace ftxui_colors;
 
+// ========== New 5-layer pipeline display event handler ==========
+
+void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
+    switch (event.type) {
+        case DisplayEventType::TextParagraph:
+        case DisplayEventType::TextPartial:
+            newPipelineStreamingText_ += event.text;
+            // Also forward to existing appendStreamText for backward compat
+            appendStreamText(event.text);
+            break;
+        case DisplayEventType::ThinkingBlock:
+            newPipelineThinkingContent_ = std::move(event.thinkingText);
+            updateThinkingSummary(newPipelineThinkingContent_);
+            break;
+        case DisplayEventType::ToolProgress: {
+            ContentBlock block{
+                .type = ContentBlock::ToolProgress,
+                .toolName = event.toolName,
+                .activity = event.activity
+            };
+            contentBlocks_.push_back(std::move(block));
+            addToolMessage(event.toolName, event.activity, "");
+            break;
+        }
+        case DisplayEventType::ToolResult: {
+            ContentBlock block{
+                .type = ContentBlock::ToolResult,
+                .toolName = event.toolName,
+                .summary = event.summary,
+                .rawResultPath = event.rawResultPath
+            };
+            contentBlocks_.push_back(std::move(block));
+            // Use summary text for backward compat display
+            String resultText = event.summary.isError ? event.summary.errorText : event.summary.primaryText;
+            addToolMessage(event.toolName, "", resultText);
+            break;
+        }
+        case DisplayEventType::AnswerStart:
+            break;
+        case DisplayEventType::AnswerEnd:
+            if (!newPipelineStreamingText_.empty()) {
+                contentBlocks_.push_back(ContentBlock{
+                    .type = ContentBlock::AnswerText,
+                    .text = std::move(newPipelineStreamingText_)
+                });
+                newPipelineStreamingText_.clear();
+            }
+            break;
+        case DisplayEventType::TurnMetadata:
+            newPipelineStatusMetadata_ = std::move(event.metadata);
+            break;
+        default:
+            break;
+    }
+}
+
 namespace {
 
 void crashHandler(int sig) {

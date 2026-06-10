@@ -1,4 +1,5 @@
 #include <claude/core/AgentLoopImpl.hpp>
+#include <claude/api/AnthropicClient.hpp>
 #include <spdlog/spdlog.h>
 
 namespace claude {
@@ -143,6 +144,20 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     String signatureBuffer;
     std::map<int, std::pair<String, String>> thinkingBlocks;
     std::vector<Json> redactedThinkingBlocks;  // Preserve for re-emission in API requests
+
+    // Wire onTypedEvent to the API client if callback is set
+    {
+        std::lock_guard lock(impl_->callbackMutex);
+        if (impl_->onTypedEvent) {
+            auto* anthropicClient = dynamic_cast<AnthropicClient*>(&impl_->apiClient);
+            if (anthropicClient) {
+                auto cb = impl_->onTypedEvent;
+                anthropicClient->onTypedEvent = [cb](TypedStreamEvent&& event) {
+                    cb(std::move(event));
+                };
+            }
+        }
+    }
 
     impl_->apiClient.stream(request["messages"], request["tools"], [&](const Json& chunk) {
         // Handle usage (including cache tokens)

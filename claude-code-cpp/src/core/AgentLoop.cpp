@@ -122,6 +122,16 @@ void AgentLoop::setOnStreamEvent(std::function<void(const StreamEvent&)> callbac
     impl_->onStreamEvent = std::move(callback);
 }
 
+void AgentLoop::setOnTypedEvent(std::function<void(TypedStreamEvent&&)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onTypedEvent = std::move(callback);
+}
+
+void AgentLoop::setOnStreamToolEvent(std::function<void(StreamToolEvent&&)> callback) {
+    std::lock_guard lock(impl_->callbackMutex);
+    impl_->onStreamToolEvent = std::move(callback);
+}
+
 void AgentLoop::setOnStopHook(OnStopHook callback) {
     std::lock_guard lock(impl_->callbackMutex);
     impl_->onStopHook = std::move(callback);

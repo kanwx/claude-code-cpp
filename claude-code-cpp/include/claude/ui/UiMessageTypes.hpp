@@ -9,14 +9,7 @@
 
 namespace claude {
 
-// ========== Tool Progress States ==========
-enum class ToolProgress {
-    None,
-    Running,        // "Running…"
-    Waiting,        // "  ⎿  Waiting…"
-    Permission,     // "Waiting for permission…"
-    Classifier,     // "Auto classifier checking…"
-};
+// ToolProgress is defined in ApiTypes.hpp (already included above)
 
 // ========== Content Block Types ==========
 // Mirror the Anthropic API content block structure.

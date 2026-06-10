@@ -11,6 +11,7 @@
 #include <claude/tool/ToolContext.hpp>
 #include <claude/permission/RuleEngine.hpp>
 #include <claude/api/ApiClient.hpp>
+#include <claude/stream/TypedStreamEvent.hpp>
 #include <claude/mcp/McpClient.hpp>
 #include <claude/context/ContextInjector.hpp>
 #include <claude/ui/MessagePipeline.hpp>
@@ -60,6 +61,8 @@ struct AgentLoop::Impl {
     std::function<void()> onCancelled;
     OnStopHook onStopHook;
     std::function<void(const StreamEvent&)> onStreamEvent;
+    std::function<void(TypedStreamEvent&&)> onTypedEvent;
+    std::function<void(StreamToolEvent&&)> onStreamToolEvent;
 
     // Cancellation
     std::atomic<bool> cancelled{false};

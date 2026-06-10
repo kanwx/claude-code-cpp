@@ -29,6 +29,21 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
 
     executor.setOnToolStart([this](const String& toolName, const String& description, const String& toolId) {
         notifyToolEvent(ToolEventPhase::Start, toolName, description);
+        // New 5-layer pipeline: emit StreamToolEvent for tool start
+        {
+            auto cb = [&] {
+                std::lock_guard lock(impl_->callbackMutex);
+                return impl_->onStreamToolEvent;
+            }();
+            if (cb) {
+                cb(StreamToolEvent{
+                    .type = StreamToolEventType::Started,
+                    .toolCallId = toolId,
+                    .toolName = toolName,
+                    .activity = "Running…"
+                });
+            }
+        }
     });
 
     executor.setOnToolComplete([this](const String& toolName, bool success) {
@@ -73,6 +88,27 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
             }
         }
         emitStreamEvent(std::move(toolResultEvent));
+
+        // New 5-layer pipeline: emit StreamToolEvent for tool completion
+        {
+            auto streamToolCb = [&] {
+                std::lock_guard lock(impl_->callbackMutex);
+                return impl_->onStreamToolEvent;
+            }();
+            if (streamToolCb) {
+                StreamToolEventType eventType = isError ? StreamToolEventType::Error
+                    : er.response.isCancelled ? StreamToolEventType::Cancelled
+                    : er.response.isRejected ? StreamToolEventType::Rejected
+                    : StreamToolEventType::Completed;
+                streamToolCb(StreamToolEvent{
+                    .type = eventType,
+                    .toolCallId = er.response.callId,
+                    .toolName = er.response.toolName,
+                    .summary = er.displaySummary,
+                    .durationMs = static_cast<double>(er.duration.count())
+                });
+            }
+        }
 
         // Fire end notification
         notifyToolEvent(ToolEventPhase::End, er.response.toolName, "", er.response.content);

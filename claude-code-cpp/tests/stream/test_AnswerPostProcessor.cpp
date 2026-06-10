@@ -40,8 +40,8 @@ TEST_CASE("Finalize groups consecutive collapsible tool results", "[postprocesso
 
 TEST_CASE("Finalize does not group non-collapsible tools", "[postprocessor]") {
     AnswerPostProcessor proc;
-    proc.process(DisplayEvent{.type = DisplayEventType::ToolResult, .toolName = "Write", .toolCallId = "1", .summary = ToolResultSummary::success("Wrote 10 lines")});
-    proc.process(DisplayEvent{.type = DisplayEventType::ToolResult, .toolName = "Write", .toolCallId = "2", .summary = ToolResultSummary::success("Wrote 5 lines")});
+    proc.process(DisplayEvent{.type = DisplayEventType::ToolResult, .toolCallId = "1", .toolName = "Write", .summary = ToolResultSummary::success("Wrote 10 lines")});
+    proc.process(DisplayEvent{.type = DisplayEventType::ToolResult, .toolCallId = "2", .toolName = "Write", .summary = ToolResultSummary::success("Wrote 5 lines")});
 
     auto final_events = proc.finalize();
     int groups = 0;

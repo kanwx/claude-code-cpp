@@ -4,6 +4,8 @@
 #include <claude/core/TokenTracker.hpp>
 #include <claude/api/ApiClient.hpp>
 #include <claude/api/AnthropicClient.hpp>
+#include <claude/stream/StreamBuffer.hpp>
+#include <claude/stream/AnswerPostProcessor.hpp>
 #include <claude/api/OpenAIClient.hpp>
 #include <claude/config/AppConfig.hpp>
 #include <claude/tool/ToolRegistry.hpp>
@@ -20,6 +22,8 @@
 #include <claude/mcp/McpManager.hpp>
 #include <claude/mcp/McpClient.hpp>
 #include <claude/services/OAuthService.hpp>
+#include <claude/stream/StreamBuffer.hpp>
+#include <claude/stream/AnswerPostProcessor.hpp>
 
 #ifdef HAS_FTXUI
 #include <claude/ui/FtxuiRepl.hpp>
@@ -431,6 +435,31 @@ void setupCallbacks(AgentLoop& loop,
 
     // Permission confirmation callback
     loop.setOnPermissionRequest(std::move(permissionCallback));
+
+    // ===== New 5-layer pipeline (running alongside old callbacks) =====
+    // Pipeline: TypedStreamEvent/StreamToolEvent → StreamBuffer → AnswerPostProcessor → FtxuiRepl
+    auto streamBuffer = std::make_shared<StreamBuffer>();
+    auto postProcessor = std::make_shared<AnswerPostProcessor>();
+
+    // StreamBuffer → AnswerPostProcessor → FtxuiRepl
+    streamBuffer->setDisplayCallback(
+        [useFtxui, ftxuiRepl, postProcessor](DisplayEvent&& event) {
+            if (useFtxui && ftxuiRepl) {
+                // Run through AnswerPostProcessor for thinking-tag cleanup and grouping
+                auto processed = postProcessor->process(std::move(event));
+                ftxuiRepl->handleDisplayEvent(std::move(processed));
+            }
+        });
+
+    // Wire TypedStreamEvent → StreamBuffer
+    loop.setOnTypedEvent([streamBuffer](TypedStreamEvent&& event) {
+        streamBuffer->feed(std::move(event));
+    });
+
+    // Wire StreamToolEvent → StreamBuffer
+    loop.setOnStreamToolEvent([streamBuffer](StreamToolEvent&& event) {
+        streamBuffer->feed(std::move(event));
+    });
 }
 
 bool resumeLastSession(AgentLoop& loop) {

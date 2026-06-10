@@ -2,6 +2,7 @@
 
 #include "Types.hpp"
 #include "TokenTracker.hpp"
+#include "claude/stream/TypedStreamEvent.hpp"
 #include "../ui/MessagePipeline.hpp"
 #include "../permission/PermissionTypes.hpp"
 #include "../tool/ToolContext.hpp"
@@ -142,6 +143,12 @@ public:
     /// When set, AgentLoop sends StreamEvent events through this callback
     /// Backward compatible: existing independent callbacks still work (as fallback)
     void setOnStreamEvent(std::function<void(const StreamEvent&)> callback);
+
+    /// Set typed stream event callback — new 5-layer pipeline interface
+    void setOnTypedEvent(std::function<void(TypedStreamEvent&&)> callback);
+
+    /// Set stream tool event callback — new 5-layer pipeline interface
+    void setOnStreamToolEvent(std::function<void(StreamToolEvent&&)> callback);
 
     /// Set the stop hook callback.
     /// When the model stops (end_turn), this hook runs and can force continuation.

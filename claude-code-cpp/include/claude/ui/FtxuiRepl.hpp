@@ -15,6 +15,8 @@
 #include "../permission/PermissionTypes.hpp"
 #include "../repl/Completer.hpp"
 #include "../bootstrap/AppState.hpp"
+#include "../stream/DisplayEvent.hpp"
+#include "../stream/ContentBlock.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -66,6 +68,9 @@ public:
     // Thread-safe thinking update
     void updateThinkingSummary(const String& summary);
     void addThinkingMessage(const String& chunk);
+
+    // New 5-layer pipeline display event handler (running alongside old callbacks)
+    void handleDisplayEvent(DisplayEvent&& event);
 
     // Pipeline-aware message operations (preferred over addToolMessage)
     void addToolUseStart(const String& toolName, const String& toolId, const String& input);
@@ -134,6 +139,12 @@ private:
 
     // Message pipeline — replaces inline tool-pairing and grouping
     MessagePipeline messagePipeline_;
+
+    // New 5-layer pipeline state (running alongside old callbacks)
+    std::vector<ContentBlock> contentBlocks_;
+    String newPipelineStreamingText_;   // accumulator for new pipeline text (separate from streamingText_)
+    String newPipelineThinkingContent_;
+    TurnMetadata newPipelineStatusMetadata_;
 
     // Renderer registry — replaces inline rendering dispatch
     RendererRegistry rendererRegistry_;
