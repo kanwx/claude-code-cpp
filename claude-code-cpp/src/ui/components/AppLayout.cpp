@@ -340,6 +340,52 @@ ftxui::Element renderCompletions(const AppLayoutState& state) {
     return vbox(std::move(compElems));
 }
 
+ftxui::Element renderStatusBar(const StatusState& state) {
+    using namespace ftxui;
+
+    if (!state.visible) return emptyElement();
+
+    Elements lines;
+
+    // Line 1: duration · model
+    Elements line1;
+    if (!state.turnDuration.empty()) {
+        line1.push_back(text("✻ Baked for " + state.turnDuration) | dim);
+    }
+    if (!state.modelName.empty()) {
+        if (!line1.empty()) line1.push_back(text(" · ") | dim);
+        line1.push_back(text(state.modelName) | dim);
+    }
+    if (state.isStreaming && line1.empty()) {
+        line1.push_back(text("● Running...") | color(MacMint));
+    }
+
+    // Line 2: context · tokens · cost
+    Elements line2;
+    if (!state.contextStr.empty()) {
+        line2.push_back(text(state.contextStr) | dim);
+    }
+    if (!state.tokenStr.empty()) {
+        if (!line2.empty()) line2.push_back(text(" · ") | dim);
+        line2.push_back(text(state.tokenStr) | dim);
+    }
+    if (!state.costStr.empty()) {
+        if (!line2.empty()) line2.push_back(text(" · ") | dim);
+        line2.push_back(text(state.costStr) | dim);
+    }
+
+    if (!line1.empty()) lines.push_back(hbox(std::move(line1)));
+    if (!line2.empty()) lines.push_back(hbox(std::move(line2)));
+
+    // System notice line
+    if (!state.systemNotice.empty()) {
+        lines.push_back(text("※ " + state.systemNotice) | dim | color(MacSky));
+    }
+
+    if (lines.empty()) return emptyElement();
+    return vbox(std::move(lines));
+}
+
 ftxui::Element renderFooterBar(const FooterState& state) {
     using namespace ftxui;
 
@@ -473,13 +519,16 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
             }
         }
 
-        // 3. Completions
+        // 3. Status bar (turn metadata)
+        auto statusBar = renderStatusBar(s->status);
+
+        // 4. Completions
         auto completionArea = renderCompletions(*s);
 
-        // 4. Input line
+        // 5. Input line
         auto inputLine = renderInputLine(s->input);
 
-        // 5. Footer
+        // 6. Footer
         auto footer = renderFooterBar(s->footer);
 
         return vbox({
@@ -487,6 +536,7 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
             separatorLight(),
             contentArea | flex,
             separatorLight(),
+            statusBar,
             completionArea,
             inputLine | (s->input.streaming ? dim : bold),
             footer,

@@ -16,6 +16,17 @@ struct InputState {
     bool streaming = false;
 };
 
+struct StatusState {
+    std::string modelName;
+    std::string turnDuration;  // "3m 53s"
+    std::string contextStr;    // "8.2K/200K ctx"
+    std::string tokenStr;      // "12.4K out"
+    std::string costStr;       // "$0.04"
+    std::string systemNotice;  // Config hints, recap text
+    bool isStreaming = false;
+    bool visible = false;      // Only shown when there's content
+};
+
 struct FooterState {
     std::string modeIndicator;
     std::string hintText;
@@ -27,6 +38,7 @@ struct FooterState {
 struct AppLayoutState {
     HeaderState header;
     ContentState content;
+    StatusState status;
     InputState input;
     FooterState footer;
     // Permission overlay

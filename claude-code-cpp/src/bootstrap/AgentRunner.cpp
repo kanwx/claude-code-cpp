@@ -301,33 +301,11 @@ void setupCallbacks(AgentLoop& loop,
                      Spinner* spinner,
                      FtxuiRepl* ftxuiRepl,
                      std::function<PermissionChoice(const PermissionRequest&)> permissionCallback) {
-    // Tool event callback
-    loop.setOnToolEvent([useFtxui, spinner, ftxuiRepl](const ToolEvent& event) {
+    // Tool event callback — now handled by new 5-layer pipeline via StreamToolEvent.
+    // Kept as minimal callback for spinner stop and debug logging only.
+    loop.setOnToolEvent([spinner](const ToolEvent& event) {
         if (event.phase == ToolEventPhase::Start) {
             if (spinner) spinner->stop();
-            if (!useFtxui) {
-                // Show tool badge -- prefix with per-tool colored badge
-                std::cout << "\n\033[s"
-                          << AnsiStyle::DIM << "  ⎿ "
-                          << AnsiStyle::RESET << MessageResponse::formatToolBadge(event.toolName)
-                          << " " << AnsiStyle::DIM;
-                String args = event.arguments;
-                if (args.size() > 60) args = args.substr(0, 57) + "...";
-                std::cout << args;
-                std::cout << "\033[u" << std::flush;
-            }
-#ifdef HAS_FTXUI
-            else if (ftxuiRepl) {
-                ftxuiRepl->addToolMessage(event.toolName, event.arguments, "");
-            }
-#endif
-        } else if (event.phase == ToolEventPhase::End) {
-            // Tool completion — add result to UI
-#ifdef HAS_FTXUI
-            if (useFtxui && ftxuiRepl && !event.result.empty()) {
-                ftxuiRepl->addToolMessage(event.toolName, "", event.result);
-            }
-#endif
         }
     });
 
@@ -360,46 +338,18 @@ void setupCallbacks(AgentLoop& loop,
 #endif
     });
 
-    // Tool result streaming callback
-    loop.setOnToolResult([useFtxui, ftxuiRepl](const String& toolName, const String& result, bool isError) {
-        if (!useFtxui) {
-            if (!result.empty()) {
-                std::cout << "\n\033[s";  // New line + save cursor
-                std::cout << AnsiStyle::DIM << "  ⎿ " << AnsiStyle::RESET;
-                if (isError) {
-                    std::cout << AnsiStyle::RED;
-                }
-                String display = result;
-                if (display.length() > 500) {
-                    display = display.substr(0, 500) + "\n... (truncated)";
-                }
-                std::cout << display << AnsiStyle::RESET;
-                std::cout << "\033[u";  // Restore cursor
-                std::cout << std::flush;
-            }
-        }
-#ifdef HAS_FTXUI
-        else if (ftxuiRepl) {
-            ftxuiRepl->addToolMessage(toolName, "", result);
-        }
-#endif
-    });
+    // Tool result streaming callback — now handled by new 5-layer pipeline.
+    // Kept as no-op to prevent crashes from emitStreamEvent() fallback dispatch.
+    loop.setOnToolResult([](const String&, const String&, bool) {});
 
-    // Unified stream event callback — must forward all event types to their
-    // individual handlers since emitStreamEvent short-circuits when this is set.
+    // Unified stream event callback — only handles non-pipeline events.
+    // Tool results are now handled by the new 5-layer pipeline via StreamToolEvent.
     loop.setOnStreamEvent([useFtxui, ftxuiRepl](const StreamEvent& event) {
         switch (event.type) {
-            case StreamEvent::Type::ToolChunkReady:
-                if (!useFtxui) {
-                    std::cout << AnsiStyle::DIM << "." << AnsiStyle::RESET << std::flush;
-                }
-                break;
             case StreamEvent::Type::ToolResultReady:
-#ifdef HAS_FTXUI
-                if (useFtxui && ftxuiRepl) {
-                    ftxuiRepl->addToolMessage(event.toolName, "", event.toolResult);
-                }
-#endif
+                // Handled by new pipeline via onStreamToolEvent → StreamBuffer.
+                // Old callback here is kept as a no-op to prevent crashes from
+                // emitStreamEvent() fallback dispatch.
                 break;
             default:
                 break;

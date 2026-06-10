@@ -140,6 +140,33 @@ void FtxuiRepl::syncLayoutState() {
     // Input
     ls.input.streaming = isStreaming_;
 
+    // Status bar (from new pipeline TurnMetadata)
+    {
+        auto& st = ls.status;
+        auto& meta = newPipelineStatusMetadata_;
+        st.modelName = meta.modelName;
+        st.turnDuration = meta.durationStr;
+        st.isStreaming = meta.isStreaming;
+        if (meta.contextUsed > 0 || meta.contextTotal > 0) {
+            auto fmtK = [](int64_t n) -> String {
+                if (n >= 1'000'000) return std::to_string(n / 100'000) + "." + std::to_string((n % 100'000) / 10) + "M";
+                if (n >= 1'000) return std::to_string(n / 100) + "." + std::to_string((n % 100) / 10) + "K";
+                return std::to_string(n);
+            };
+            st.contextStr = fmtK(meta.contextUsed) + "/" + fmtK(meta.contextTotal) + " ctx";
+        }
+        if (meta.outputTokens > 0) {
+            auto fmtK = [](int64_t n) -> String {
+                if (n >= 1'000) return std::to_string(n / 100) + "." + std::to_string((n % 100) / 10) + "K";
+                return std::to_string(n);
+            };
+            st.tokenStr = fmtK(meta.outputTokens) + " out";
+        }
+        st.costStr = meta.costStr;
+        st.visible = !st.turnDuration.empty() || !st.modelName.empty() || st.isStreaming
+                     || !st.contextStr.empty() || !st.costStr.empty();
+    }
+
     // Footer
     ls.footer.modeIndicator = currentMode_;
     ls.footer.modeHintDismissed = modeHintDismissed_;
