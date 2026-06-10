@@ -846,13 +846,9 @@ private:
         // Mark streaming state so SIGINT can cancel instead of exit
         g_agentStreaming.store(true, std::memory_order_release);
 
-        // In basic (non-FTXUI) mode, tool callbacks write directly to stdout,
-        // which interleaves with streaming text and causes garbled output.
-        // Solution: disable readline redisplay during streaming, and let
-        // tool results flow after the current text block.
-        auto result = agentLoop_->runStreaming(input, [](const String& token) {
-            std::cout << token << std::flush;
-        });
+        // Token output is now handled by the new 5-layer pipeline
+        // (TypedStreamEvent → StreamBuffer → AnswerPostProcessor → ANSI stdout)
+        auto result = agentLoop_->runStreaming(input, [](const String&) {});
 
         g_agentStreaming.store(false, std::memory_order_release);
         spinner_->stop();
