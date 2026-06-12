@@ -40,6 +40,10 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
         case StreamEventType::StreamStart:
             answerStarted_ = true;
             inThinkingTag_ = false;
+            thinkingTagBuffer_.clear();      // Clear stale partial prefixes from previous stream
+            textAccumulator_.clear();
+            lastEmittedPos_ = 0;
+            blockParser_.reset();
             answerStartTime_ = std::chrono::steady_clock::now();
             emit(DisplayEvent{.type = DisplayEventType::AnswerStart});
             emit(DisplayEvent{.type = DisplayEventType::TurnMetadata, .metadata = {.isStreaming = true}});
