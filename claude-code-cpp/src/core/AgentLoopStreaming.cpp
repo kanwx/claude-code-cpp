@@ -145,23 +145,27 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
     std::map<int, std::pair<String, String>> thinkingBlocks;
     std::vector<Json> redactedThinkingBlocks;  // Preserve for re-emission in API requests
 
-    // Wire onTypedEvent to the API client if callback is set
+    // Wire onTypedEvent to the API client if callback is set.
+    // AnthropicClient already emits TypedStreamEvents via onTypedEvent for each SSE
+    // event (ThinkingDelta, TextDelta, ToolUseStart, etc.). We must NOT also emit
+    // them from the chunk callback below — that would duplicate every event.
+    // For OpenAI/non-Anthropic clients, we emit TypedStreamEvents inline below.
     auto typedEventCb = [&] {
         std::lock_guard lock(impl_->callbackMutex);
         return impl_->onTypedEvent;
     }();
+    bool isAnthropicClient = false;
     {
         std::lock_guard lock(impl_->callbackMutex);
         if (impl_->onTypedEvent) {
             auto* anthropicClient = dynamic_cast<AnthropicClient*>(&impl_->apiClient);
             if (anthropicClient) {
+                isAnthropicClient = true;
                 auto cb = impl_->onTypedEvent;
                 anthropicClient->onTypedEvent = [cb](TypedStreamEvent&& event) {
                     cb(std::move(event));
                 };
             }
-            // For OpenAI/non-Anthropic clients, typed events are emitted
-            // inline in the stream callback below.
         }
     }
 
@@ -204,8 +208,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 tc.name = contentBlock.contains("name") && contentBlock["name"].is_string() ? contentBlock["name"].get<String>() : "";
                 tc.arguments = "";
                 anthropicToolCalls[index] = tc;
-                // Emit ToolUseStart for new pipeline
-                if (typedEventCb) {
+                // AnthropicClient already emits ToolUseStart via onTypedEvent
+                if (typedEventCb && !isAnthropicClient) {
                     typedEventCb(TypedStreamEvent{
                         .type = StreamEventType::ToolUseStart,
                         .blockIndex = index,
@@ -251,15 +255,12 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                             return impl_->onStreamStart;
                         }();
                         if (cb) cb();
-                        // Emit StreamStart for new pipeline
-                        if (typedEventCb) {
-                            typedEventCb(TypedStreamEvent{.type = StreamEventType::StreamStart});
-                        }
                     }
                     textBuffer += text;
                     if (onToken) onToken(text);
-                    // Emit TextDelta for new pipeline
-                    if (typedEventCb) {
+                    // Only emit TextDelta for OpenAI clients — AnthropicClient
+                    // already emits via onTypedEvent callback
+                    if (typedEventCb && !isAnthropicClient) {
                         typedEventCb(TypedStreamEvent{.type = StreamEventType::TextDelta, .text = text});
                     }
                 }
@@ -269,8 +270,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 if (anthropicToolCalls.contains(index)) {
                     anthropicToolCalls[index].arguments += partialJson;
                 }
-                // Emit InputJsonDelta for new pipeline
-                if (typedEventCb) {
+                if (typedEventCb && !isAnthropicClient) {
                     typedEventCb(TypedStreamEvent{
                         .type = StreamEventType::InputJsonDelta,
                         .text = partialJson,
@@ -285,8 +285,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     if (thinkingBlocks.contains(index)) {
                         thinkingBlocks[index].first += thinking;
                     }
-                    // Emit ThinkingDelta for new pipeline
-                    if (typedEventCb) {
+                    // AnthropicClient already emits ThinkingDelta via onTypedEvent
+                    if (typedEventCb && !isAnthropicClient) {
                         typedEventCb(TypedStreamEvent{
                             .type = StreamEventType::ThinkingDelta,
                             .text = thinking
@@ -297,7 +297,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                 String sig = delta.contains("signature") && delta["signature"].is_string()
                     ? delta["signature"].get<String>() : "";
                 if (thinkingBlocks.contains(index)) {
-                    thinkingBlocks[index].second += sig;
+                    thinkingBlocks[index].second = sig;
                 }
             }
         }
@@ -346,8 +346,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             if (blockType == "redacted_thinking") {
                 // Already captured in redactedThinkingBlocks at content_block_start
             } else if (blockType == "thinking") {
-                // Emit ThinkingBlockStop for new pipeline
-                if (typedEventCb) {
+                // AnthropicClient already emits ThinkingBlockStop via onTypedEvent
+                if (typedEventCb && !isAnthropicClient) {
                     typedEventCb(TypedStreamEvent{
                         .type = StreamEventType::ThinkingBlockStop
                     });
@@ -387,7 +387,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     stopReason = delta["stop_reason"].get<String>();
 
                     // Emit ToolUseComplete for any pending Anthropic tool calls
-                    if (typedEventCb && stopReason == "tool_use") {
+                    // AnthropicClient already emits these via onTypedEvent
+                    if (typedEventCb && !isAnthropicClient && stopReason == "tool_use") {
                         for (auto& [idx, tc] : anthropicToolCalls) {
                             typedEventCb(TypedStreamEvent{
                                 .type = StreamEventType::ToolUseComplete,
@@ -398,7 +399,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
                     }
 
                     // Emit StreamEnd for new pipeline
-                    if (typedEventCb) {
+                    // AnthropicClient emits StreamEnd via onTypedEvent on message_stop
+                    if (typedEventCb && !isAnthropicClient) {
                         typedEventCb(TypedStreamEvent{
                             .type = StreamEventType::StreamEnd,
                             .stopReason = stopReason
@@ -562,8 +564,31 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         auto interleaveExecResults = impl_->toolExecutor->collectResults();
         interleavedToolResponses.reserve(interleaveExecResults.size());
         for (auto& ier : interleaveExecResults) {
+            // Emit StreamToolEvent for the new 5-layer pipeline
+            {
+                auto cb = [&] {
+                    std::lock_guard lock(impl_->callbackMutex);
+                    return impl_->onStreamToolEvent;
+                }();
+                if (cb) {
+                    StreamToolEventType eventType = ier.response.isError ? StreamToolEventType::Error
+                        : ier.response.isCancelled ? StreamToolEventType::Cancelled
+                        : ier.response.isRejected ? StreamToolEventType::Rejected
+                        : StreamToolEventType::Completed;
+                    cb(StreamToolEvent{
+                        .type = eventType,
+                        .toolCallId = ier.response.callId,
+                        .toolName = ier.response.toolName,
+                        .summary = ier.displaySummary,
+                        .durationMs = static_cast<double>(ier.duration.count())
+                    });
+                }
+            }
+
+            // Also emit via old StreamEvent path (kept for backward compat with emitStreamEvent fallback)
             StreamEvent toolResultEvent;
             toolResultEvent.type = StreamEvent::Type::ToolResultReady;
+            toolResultEvent.toolId = ier.response.callId;
             toolResultEvent.toolName = ier.response.toolName;
             toolResultEvent.toolResult = ier.response.content;
             toolResultEvent.toolIsError = ier.response.isError;
