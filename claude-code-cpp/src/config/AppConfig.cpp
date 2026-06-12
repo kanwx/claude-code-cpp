@@ -99,11 +99,13 @@ AppConfig::ApiConfig AppConfig::getApiConfig() const {
         api.reasoningModel = apiObj.value("reasoningModel", "");
     }
 
-    // 兼容旧格式 (顶层字段)
-    api.provider = config_.value("provider", api.provider);
-    api.model = config_.value("model", api.model);
-    api.apiKey = config_.value("apiKey", api.apiKey);
-    api.baseUrl = config_.value("baseUrl", api.baseUrl);
+    // 兼容旧格式 (顶层字段) — 仅作为回退，不覆盖 api 对象中已有的值
+    // applyEnvOverrides() 已经将 env.{ANTHROPIC_MODEL,ANTHROPIC_BASE_URL,...}
+    // 和顶层 model 写入 config_["api"]，这里的回退只在 api 对象不存在时生效
+    if (api.provider.empty()) api.provider = config_.value("provider", "anthropic");
+    if (api.model.empty())   api.model   = config_.value("model", "");
+    if (api.apiKey.empty())  api.apiKey  = config_.value("apiKey", "");
+    if (api.baseUrl.empty()) api.baseUrl = config_.value("baseUrl", "");
 
     // 设置默认值
     if (api.baseUrl.empty()) {

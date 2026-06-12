@@ -55,14 +55,24 @@ ApiClientHolder createApiClient(const ApiClientParams& params) {
     String apiKey = params.apiKey;
     String baseUrl = params.baseUrl;
 
-    // Auto-detect provider type based on base URL
+    // Auto-detect provider type based on base URL.
+    // Some third-party providers (e.g. DeepSeek) expose Anthropic-compatible
+    // endpoints at paths like /anthropic while using their own domain.
     bool isOpenAICompatible = false;
     if (!baseUrl.empty()) {
-        bool isAnthropicAPI = (baseUrl.find("api.anthropic.com") != String::npos);
-        isOpenAICompatible = !isAnthropicAPI;
-
-        if (isOpenAICompatible && provider == "anthropic") {
-            spdlog::debug("Custom base URL detected ({}), using OpenAI-compatible format", baseUrl);
+        // Anthropic endpoints: official API OR any URL with /anthropic path prefix
+        bool isAnthropicAPI = (baseUrl.find("api.anthropic.com") != String::npos) ||
+                              (baseUrl.find("/anthropic") != String::npos);
+        // OpenAI endpoints: only auto-detect if the URL explicitly looks like OpenAI
+        bool isOpenAIAPI = (baseUrl.find("api.openai.com") != String::npos) ||
+                           (baseUrl.find("/v1/chat") != String::npos);
+        // Only override provider when there's a clear signal.
+        // If neither pattern matches, trust the configured provider.
+        if (isAnthropicAPI && provider != "anthropic") {
+            spdlog::debug("Anthropic-compatible base URL detected ({}), using anthropic format", baseUrl);
+            provider = "anthropic";
+        } else if (isOpenAIAPI && provider != "openai") {
+            spdlog::debug("OpenAI-compatible base URL detected ({}), using openai format", baseUrl);
             provider = "openai";
         }
     }
