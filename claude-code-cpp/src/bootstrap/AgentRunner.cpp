@@ -38,9 +38,14 @@
 #include <spdlog/spdlog.h>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
 namespace claude {
 namespace agent_runner {
+
+// Protects ANSI-mode streaming output; recursive because StreamBuffer::feed()
+// may call emit() which invokes the display callback, re-entering the lock.
+static std::recursive_mutex ansiStreamMutex;
 
 ApiClientHolder createApiClient(const ApiClientParams& params) {
     ApiClientHolder holder;
@@ -358,6 +363,7 @@ void setupCallbacks(AgentLoop& loop,
                 ftxuiRepl->handleDisplayEvent(std::move(event));
             } else {
                 // ANSI mode: render DisplayEvents directly to stdout
+                std::lock_guard lock(ansiStreamMutex);
                 switch (event.type) {
                     case DisplayEventType::TextParagraph:
                     case DisplayEventType::TextPartial:
@@ -412,6 +418,7 @@ void setupCallbacks(AgentLoop& loop,
 
     // Wire StreamToolEvent → StreamBuffer
     loop.setOnStreamToolEvent([streamBuffer](StreamToolEvent&& event) {
+        std::lock_guard lock(ansiStreamMutex);
         streamBuffer->feed(std::move(event));
     });
 }
