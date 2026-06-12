@@ -196,9 +196,9 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 isFirstAnswerBlock_ = true;
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                contentBlocks_.clear();
-                useExternalPostProcessor_ = true;  // B4: external post-processor handles grouping
-                toolProgressIndices_.clear();        // B5: fresh indices for new turn
+                currentTurnStartIndex_ = contentBlocks_.size();    // B6: preserve scrollback
+                useExternalPostProcessor_ = true;                  // B4: external post-processor handles grouping
+                toolProgressIndices_.clear();                        // B5: fresh indices for new turn
                 startRefreshThread();
                 break;
 
@@ -278,6 +278,23 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 isStreaming_ = false;
                 isThinking_ = false;
                 stopRefreshThread();
+
+                // B6: Record turn boundary
+                turnBoundaries_.push_back(contentBlocks_.size());
+
+                // B6: Hard cap — trim oldest blocks if exceeding MAX_BLOCKS
+                if (contentBlocks_.size() > MAX_BLOCKS) {
+                    size_t toRemove = contentBlocks_.size() - MAX_BLOCKS / 2;
+                    contentBlocks_.erase(
+                        contentBlocks_.begin(),
+                        contentBlocks_.begin() + static_cast<long>(toRemove));
+                    // Adjust turn boundaries
+                    for (auto& b : turnBoundaries_) {
+                        b = (b > toRemove) ? (b - toRemove) : 0;
+                    }
+                    currentTurnStartIndex_ = (currentTurnStartIndex_ > toRemove)
+                        ? (currentTurnStartIndex_ - toRemove) : 0;
+                }
                 break;
             }
 

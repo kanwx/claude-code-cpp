@@ -113,6 +113,11 @@ private:
     std::vector<ContentBlock> contentBlocks_;
     String streamingText_;
 
+    // Turn boundary tracking (Fix B6)
+    size_t currentTurnStartIndex_ = 0;
+    std::vector<size_t> turnBoundaries_;
+    static constexpr size_t MAX_BLOCKS = 2000;
+
     // ToolProgress index tracking (Fix B5) — O(1) lookup for ToolResult→ToolProgress replacement
     std::map<String, size_t> toolProgressIndices_;  // toolCallId -> index in contentBlocks_
 
