@@ -2,11 +2,44 @@
 
 namespace claude {
 
+// Strip thinking tags from a string. Handles:
+//   <thinking>...</thinking>       (standard Anthropic format)
+//   <think>...</think>             (DeepSeek format)
+//   ＜thinking＞...＜/thinking＞       (CJK fullwidth angle bracket variants)
+//   ＜think＞...＜/think＞             (CJK fullwidth angle bracket variants)
+static String stripThinkingTags(const String& text) {
+    String result = text;
+    // All open/close tag pairs to try
+    static const std::vector<std::pair<String, String>> tagPairs = {
+        {"<thinking>", "</thinking>"},
+        {"<think>", "</think>"},
+        {"\xef\xbc\x9c" "thinking" "\xef\xbc\x9e", "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e"},
+        {"\xef\xbc\x9c" "think" "\xef\xbc\x9e", "\xef\xbc\x9c" "/think" "\xef\xbc\x9e"},
+        {"&lt;thinking&gt;", "&lt;/thinking&gt;"},
+        {"&lt;think&gt;", "&lt;/think&gt;"},
+    };
+
+    for (const auto& [openTag, closeTag] : tagPairs) {
+        size_t pos;
+        while ((pos = result.find(openTag)) != String::npos) {
+            auto endPos = result.find(closeTag, pos + openTag.size());
+            if (endPos != String::npos) {
+                result.erase(pos, endPos + closeTag.size() - pos);
+            } else {
+                result.erase(pos);
+                break;
+            }
+        }
+    }
+    return result;
+}
+
 void StreamBuffer::feed(TypedStreamEvent&& event) {
     std::lock_guard lock(mutex_);
     switch (event.type) {
         case StreamEventType::StreamStart:
             answerStarted_ = true;
+            inThinkingTag_ = false;
             answerStartTime_ = std::chrono::steady_clock::now();
             emit(DisplayEvent{.type = DisplayEventType::AnswerStart});
             emit(DisplayEvent{.type = DisplayEventType::TurnMetadata, .metadata = {.isStreaming = true}});
@@ -14,53 +47,139 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
 
         case StreamEventType::TextDelta: {
             // Strip thinking tags from text output.
-            // Some models (GLM, etc.) include <thinking>/<think> tags in regular
-            // text instead of using separate thinking events. We must remove these.
+            // Some models include thinking tags in regular text instead of
+            // using separate thinking events. We must remove these.
+            // Handles both <thinking> (Anthropic) and <think> (DeepSeek) formats.
             String cleanText = event.text;
-            if (inThinkingTag_) {
-                // Currently inside a thinking block — discard until close tag
-                auto endPos = cleanText.find("</thinking>");
-                if (endPos == String::npos) endPos = cleanText.find("</think>");
-                if (endPos != String::npos) {
-                    inThinkingTag_ = false;
-                    cleanText = cleanText.substr(endPos + (cleanText[endPos+2] == 't' ? 12 : 8));
-                } else {
-                    break;  // Still inside thinking, discard entire chunk
+
+            // Cross-turn close tag detection: when a tool call interrupts
+            // thinking, the close tag may arrive in a new turn after
+            // StreamStart resets inThinkingTag_. Detect dangling close tags
+            // even when we think we're not inside a think block.
+            if (!inThinkingTag_) {
+                size_t closePos = String::npos;
+                size_t closeLen = 0;
+                for (const char* ct : {"</thinking>", "</think>",
+                                       "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e",
+                                       "\xef\xbc\x9c" "/think" "\xef\xbc\x9e",
+                                       "&lt;/thinking&gt;", "&lt;/think&gt;"}) {
+                    auto p = cleanText.find(ct);
+                    if (p != String::npos && (closePos == String::npos || p < closePos)) {
+                        closePos = p;
+                        closeLen = strlen(ct);
+                    }
+                }
+                if (closePos != String::npos) {
+                    // Dangling close tag: discard everything up to/including it.
+                    cleanText = cleanText.substr(closePos + closeLen);
                 }
             }
-            // Check for opening thinking tags
-            for (const auto& tag : {"<thinking>", "<think>"}) {
-                size_t tagLen = strlen(tag);
+            if (inThinkingTag_) {
+                size_t endPos = String::npos;
+                size_t closeLen = 0;
+                // Check all close tags
+                for (const char* ct : {"</thinking>", "</think>",
+                                       "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e",
+                                       "\xef\xbc\x9c" "/think" "\xef\xbc\x9e",
+                                       "&lt;/thinking&gt;", "&lt;/think&gt;"}) {
+                    auto p = cleanText.find(ct);
+                    if (p != String::npos && (endPos == String::npos || p < endPos)) {
+                        endPos = p;
+                        closeLen = strlen(ct);
+                    }
+                }
+                if (endPos != String::npos) {
+                    inThinkingTag_ = false;
+                    cleanText = cleanText.substr(endPos + closeLen);
+                } else {
+                    break;
+                }
+            }
+            // Check all open tag variants
+            static const std::vector<std::pair<String, String>> tagPairs = {
+                {"<thinking>", "</thinking>"},
+                {"<think>", "</think>"},
+                {"\xef\xbc\x9c" "thinking" "\xef\xbc\x9e", "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e"},
+                {"\xef\xbc\x9c" "think" "\xef\xbc\x9e", "\xef\xbc\x9c" "/think" "\xef\xbc\x9e"},
+                {"&lt;thinking&gt;", "&lt;/thinking&gt;"},
+                {"&lt;think&gt;", "&lt;/think&gt;"},
+            };
+            for (const auto& [openTag, closeTag] : tagPairs) {
                 size_t pos;
-                while ((pos = cleanText.find(tag)) != String::npos) {
-                    const char* closeTag = (tagLen == 11) ? "</thinking>" : "</think>";
-                    size_t closeLen = (tagLen == 11) ? 12 : 8;
-                    auto endPos = cleanText.find(closeTag, pos + tagLen);
+                while ((pos = cleanText.find(openTag)) != String::npos) {
+                    auto endPos = cleanText.find(closeTag, pos + openTag.size());
                     if (endPos != String::npos) {
-                        cleanText.erase(pos, endPos + closeLen - pos);
+                        cleanText.erase(pos, endPos + closeTag.size() - pos);
                     } else {
-                        // Unclosed tag — discard from opening tag onward
                         cleanText.erase(pos);
                         inThinkingTag_ = true;
                         break;
                     }
                 }
             }
+
+            // Detect partial tag suffixes at chunk boundaries.
+            // When a tag like <think> is split (e.g. "<thin" + "k>"),
+            // the partial suffix leaks as text. Strip it and set
+            // inThinkingTag_ so the next chunk discards remaining content.
+            if (!cleanText.empty()) {
+                auto ltPos = cleanText.rfind('<');
+                if (ltPos != String::npos) {
+                    String sfx = cleanText.substr(ltPos);
+                    // Check if sfx is a prefix (but not complete match) of any tag
+                    if ((sfx.size() < 7 &&
+                         String("<think>").substr(0, sfx.size()) == sfx) ||
+                        (sfx.size() < 10 &&
+                         String("<thinking>").substr(0, sfx.size()) == sfx) ||
+                        (sfx.size() < 8 &&
+                         String("</think>").substr(0, sfx.size()) == sfx) ||
+                        (sfx.size() < 11 &&
+                         String("</thinking>").substr(0, sfx.size()) == sfx)) {
+                        cleanText.erase(ltPos);
+                        inThinkingTag_ = true;
+                    }
+                }
+            }
+
             if (cleanText.empty()) break;
 
             textAccumulator_ += cleanText;
-            emit(DisplayEvent{.type = DisplayEventType::TextPartial, .text = cleanText});
-            if (blockParser_.append(cleanText)) {
+            bool hasBoundary = blockParser_.append(cleanText);
+
+            if (hasBoundary && blockParser_.lastBoundaryPos() > 0) {
+                // Paragraph boundary detected: flush the complete paragraph.
+                lastEmittedPos_ = 0;
                 flushTextBuffer(false);
+            } else if (textAccumulator_.size() >= FLUSH_THRESHOLD) {
+                // Safety-net: long paragraph with no block boundary detected.
+                // Emit ONLY the incremental delta since the last emit.
+                // The UI (FtxuiRepl) APPENDS TextPartial to streamingText_,
+                // so we must not re-send already-emitted text.
+                String delta = textAccumulator_.substr(lastEmittedPos_);
+                lastEmittedPos_ = textAccumulator_.size();
+                if (!delta.empty()) {
+                    emit(DisplayEvent{
+                        .type = DisplayEventType::TextPartial,
+                        .text = std::move(delta)
+                    });
+                }
+                // Do NOT clear textAccumulator_ — the full paragraph is sent
+                // as TextParagraph at the next boundary or StreamEnd.
             }
             break;
         }
 
-        case StreamEventType::ThinkingDelta:
-            thinkingAccumulator_ += event.text;
-            thinkingCharsSinceEmit_ += event.text.size();
+        case StreamEventType::ThinkingDelta: {
+            // Strip thinking tags from ThinkingDelta too.
+            // Some models leak raw tags into thinking events.
+            String clean = stripThinkingTags(event.text);
+            if (!clean.empty()) {
+                thinkingAccumulator_ += clean;
+                thinkingCharsSinceEmit_ += clean.size();
+            }
             maybeEmitThinkingUpdate(false);
             break;
+        }
 
         case StreamEventType::ThinkingBlockStop:
             maybeEmitThinkingUpdate(true);
@@ -208,6 +327,7 @@ void StreamBuffer::flushTextBuffer(bool isComplete) {
         .text = std::move(textAccumulator_)
     });
     textAccumulator_.clear();
+    lastEmittedPos_ = 0;     // Reset delta tracker (Fix B1)
     blockParser_.reset();
 }
 
@@ -219,10 +339,14 @@ void StreamBuffer::maybeEmitThinkingUpdate(bool force) {
     bool charsOk = thinkingCharsSinceEmit_ >= THINKING_MIN_CHARS;
 
     if (force || (intervalOk && charsOk)) {
-        emit(DisplayEvent{
-            .type = DisplayEventType::ThinkingBlock,
-            .thinkingText = thinkingAccumulator_
-        });
+        // Strip any residual thinking tags before emitting.
+        String clean = stripThinkingTags(thinkingAccumulator_);
+        if (!clean.empty()) {
+            emit(DisplayEvent{
+                .type = DisplayEventType::ThinkingBlock,
+                .thinkingText = std::move(clean)
+            });
+        }
         lastThinkingEmit_ = now;
         thinkingCharsSinceEmit_ = 0;
     }

@@ -45,6 +45,9 @@ private:
     size_t thinkingCharsSinceEmit_ = 0;
     void maybeEmitThinkingUpdate(bool force = false);
 
+    // TextPartial delta tracking (Fix B1)
+    size_t lastEmittedPos_ = 0;  // position in textAccumulator_ already sent via TextPartial
+
     // Internal state
     bool answerStarted_ = false;
     bool inThinkingTag_ = false;  // Track unclosed thinking tags across chunks<arg_key>text</arg_key><arg_value> tags across chunks
