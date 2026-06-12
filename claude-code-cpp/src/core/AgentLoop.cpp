@@ -1,6 +1,8 @@
 #include <claude/core/AgentLoopImpl.hpp>
+#include <claude/core/ContentBlockParam.hpp>
 #include <claude/api/RetryableClient.hpp>
 #include <spdlog/spdlog.h>
+#include <algorithm>
 
 namespace claude {
 
@@ -701,86 +703,72 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 // ============================================================================
 
 Json AgentLoop::buildApiRequest() {
-    Json messages = Json::array();
-
+    // Convert legacy messages to ContentMessage, then serialize via
+    // provider-specific functions. The internal messageHistory stays as
+    // vector<Message> — conversion happens at API request build time.
+    std::vector<ContentMessage> contentHistory;
     {
-        // Snapshot messageHistory under lock to iterate safely.
-        // vector can be reallocated by concurrent push_back.
         std::lock_guard lock(impl_->historyMutex);
-        for (const auto& msg : impl_->messageHistory) {
-            Json m;
-
-            switch (msg.role) {
-                case MessageRole::System:
-                    m["role"] = "system";
-                    // If we have pre-built system blocks with cache_control,
-                    // serialize them as a JSON array so AnthropicClient can
-                    // detect and use them directly (instead of the flat string).
-                    if (impl_->systemBlocks.has_value() && !impl_->systemBlocks->empty()) {
-                        Json contentArray = Json::array();
-                        for (const auto& block : *impl_->systemBlocks) {
-                            contentArray.push_back(block.toJson());
-                        }
-                        m["content"] = contentArray;
-                    } else {
-                        m["content"] = msg.content;
-                    }
-                    break;
-
-                case MessageRole::User:
-                    m["role"] = "user";
-                    m["content"] = msg.content;
-                    break;
-
-                case MessageRole::Assistant:
-                    m["role"] = "assistant";
-                    m["content"] = msg.content.empty() ? "" : msg.content;
-                    // Preserve thinking/signature for Anthropic format conversion
-                    if (msg.thinking) {
-                        m["thinking"] = *msg.thinking;
-                    }
-                    if (msg.signature) {
-                        m["signature"] = *msg.signature;
-                    }
-                    if (!msg.redactedThinking.empty()) {
-                        m["redacted_thinking"] = msg.redactedThinking;
-                    }
-                    if (!msg.toolCalls.empty()) {
-                        m["tool_calls"] = Json::array();
-                        for (const auto& tc : msg.toolCalls) {
-                            m["tool_calls"].push_back({
-                                {"id", tc.id.empty() ? "call_0" : tc.id},
-                                {"type", "function"},
-                                {"function", {
-                                    {"name", tc.name.empty() ? "unknown" : tc.name},
-                                    {"arguments", tc.arguments.empty() ? "{}" : tc.arguments}
-                                }}
-                            });
-                        }
-                    }
-                    break;
-
-                case MessageRole::ToolResult:
-                    // OpenAI format: each tool result is a separate message
-                    for (const auto& tr : msg.toolResults) {
-                        Json trMsg;
-                        trMsg["role"] = "tool";
-                        trMsg["tool_call_id"] = tr.callId.empty() ? "call_0" : tr.callId;
-                        trMsg["content"] = tr.content.empty() ? "" : tr.content;
-                        messages.push_back(trMsg);
-                    }
-                    continue; // skip the messages.push_back(m) at the end
-            }
-
-            messages.push_back(m);
+        contentHistory.reserve(impl_->messageHistory.size());
+        for (const auto& old : impl_->messageHistory) {
+            contentHistory.push_back(convertLegacyMessage(old));
         }
     }
 
-    Json req;
-    req["messages"] = messages;
+    // Strip thinking from assistant messages (ContentMessage view).
+    // RedactedThinking blocks are preserved — they must be sent verbatim.
+    for (auto& msg : contentHistory) {
+        if (msg.role == MessageRole::Assistant) {
+            msg.content.erase(
+                std::remove_if(msg.content.begin(), msg.content.end(),
+                    [](const ContentBlockParam& b) {
+                        return b.type == ContentBlockParam::Thinking;
+                    }),
+                msg.content.end());
+        }
+    }
+
+    Json request;
+
+    // System prompt — prefer pre-built blocks with cache_control markers
+    if (impl_->systemBlocks.has_value() && !impl_->systemBlocks->empty()) {
+        Json sysArr = Json::array();
+        for (const auto& block : *impl_->systemBlocks) {
+            sysArr.push_back(block.toJson());
+        }
+        request["system"] = sysArr;
+    } else if (!impl_->systemPrompt.empty()) {
+        request["system"] = impl_->systemPrompt;
+    }
+
+    // Build messages using provider-specific serialization
+    auto provider = impl_->apiClient.getProviderName();
+    if (provider == "anthropic") {
+        request["messages"] = buildAnthropicApiMessages(contentHistory);
+    } else {
+        // OpenAI: serialize each ContentMessage, expand tool results to separate messages
+        Json messages = Json::array();
+        for (auto& msg : contentHistory) {
+            if (msg.role == MessageRole::System) continue;
+            if (msg.role == MessageRole::ToolResult) {
+                // OpenAI: each tool result is a separate message
+                for (auto& block : msg.content) {
+                    if (block.type == ContentBlockParam::ToolResult) {
+                        Json tr;
+                        tr["role"] = "tool";
+                        tr["tool_call_id"] = block.toolUseId;
+                        tr["content"] = block.resultContent;
+                        messages.push_back(tr);
+                    }
+                }
+            } else {
+                messages.push_back(serializeContentMessageForOpenAI(msg));
+            }
+        }
+        request["messages"] = messages;
+    }
 
     // Convert tool definitions to JSON array (per provider format)
-    String provider = impl_->apiClient.getProviderName();
     Json toolsJson = Json::array();
 
     // Snapshot tool filter lists under lock
@@ -829,7 +817,7 @@ Json AgentLoop::buildApiRequest() {
             toolsJson.push_back(def.toJson(provider));
         }
     }
-    req["tools"] = toolsJson;
+    request["tools"] = toolsJson;
 
     // Apply per-agent overrides if set
     if (impl_->temperature >= 0) {
@@ -839,7 +827,7 @@ Json AgentLoop::buildApiRequest() {
         impl_->apiClient.setMaxTokens(impl_->maxTokensOverride);
     }
 
-    return req;
+    return request;
 }
 
 // ============================================================================
