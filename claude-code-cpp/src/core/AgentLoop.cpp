@@ -391,6 +391,10 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             // ========== Model Fallback: Tombstone + System Warning ==========
             spdlog::warn("Model fallback: {} -> {}", fb.fromModel, fb.toModel);
 
+            // 0. Discard any in-flight interleaved tools — emit synthetic error
+            // events for pending tools so the UI shows them as cancelled
+            discardStreamingTools();
+
             // 1. Add missing tool_results for any dangling tool_uses
             addMissingToolResults();
 

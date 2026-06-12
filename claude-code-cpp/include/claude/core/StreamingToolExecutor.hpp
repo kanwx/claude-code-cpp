@@ -88,6 +88,14 @@ public:
         onToolChunk_ = std::move(cb);
     }
 
+    /// Set per-tool-result-ready callback — fires immediately upon each tool's
+    /// completion with full ToolExecutionResult, enabling progressive yielding.
+    /// Unlike onToolComplete (which only gets toolName + success), this callback
+    /// receives the complete result including callId, summary, duration, and status.
+    void setOnToolResultReady(std::function<void(const ToolExecutionResult&)> cb) {
+        onToolResultReady_ = std::move(cb);
+    }
+
     /// Set the conversation transcript for permission evaluation (YOLO classifier, etc.)
     void setTranscript(const std::vector<Message>* transcript) { transcript_ = transcript; }
 
@@ -129,6 +137,7 @@ private:
     std::function<void(const String&, const String&, const String&)> onToolStart_;
     std::function<void(const String&, bool)> onToolComplete_;
     std::function<void(const String&)> onToolChunk_;
+    std::function<void(const ToolExecutionResult&)> onToolResultReady_;
 
     /// Pending futures from enqueued tool calls (for streaming interleaving)
     struct PendingFuture {

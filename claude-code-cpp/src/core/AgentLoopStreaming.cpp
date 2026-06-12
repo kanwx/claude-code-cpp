@@ -107,6 +107,48 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             impl_->toolExecutor.emplace(impl_->tools, impl_->toolContext, impl_->hookManager, impl_->permissionEngine);
             impl_->toolExecutor->setOnPermissionRequest(permCb);
             impl_->toolExecutor->setTranscript(&impl_->messageHistory);
+
+            // Wire progressive yielding callback for interleaved tool execution.
+            // Each tool completion fires immediately via onToolResultReady,
+            // rather than waiting for collectResults() at stream end.
+            impl_->toolExecutor->setOnToolResultReady([this](const ToolExecutionResult& er) {
+                bool isError = er.response.isError;
+
+                // Emit tool result via old StreamEvent path (backward compat)
+                StreamEvent toolResultEvent;
+                toolResultEvent.type = StreamEvent::Type::ToolResultReady;
+                toolResultEvent.toolId = er.response.callId;
+                toolResultEvent.toolName = er.response.toolName;
+                toolResultEvent.toolResult = er.response.content;
+                toolResultEvent.toolIsError = isError;
+                toolResultEvent.toolIsCancelled = er.response.isCancelled;
+                toolResultEvent.toolIsRejected = er.response.isRejected;
+                emitStreamEvent(std::move(toolResultEvent));
+
+                // New 5-layer pipeline: emit StreamToolEvent immediately
+                {
+                    auto cb = [&] {
+                        std::lock_guard lock(impl_->callbackMutex);
+                        return impl_->onStreamToolEvent;
+                    }();
+                    if (cb) {
+                        StreamToolEventType eventType = isError ? StreamToolEventType::Error
+                            : er.response.isCancelled ? StreamToolEventType::Cancelled
+                            : er.response.isRejected ? StreamToolEventType::Rejected
+                            : StreamToolEventType::Completed;
+                        cb(StreamToolEvent{
+                            .type = eventType,
+                            .toolCallId = er.response.callId,
+                            .toolName = er.response.toolName,
+                            .summary = er.displaySummary,
+                            .durationMs = static_cast<double>(er.duration.count())
+                        });
+                    }
+                }
+
+                // Fire end notification
+                notifyToolEvent(ToolEventPhase::End, er.response.toolName, "", er.response.content);
+            });
         }
     }
 
@@ -547,7 +589,10 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         }
     });
 
-    // Collect interleaved execution results
+    // Collect interleaved execution results.
+    // Note: StreamToolEvent and StreamEvent emissions already happened
+    // progressively via the onToolResultReady callback wired above.
+    // Here we only need to collect the ToolResponse objects for the loop.
     std::vector<ToolResponse> interleavedToolResponses;
     bool shouldCollect = false;
     {
@@ -558,38 +603,6 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
         auto interleaveExecResults = impl_->toolExecutor->collectResults();
         interleavedToolResponses.reserve(interleaveExecResults.size());
         for (auto& ier : interleaveExecResults) {
-            // Emit StreamToolEvent for the new 5-layer pipeline
-            {
-                auto cb = [&] {
-                    std::lock_guard lock(impl_->callbackMutex);
-                    return impl_->onStreamToolEvent;
-                }();
-                if (cb) {
-                    StreamToolEventType eventType = ier.response.isError ? StreamToolEventType::Error
-                        : ier.response.isCancelled ? StreamToolEventType::Cancelled
-                        : ier.response.isRejected ? StreamToolEventType::Rejected
-                        : StreamToolEventType::Completed;
-                    cb(StreamToolEvent{
-                        .type = eventType,
-                        .toolCallId = ier.response.callId,
-                        .toolName = ier.response.toolName,
-                        .summary = ier.displaySummary,
-                        .durationMs = static_cast<double>(ier.duration.count())
-                    });
-                }
-            }
-
-            // Also emit via old StreamEvent path (kept for backward compat with emitStreamEvent fallback)
-            StreamEvent toolResultEvent;
-            toolResultEvent.type = StreamEvent::Type::ToolResultReady;
-            toolResultEvent.toolId = ier.response.callId;
-            toolResultEvent.toolName = ier.response.toolName;
-            toolResultEvent.toolResult = ier.response.content;
-            toolResultEvent.toolIsError = ier.response.isError;
-            toolResultEvent.toolIsCancelled = ier.response.isCancelled;
-            toolResultEvent.toolIsRejected = ier.response.isRejected;
-            emitStreamEvent(std::move(toolResultEvent));
-
             interleavedToolResponses.push_back(std::move(ier.response));
         }
     }

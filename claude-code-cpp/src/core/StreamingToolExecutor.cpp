@@ -455,6 +455,7 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     activeCount_.fetch_sub(1, std::memory_order_relaxed);
     if (onToolComplete_) onToolComplete_(call.name, !isError);
 
+    // ====== Build result with display summary ======
     ToolExecutionResult execResult{
         ToolResponse{call.id, call.name, result, isError, wasCancelled, false},
         duration, parallel, order
@@ -476,6 +477,12 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
             if (firstLine.size() > 80) firstLine = firstLine.substr(0, 80) + "...";
             execResult.displaySummary = ToolResultSummary::success(firstLine);
         }
+    }
+
+    // Fire per-tool-result-ready callback — enables progressive yielding
+    // (each tool completion immediately emits a StreamToolEvent rather than batching)
+    if (onToolResultReady_) {
+        onToolResultReady_(execResult);
     }
 
     return execResult;

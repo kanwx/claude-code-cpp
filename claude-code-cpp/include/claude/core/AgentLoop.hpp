@@ -12,6 +12,8 @@
 #include <vector>
 #include <memory>
 #include <expected>
+#include <condition_variable>
+#include <atomic>
 
 namespace claude {
 
@@ -342,6 +344,23 @@ private:
 
     /// Emit stream event — if onStreamEvent_ is set, use it; otherwise fall back to individual callbacks
     void emitStreamEvent(StreamEvent event);
+
+    /// State for progressive tool result yielding — tracks active tool count
+    /// with condition variable for non-blocking wait
+    struct ToolExecutionState {
+        std::atomic<int> activeCount{0};
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::atomic<bool> cancelled{false};
+    };
+
+    /// Wait for remaining in-flight tools to complete, using condition variable.
+    /// Returns when all tools finish or when the state is cancelled.
+    void waitForRemaining(ToolExecutionState& state);
+
+    /// Discard all in-flight streaming tools — emit synthetic error events
+    /// for any pending interleaved tools. Called when a streaming fallback occurs.
+    void discardStreamingTools();
 
 private:
     /// pImpl — all private state lives in Impl, defined in AgentLoop.cpp

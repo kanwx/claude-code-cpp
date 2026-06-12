@@ -27,6 +27,10 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
     // Store parent permission callback in ToolContext for sub-agent delegation
     impl_->toolContext.set("parentPermissionCallback", permCb);
 
+    // Track active tool count for progressive yielding
+    ToolExecutionState execState;
+    execState.activeCount.store(static_cast<int>(calls.size()), std::memory_order_relaxed);
+
     executor.setOnToolStart([this](const String& toolName, const String& description, const String& toolId) {
         notifyToolEvent(ToolEventPhase::Start, toolName, description);
         // New 5-layer pipeline: emit StreamToolEvent for tool start
@@ -47,7 +51,7 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
     });
 
     executor.setOnToolComplete([this](const String& toolName, bool success) {
-        // Tool end notification is handled via onToolResult below,
+        // Tool end notification is handled via onToolResultReady below,
         // but we fire the general event here for completeness
         if (!success) {
             notifyToolEvent(ToolEventPhase::End, toolName, "", "Error");
@@ -61,32 +65,23 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
         emitStreamEvent(std::move(chunkEvent));
     });
 
-    // Execute with ParallelReadOnly ordering (read-only tools concurrent, write tools sequential)
-    auto execResults = executor.execute(calls);
-
-    // Convert ToolExecutionResult -> ToolResponse and fire UI callbacks
-    std::vector<ToolResponse> responses;
-    responses.reserve(execResults.size());
-
-    for (auto& er : execResults) {
+    // Progressive yielding: fire StreamToolEvent + StreamEvent immediately
+    // upon each tool's completion via the onToolResultReady callback.
+    // This replaces the batch loop that used to iterate execResults after
+    // executor.execute() returned.
+    executor.setOnToolResultReady([this, &execState](const ToolExecutionResult& er) {
         bool isError = er.response.isError;
 
         // Emit tool result — goes through emitStreamEvent which dispatches
         // to onStreamEvent if set, or falls back to onToolResult.
-        // Do NOT call onToolResult directly here or it fires twice.
         StreamEvent toolResultEvent;
         toolResultEvent.type = StreamEvent::Type::ToolResultReady;
+        toolResultEvent.toolId = er.response.callId;
         toolResultEvent.toolName = er.response.toolName;
         toolResultEvent.toolResult = er.response.content;
         toolResultEvent.toolIsError = isError;
         toolResultEvent.toolIsCancelled = er.response.isCancelled;
         toolResultEvent.toolIsRejected = er.response.isRejected;
-        for (const auto& call : calls) {
-            if (call.name == er.response.toolName) {
-                toolResultEvent.toolId = call.id;
-                break;
-            }
-        }
         emitStreamEvent(std::move(toolResultEvent));
 
         // New 5-layer pipeline: emit StreamToolEvent for tool completion
@@ -113,6 +108,24 @@ std::vector<ToolResponse> AgentLoop::executeToolCalls(const std::vector<ToolCall
         // Fire end notification
         notifyToolEvent(ToolEventPhase::End, er.response.toolName, "", er.response.content);
 
+        // Decrement active count and notify waiters
+        execState.activeCount.fetch_sub(1, std::memory_order_relaxed);
+        execState.cv.notify_one();
+    });
+
+    // Execute with ParallelReadOnly ordering (read-only tools concurrent, write tools sequential)
+    auto execResults = executor.execute(calls);
+
+    // Wait for any remaining in-flight tools (should already be complete since
+    // executor.execute() joins all threads, but this is defensive)
+    waitForRemaining(execState);
+
+    // Convert ToolExecutionResult -> ToolResponse
+    // StreamToolEvent emissions already happened via onToolResultReady callback
+    std::vector<ToolResponse> responses;
+    responses.reserve(execResults.size());
+
+    for (auto& er : execResults) {
         responses.push_back(std::move(er.response));
     }
 
@@ -263,6 +276,67 @@ void AgentLoop::addMissingToolResults() {
             spdlog::debug("Added {} synthetic error tool_results for unmatched tool_uses", errorResults.size());
         }
     }
+}
+
+// ============================================================================
+// Progressive tool result yielding
+// ============================================================================
+
+void AgentLoop::waitForRemaining(ToolExecutionState& state) {
+    std::unique_lock lock(state.mutex);
+    state.cv.wait_for(lock, std::chrono::milliseconds(100), [&] {
+        return state.activeCount.load(std::memory_order_acquire) == 0
+            || state.cancelled.load(std::memory_order_acquire);
+    });
+}
+
+void AgentLoop::discardStreamingTools() {
+    // Generate synthetic error events for all pending interleaved tools.
+    // Called when a streaming fallback occurs — any tools that were dispatched
+    // via the interleaved enqueue API but haven't completed yet need to be
+    // cancelled and reported to the UI.
+    if (!impl_->toolExecutor) return;
+
+    auto& executor = *impl_->toolExecutor;
+
+    // Cancel the executor — this marks all pending/running tools as cancelled
+    executor.cancel();
+
+    // If there are pending enqueued tools, collect them (which joins their
+    // futures and returns cancelled results) and emit error events
+    size_t pendingBefore = executor.pendingCount();
+    if (executor.hasPending()) {
+        auto pendingResults = executor.collectResults();
+        auto streamToolCb = [&] {
+            std::lock_guard lock(impl_->callbackMutex);
+            return impl_->onStreamToolEvent;
+        }();
+
+        for (const auto& er : pendingResults) {
+            // Emit StreamToolEvent for the cancelled tool
+            if (streamToolCb) {
+                streamToolCb(StreamToolEvent{
+                    .type = StreamToolEventType::Cancelled,
+                    .toolCallId = er.response.callId,
+                    .toolName = er.response.toolName,
+                    .summary = ToolResultSummary::dim("Discarded due to model fallback"),
+                    .durationMs = static_cast<double>(er.duration.count())
+                });
+            }
+
+            // Also emit via old StreamEvent path for backward compat
+            StreamEvent toolResultEvent;
+            toolResultEvent.type = StreamEvent::Type::ToolResultReady;
+            toolResultEvent.toolId = er.response.callId;
+            toolResultEvent.toolName = er.response.toolName;
+            toolResultEvent.toolResult = er.response.content;
+            toolResultEvent.toolIsError = true;
+            toolResultEvent.toolIsCancelled = true;
+            emitStreamEvent(std::move(toolResultEvent));
+        }
+    }
+
+    spdlog::info("Discarded streaming tools due to fallback ({} pending)", pendingBefore);
 }
 
 } // namespace claude
