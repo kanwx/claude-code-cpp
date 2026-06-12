@@ -105,6 +105,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 cb.toolName = std::move(ev.toolName);
                 cb.activity = std::move(ev.activity);
                 cb.toolCallId = ev.toolCallId;
+                toolProgressIndices_[ev.toolCallId] = contentBlocks_.size();  // B5: record index before push
                 contentBlocks_.push_back(std::move(cb));
                 break;
             }
@@ -121,16 +122,23 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     streamingRenderer_.reset();
                     contentBlocks_.push_back(std::move(textCb));
                 }
-                // Remove matching ToolProgress (same toolCallId)
+                // B5: O(1) ToolProgress removal using index map
                 String callId = ev.toolCallId;
                 if (!callId.empty()) {
-                    contentBlocks_.erase(
-                        std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
-                            [&callId](const ContentBlock& b) {
-                                return b.type == ContentBlock::ToolProgress &&
-                                       b.toolCallId == callId;
-                            }),
-                        contentBlocks_.end());
+                    auto it = toolProgressIndices_.find(callId);
+                    if (it != toolProgressIndices_.end()) {
+                        size_t idx = it->second;
+                        if (idx < contentBlocks_.size() &&
+                            contentBlocks_[idx].type == ContentBlock::ToolProgress &&
+                            contentBlocks_[idx].toolCallId == callId) {
+                            contentBlocks_.erase(contentBlocks_.begin() + static_cast<long>(idx));
+                            // Shift all indices after the removed position
+                            for (auto& [tid, i] : toolProgressIndices_) {
+                                if (i > idx) --i;
+                            }
+                        }
+                        toolProgressIndices_.erase(it);
+                    }
                 }
                 ContentBlock cb;
                 cb.type = ContentBlock::ToolResult;
@@ -189,6 +197,8 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 streamingText_.clear();
                 streamingRenderer_.reset();
                 contentBlocks_.clear();
+                useExternalPostProcessor_ = true;  // B4: external post-processor handles grouping
+                toolProgressIndices_.clear();        // B5: fresh indices for new turn
                 startRefreshThread();
                 break;
 
@@ -204,8 +214,21 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     streamingRenderer_.reset();
                     contentBlocks_.push_back(std::move(cb));
                 }
-                // Run full message pipeline (replaces simple groupConsecutiveToolResults)
-                runMessagePipeline();
+                // B5: Clean up orphaned ToolProgress blocks (tools that never completed)
+                for (auto& [callId, idx] : toolProgressIndices_) {
+                    if (idx < contentBlocks_.size() &&
+                        contentBlocks_[idx].type == ContentBlock::ToolProgress) {
+                        contentBlocks_[idx].type = ContentBlock::ToolResult;
+                        contentBlocks_[idx].summary = ToolResultSummary::dim("Interrupted");
+                        contentBlocks_[idx].resultStatus = ToolResultStatus::Cancelled;
+                    }
+                }
+                toolProgressIndices_.clear();
+
+                // Only run internal pipeline if no external post-processor is active (B4)
+                if (!useExternalPostProcessor_) {
+                    runMessagePipeline();
+                }
 
                 // Insert collapsed ThinkingBlock after pipeline (before turn duration).
                 // If the model emitted thinking content, show it as a collapsed block
@@ -529,6 +552,7 @@ void FtxuiRepl::addToolUseStart(const String& toolName, const String& toolId, co
         cb.toolName = tn;
         cb.toolCallId = tid;
         cb.activity = "Running";
+        toolProgressIndices_[tid] = contentBlocks_.size();  // B5: record index before push
         contentBlocks_.push_back(std::move(cb));
     });
 }
@@ -550,14 +574,22 @@ void FtxuiRepl::addToolResult(const String& toolName, const String& toolId, cons
             streamingRenderer_.reset();
             contentBlocks_.push_back(std::move(textCb));
         }
-        // Remove matching ToolProgress
+        // B5: O(1) ToolProgress removal using index map
         if (!tid.empty()) {
-            contentBlocks_.erase(
-                std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
-                    [&tid](const ContentBlock& b) {
-                        return b.type == ContentBlock::ToolProgress && b.toolCallId == tid;
-                    }),
-                contentBlocks_.end());
+            auto it = toolProgressIndices_.find(tid);
+            if (it != toolProgressIndices_.end()) {
+                size_t idx = it->second;
+                if (idx < contentBlocks_.size() &&
+                    contentBlocks_[idx].type == ContentBlock::ToolProgress &&
+                    contentBlocks_[idx].toolCallId == tid) {
+                    contentBlocks_.erase(contentBlocks_.begin() + static_cast<long>(idx));
+                    // Shift all indices after the removed position
+                    for (auto& [tcid, i] : toolProgressIndices_) {
+                        if (i > idx) --i;
+                    }
+                }
+                toolProgressIndices_.erase(it);
+            }
         }
         ContentBlock cb;
         cb.type = ContentBlock::ToolResult;

@@ -6,17 +6,16 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 
-#include "UiMessageTypes.hpp"
 #include "FtxuiMarkdown.hpp"
 #include "VirtualScroll.hpp"
-#include "MessagePipeline.hpp"
-#include "components/MessageRenderer.hpp"
 #include "components/AppLayout.hpp"
 #include "../permission/PermissionTypes.hpp"
 #include "../repl/Completer.hpp"
 #include "../bootstrap/AppState.hpp"
 #include "../stream/DisplayEvent.hpp"
 #include "../stream/ContentBlock.hpp"
+#include "../stream/AnswerPostProcessor.hpp"
+#include "../stream/MessagePipeline.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -45,10 +44,9 @@ public:
     void setTokenCounts(int inputTokens, int outputTokens);
 
     /// Link to AppState for reactive state accessors.
-    /// When set, the status bar can derive values via reactive::accessors.
     void setAppState(AppState* state) { appState_ = state; }
 
-    /// Access the ReplCompleter for configuration (add commands, tools, set workDir)
+    /// Access the ReplCompleter for configuration
     ReplCompleter& completer() { return completer_; }
     const ReplCompleter& completer() const { return completer_; }
 
@@ -61,7 +59,7 @@ public:
     void addTurnDurationMessage(int durationMs);
     void clearMessages();
 
-    // Thread-safe streaming — uses screen_->Post() for immediate UI update
+    // Thread-safe streaming
     void appendStreamText(const String& chunk);
     void finishStream(bool success, const String& error = "");
 
@@ -69,29 +67,25 @@ public:
     void updateThinkingSummary(const String& summary);
     void addThinkingMessage(const String& chunk);
 
-    // New 5-layer pipeline display event handler (running alongside old callbacks)
+    // New 5-layer pipeline display event handler
     void handleDisplayEvent(DisplayEvent&& event);
 
-    // Pipeline-aware message operations (preferred over addToolMessage)
+    // Pipeline-aware message operations
     void addToolUseStart(const String& toolName, const String& toolId, const String& input);
     void addToolUseComplete(const String& toolId, const String& toolInput);
     void addToolResult(const String& toolName, const String& toolId, const String& result, bool isError = false,
                        bool isRejected = false, bool isCancelled = false);
 
     // ========== Permission prompt (thread-safe, blocking for caller) ==========
-
-    /// Show permission prompt and wait for user selection.
-    /// Called from agent background thread. Blocks until user chooses.
-    /// Returns the user's PermissionChoice.
     PermissionChoice promptPermission(const String& toolName, const String& activity);
 
     void run();
     void exit();
     bool isRunning() const { return running_; }
 
-    // Access to display messages (for rendering)
-    const std::vector<DisplayMessage>& messages() const { return messages_; }
-    std::vector<DisplayMessage>& messages() { return messages_; }
+    // Access to content blocks (for rendering)
+    const std::vector<ContentBlock>& contentBlocks() const { return contentBlocks_; }
+    std::vector<ContentBlock>& contentBlocks() { return contentBlocks_; }
 
     // State setters (called from main.cpp during setup)
     void setCurrentMode(const String& mode) { currentMode_ = mode; modeHintDismissed_ = false; }
@@ -102,7 +96,7 @@ public:
 
 private:
     ftxui::Component BuildMainComponent();
-    void syncLayoutState();  // push current state into layoutState_ for AppLayout
+    void syncLayoutState();
     static String formatElapsed(int seconds);
     static String truncate(const String& s, size_t maxLen);
 
@@ -110,20 +104,26 @@ private:
     void stopRefreshThread();
     void refreshLoop();
 
-    /// Initialize the renderer registry with all component renderers
-    void initRendererRegistry();
+    void groupConsecutiveToolResults();  // Deprecated: kept for ANSI mode
 
-    /// Render a single DisplayMessage using the registry (or inline fallback)
-    std::vector<ftxui::Element> renderMessage(const DisplayMessage& msg, const RendererContext& ctx);
+    // Run the full MessagePipeline on contentBlocks_ (called at AnswerEnd)
+    void runMessagePipeline();
 
     // UI state — only modified from closures posted to the UI thread via screen_->Post()
-    std::vector<DisplayMessage> messages_;
+    std::vector<ContentBlock> contentBlocks_;
     String streamingText_;
+
+    // ToolProgress index tracking (Fix B5) — O(1) lookup for ToolResult→ToolProgress replacement
+    std::map<String, size_t> toolProgressIndices_;  // toolCallId -> index in contentBlocks_
+
+    // External post-processor flag (Fix B4) — set true when AnswerPostProcessor handles grouping
+    bool useExternalPostProcessor_ = false;
     FtxuiMarkdown::StreamingRenderer streamingRenderer_;
     bool isStreaming_ = false;
     bool isThinking_ = false;
+    bool isFirstAnswerBlock_ = true;
     String thinkingSummary_;
-    String thinkingText_;     // full thinking text (for expand/collapse)
+    String thinkingText_;
     String modelInfo_;
     long contextUsedTokens_ = 0;
     long contextMaxTokens_ = 0;
@@ -132,23 +132,11 @@ private:
     int outputTokens_ = 0;
     std::chrono::steady_clock::time_point startTime_{};
 
-    // Virtual scrolling — replaces crude visibleCount_=50
     VirtualScroll virtualScroll_;
-    bool verboseTools_ = false;       // Ctrl+O toggles expanded tool view
-    std::chrono::steady_clock::time_point lastOutputTime_{};  // stall detection
+    bool verboseTools_ = false;
+    std::chrono::steady_clock::time_point lastOutputTime_{};
 
-    // Message pipeline — replaces inline tool-pairing and grouping
-    MessagePipeline messagePipeline_;
-
-    // New 5-layer pipeline state (running alongside old callbacks)
-    std::vector<ContentBlock> contentBlocks_;
-    String newPipelineStreamingText_;   // accumulator for new pipeline text (separate from streamingText_)
-    String newPipelineThinkingContent_;
     TurnMetadata newPipelineStatusMetadata_;
-
-    // Renderer registry — replaces inline rendering dispatch
-    RendererRegistry rendererRegistry_;
-    bool registryInitialized_ = false;
 
     ftxui::ScreenInteractive* screen_ = nullptr;
 
@@ -170,7 +158,7 @@ private:
     std::mutex thinkingMutex_;
     String thinkingBuffer_;
 
-    // Refresh thread — spinner animation + safety net flush
+    // Refresh thread
     std::thread refreshThread_;
     std::atomic<bool> refreshActive_{false};
 
@@ -178,58 +166,48 @@ private:
     ReplCompleter completer_;
 
     // ========== Text selection state ==========
-    bool selectionActive_ = false;      // Shift+drag in progress
+    bool selectionActive_ = false;
     int selectionStartX_ = 0;
     int selectionStartY_ = 0;
     int selectionEndX_ = 0;
     int selectionEndY_ = 0;
-    String selectionText_;              // Extracted text from screen pixels
-    int selectionHighlightStartY_ = 0; // Normalized range for rendering
+    String selectionText_;
+    int selectionHighlightStartY_ = 0;
     int selectionHighlightEndY_ = 0;
 
     // ========== Permission prompt state ==========
-    bool permissionPromptActive_ = false;   // UI is showing permission prompt
-    int permissionFocusedIndex_ = 0;         // Currently focused option (0-4: 5 options)
-    String permissionToolName_;              // Tool name being asked about
-    String permissionActivity_;              // Activity description
-    String permissionDescription_;           // Tool-specific description like "Allow Bash to run: npm test"
-    // Tab-to-amend feedback state
-    bool permissionFeedbackActive_ = false;  // Whether the feedback text input is shown
-    String permissionFeedbackText_;          // Feedback text entered by user
-    size_t permissionFeedbackCursorPos_ = 0; // Cursor position in feedback text
+    bool permissionPromptActive_ = false;
+    int permissionFocusedIndex_ = 0;
+    String permissionToolName_;
+    String permissionActivity_;
+    String permissionDescription_;
+    bool permissionFeedbackActive_ = false;
+    String permissionFeedbackText_;
+    size_t permissionFeedbackCursorPos_ = 0;
 
-    // Synchronization: agent thread waits for user choice
     std::mutex permissionMutex_;
     std::condition_variable permissionCv_;
     PermissionChoice permissionResult_ = PermissionChoice::DenyOnce;
-    String permissionFeedbackResult_;        // Feedback text to return with the choice
+    String permissionFeedbackResult_;
     bool permissionAnswered_ = false;
 
-    // Brand color
     static const ftxui::Color BrandOrange;
 
-    // Creative verb index for turn duration
     std::atomic<size_t> turnVerbIndex_{0};
 
-    // Mode state
     String currentMode_;
     bool modeHintDismissed_ = false;
-
-    // Auth state
     bool isAuthenticated_ = false;
-
-    // Cwd/git state
     String cwd_;
     String gitBranch_;
-
-    // Optional AppState link for reactive state accessors
     AppState* appState_ = nullptr;
 
     // ========== AppLayout state ==========
-    // Aggregated state struct for the new AppLayout component tree.
-    // FtxuiRepl updates these fields; AppLayoutComponent reads them during render.
     ui::AppLayoutState layoutState_;
-    std::unique_ptr<ui::RenderContext> renderContext_;  // constructed in BuildMainComponent()
+    std::unique_ptr<ui::RenderContext> renderContext_;
+
+    // ========== Message pipeline ==========
+    MessagePipeline messagePipeline_;
 };
 
 } // namespace claude
