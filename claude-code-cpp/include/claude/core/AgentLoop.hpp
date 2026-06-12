@@ -2,8 +2,9 @@
 
 #include "Types.hpp"
 #include "TokenTracker.hpp"
+#include "PromptTooLongException.hpp"
 #include "claude/stream/TypedStreamEvent.hpp"
-#include "../ui/MessagePipeline.hpp"
+#include "StreamEvent.hpp"
 #include "../permission/PermissionTypes.hpp"
 #include "../tool/ToolContext.hpp"
 #include "HookManager.hpp"

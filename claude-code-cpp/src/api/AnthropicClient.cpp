@@ -2,6 +2,7 @@
 #include <claude/api/ApiDebugTracker.hpp>
 #include <claude/api/BetaHeaders.hpp>
 #include <claude/api/MessageRepair.hpp>
+#include <claude/core/PromptTooLongException.hpp>
 #include <claude/stream/TypedStreamEvent.hpp>
 #include <claude/utils/ConnectionPool.hpp>
 #include <claude/utils/SseParser.hpp>
@@ -720,8 +721,20 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
     else if (type == "error") {
         String errMsg = "unknown streaming error";
         if (event.contains("error")) {
-            if (event["error"].is_object() && event["error"].contains("message")) {
-                errMsg = event["error"]["message"].get<String>();
+            if (event["error"].is_object()) {
+                const auto& error = event["error"];
+                // Detect overloaded_error (context window exceeded) and throw
+                // PromptTooLongException so AgentLoop can trigger reactive compact
+                String errorType = error.value("type", "");
+                if (errorType == "overloaded_error") {
+                    int actual = error.value("tokens_used", 0);
+                    int max = error.value("context_window", 0);
+                    throw PromptTooLongException(
+                        error.value("message", "Context window exceeded"), actual, max);
+                }
+                if (error.contains("message")) {
+                    errMsg = error["message"].get<String>();
+                }
             } else if (event["error"].is_string()) {
                 errMsg = event["error"].get<String>();
             }
