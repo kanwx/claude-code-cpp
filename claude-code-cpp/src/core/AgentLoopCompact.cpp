@@ -91,12 +91,12 @@ bool AgentLoop::applyAutoCompact() {
 
             long estimatedNewTokens = 0;
             for (const auto& msg : impl_->messageHistory) {
-                estimatedNewTokens += static_cast<long>(msg.content.size()) / 4;
+                estimatedNewTokens += static_cast<long>(msg.content.size()) / 3;
                 for (const auto& tc : msg.toolCalls) {
-                    estimatedNewTokens += static_cast<long>(tc.arguments.size()) / 4;
+                    estimatedNewTokens += static_cast<long>(tc.arguments.size()) / 3;
                 }
                 for (const auto& tr : msg.toolResults) {
-                    estimatedNewTokens += static_cast<long>(tr.content.size()) / 4;
+                    estimatedNewTokens += static_cast<long>(tr.content.size()) / 3;
                 }
             }
             impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
@@ -266,7 +266,7 @@ bool AgentLoop::attemptReactiveCompact(long tokenGap) {
             // Adjust token tracker
             long estimatedNewTokens = 0;
             for (const auto& msg : impl_->messageHistory) {
-                estimatedNewTokens += static_cast<long>(msg.content.size()) / 4;
+                estimatedNewTokens += static_cast<long>(msg.content.size()) / 3;
             }
             impl_->tokenTracker.adjustAfterCompaction(estimatedNewTokens);
             return true;

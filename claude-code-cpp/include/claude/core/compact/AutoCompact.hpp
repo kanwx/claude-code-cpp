@@ -32,8 +32,8 @@ private:
 
     ApiClient& apiClient_;
     int contextWindow_;
-    double threshold_ = 0.93;
-    double warningThreshold_ = 0.80;
+    double threshold_ = 0.82;    // Trigger auto-compact at 82% context (was 93%)
+    double warningThreshold_ = 0.65;  // Warning at 65% context (was 80%)
     int keepRecentMessages_ = 5;
     int maxCompactTokens_ = 50000;
     int consecutiveFailures_ = 0;

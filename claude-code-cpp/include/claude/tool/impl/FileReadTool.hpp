@@ -44,7 +44,7 @@ public:
     bool isReadOnly() const override { return true; }
     bool isConcurrencySafe(const Json&) const override { return true; }
 
-    size_t maxResultSizeChars() const override { return 50000; }
+    size_t maxResultSizeChars() const override { return 30000; }
 
     String activityDescription(const Json& input) const override {
         return "📄 Read " + input.value("file_path", "");

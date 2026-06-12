@@ -90,9 +90,9 @@ public:
     }
 
     /// 工具结果最大字符数 (超过则截断并持久化到磁盘)
-    /// 默认 50K; 各工具可 override (GrepTool=30K, BashTool=50K, etc.)
+    /// 默认 30K; 各工具可 override (GrepTool=20K, BashTool=30K, ReadTool=30K)
     virtual size_t maxResultSizeChars() const {
-        return 50000;
+        return 30000;
     }
 
     /// 人类可读的活动描述，用于 UI 显示执行进度
@@ -129,13 +129,13 @@ public:
     // ========== Tool-owned rendering ==========
 
     /// Render tool use invocation (ANSI terminal output).
-    /// Default returns empty string (falls back to ToolStatusRenderer).
+    /// Default returns empty string.
     virtual String renderToolUse(const String& args, bool isStreaming) const {
         return "";
     }
 
     /// Render tool result summary (structured data for UI rendering).
-    /// Default returns empty summary (falls back to ToolStatusRenderer).
+    /// Default returns empty summary.
     virtual ToolResultSummary renderToolResult(const String& result, bool isError,
                                                bool isCancelled, bool isRejected) const {
         return ToolResultSummary{};
