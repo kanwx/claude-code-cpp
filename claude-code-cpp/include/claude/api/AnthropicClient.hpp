@@ -212,6 +212,8 @@ public:
 
     // ========== 信息 ==========
 
+    bool isNativeSseParser() const override { return true; }
+
     String getProviderName() const override { return "anthropic"; }
     String getModelName() const override {
         std::shared_lock lock(configMutex_);

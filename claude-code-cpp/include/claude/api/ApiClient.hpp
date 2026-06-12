@@ -53,6 +53,11 @@ public:
 
     // ========== 信息 ==========
 
+    /// Whether this client natively parses SSE and emits TypedStreamEvents.
+    /// When true, AgentLoopStreaming skips inline TypedStreamEvent emission
+    /// to avoid duplicating events the client already produces.
+    virtual bool isNativeSseParser() const { return false; }
+
     virtual String getProviderName() const = 0;
     virtual String getModelName() const = 0;
 };
