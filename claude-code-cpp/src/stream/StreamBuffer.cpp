@@ -46,10 +46,11 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
             break;
 
         case StreamEventType::TextDelta: {
-            // Strip thinking tags from text output.
-            // Some models include thinking tags in regular text instead of
-            // using separate thinking events. We must remove these.
-            // Handles both <thinking> (Anthropic) and <think> (DeepSeek) formats.
+            // Handle thinking tags in text output.
+            // Models like DeepSeek embed reasoning in <think>...</think> tags
+            // within the text stream. Instead of DISCARDING this content, we
+            // route it to thinkingAccumulator_ so it appears as expandable
+            // "∴ Thinking" in the UI (matching Anthropic's native thinking blocks).
             String cleanText = event.text;
 
             // B3: Prepend any buffered partial prefix from previous chunk
@@ -60,8 +61,7 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
 
             // Cross-turn close tag detection: when a tool call interrupts
             // thinking, the close tag may arrive in a new turn after
-            // StreamStart resets inThinkingTag_. Detect dangling close tags
-            // even when we think we're not inside a think block.
+            // StreamStart resets inThinkingTag_. Route orphaned content to thinking.
             if (!inThinkingTag_) {
                 size_t closePos = String::npos;
                 size_t closeLen = 0;
@@ -76,14 +76,19 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
                     }
                 }
                 if (closePos != String::npos) {
-                    // Dangling close tag: discard everything up to/including it.
+                    // Dangling close tag: route orphaned content to thinking
+                    String orphan = cleanText.substr(0, closePos);
+                    if (!orphan.empty() && orphan.find_first_not_of(" \t\n\r") != String::npos) {
+                        thinkingAccumulator_ += orphan;
+                        thinkingCharsSinceEmit_ += orphan.size();
+                        maybeEmitThinkingUpdate(false);
+                    }
                     cleanText = cleanText.substr(closePos + closeLen);
                 }
             }
             if (inThinkingTag_) {
                 size_t endPos = String::npos;
                 size_t closeLen = 0;
-                // Check all close tags
                 for (const char* ct : {"</thinking>", "</think>",
                                        "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e",
                                        "\xef\xbc\x9c" "/think" "\xef\xbc\x9e",
@@ -95,13 +100,26 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
                     }
                 }
                 if (endPos != String::npos) {
+                    // Extract thinking content before the close tag
+                    String thinkContent = cleanText.substr(0, endPos);
+                    if (!thinkContent.empty()) {
+                        thinkingAccumulator_ += thinkContent;
+                        thinkingCharsSinceEmit_ += thinkContent.size();
+                        maybeEmitThinkingUpdate(false);
+                    }
                     inThinkingTag_ = false;
                     cleanText = cleanText.substr(endPos + closeLen);
                 } else {
+                    // Entire remaining chunk is thinking content
+                    if (!cleanText.empty() && cleanText.find_first_not_of(" \t\n\r") != String::npos) {
+                        thinkingAccumulator_ += cleanText;
+                        thinkingCharsSinceEmit_ += cleanText.size();
+                        maybeEmitThinkingUpdate(false);
+                    }
                     break;
                 }
             }
-            // Check all open tag variants
+            // Check all open tag variants — extract content, route to thinking
             static const std::vector<std::pair<String, String>> tagPairs = {
                 {"<thinking>", "</thinking>"},
                 {"<think>", "</think>"},
@@ -115,8 +133,24 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
                 while ((pos = cleanText.find(openTag)) != String::npos) {
                     auto endPos = cleanText.find(closeTag, pos + openTag.size());
                     if (endPos != String::npos) {
+                        // Extract thinking content between tags, route to thinking accumulator
+                        String thinkContent = cleanText.substr(pos + openTag.size(),
+                                                               endPos - pos - openTag.size());
+                        if (!thinkContent.empty()) {
+                            thinkingAccumulator_ += thinkContent;
+                            thinkingCharsSinceEmit_ += thinkContent.size();
+                            maybeEmitThinkingUpdate(false);
+                        }
                         cleanText.erase(pos, endPos + closeTag.size() - pos);
                     } else {
+                        // Open tag without close tag: content continues in next chunk.
+                        // Extract text after open tag, route to thinking accumulator.
+                        String thinkContent = cleanText.substr(pos + openTag.size());
+                        if (!thinkContent.empty()) {
+                            thinkingAccumulator_ += thinkContent;
+                            thinkingCharsSinceEmit_ += thinkContent.size();
+                            maybeEmitThinkingUpdate(false);
+                        }
                         cleanText.erase(pos);
                         inThinkingTag_ = true;
                         break;
