@@ -58,6 +58,9 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
                 if (filtered.empty()) break;
+                // Skip whitespace-only chunks — they produce blank boxes in the UI.
+                // Thinking tag stripping can leave behind trailing newlines.
+                if (filtered.find_first_not_of(" \t\n\r") == String::npos) break;
                 streamingText_ += filtered;
                 streamingRenderer_.append(filtered);
                 if (isThinking_) isThinking_ = false;
@@ -69,7 +72,9 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 String committed = std::move(streamingText_);
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                if (!committed.empty()) {
+                // Guard: skip empty or whitespace-only paragraphs
+                if (!committed.empty() &&
+                    committed.find_first_not_of(" \t\n\r") != String::npos) {
                     ContentBlock cb;
                     cb.type = ContentBlock::AnswerText;
                     cb.isFirst = isFirstAnswerBlock_;
@@ -191,6 +196,15 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::AnswerStart:
+                // Remove stale TurnDuration blocks from previous API calls within
+                // the same user turn. Each AnswerEnd appends a TurnDuration, but
+                // if the model makes multiple API calls (tool->result->continue),
+                // only the final TurnDuration should remain visible.
+                while (!contentBlocks_.empty() &&
+                       contentBlocks_.back().type == ContentBlock::TurnDuration) {
+                    contentBlocks_.pop_back();
+                }
+
                 isStreaming_ = true;
                 isThinking_ = true;
                 isFirstAnswerBlock_ = true;
