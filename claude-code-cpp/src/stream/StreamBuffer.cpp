@@ -52,6 +52,12 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
             // Handles both <thinking> (Anthropic) and <think> (DeepSeek) formats.
             String cleanText = event.text;
 
+            // B3: Prepend any buffered partial prefix from previous chunk
+            if (!thinkingTagBuffer_.empty()) {
+                cleanText = thinkingTagBuffer_ + cleanText;
+                thinkingTagBuffer_.clear();
+            }
+
             // Cross-turn close tag detection: when a tool call interrupts
             // thinking, the close tag may arrive in a new turn after
             // StreamStart resets inThinkingTag_. Detect dangling close tags
@@ -118,25 +124,58 @@ void StreamBuffer::feed(TypedStreamEvent&& event) {
                 }
             }
 
-            // Detect partial tag suffixes at chunk boundaries.
-            // When a tag like <think> is split (e.g. "<thin" + "k>"),
-            // the partial suffix leaks as text. Strip it and set
-            // inThinkingTag_ so the next chunk discards remaining content.
+            // Enhanced partial tag prefix detection using buffer (Fix B3).
+            // When a chunk ends with a partial prefix like "<thin", buffer it
+            // for the next chunk instead of discarding it.
             if (!cleanText.empty()) {
                 auto ltPos = cleanText.rfind('<');
                 if (ltPos != String::npos) {
                     String sfx = cleanText.substr(ltPos);
-                    // Check if sfx is a prefix (but not complete match) of any tag
-                    if ((sfx.size() < 7 &&
-                         String("<think>").substr(0, sfx.size()) == sfx) ||
-                        (sfx.size() < 10 &&
-                         String("<thinking>").substr(0, sfx.size()) == sfx) ||
-                        (sfx.size() < 8 &&
-                         String("</think>").substr(0, sfx.size()) == sfx) ||
-                        (sfx.size() < 11 &&
-                         String("</thinking>").substr(0, sfx.size()) == sfx)) {
+                    // Check if sfx is a prefix of any known tag (open or close)
+                    bool isPartialPrefix = false;
+                    for (const auto& [openTag, closeTag] : tagPairs) {
+                        if (openTag.size() > sfx.size() && openTag.compare(0, sfx.size(), sfx) == 0) {
+                            isPartialPrefix = true; break;
+                        }
+                        if (closeTag.size() > sfx.size() && closeTag.compare(0, sfx.size(), sfx) == 0) {
+                            isPartialPrefix = true; break;
+                        }
+                    }
+                    // Also check &lt; variants (they start with '&', not '<')
+                    if (!isPartialPrefix) {
+                        for (const char* p : {"&lt;think", "&lt;thinking", "&lt;/think", "&lt;/thinking"}) {
+                            String ps(p);
+                            if (ps.size() > sfx.size() && ps.compare(0, sfx.size(), sfx) == 0) {
+                                isPartialPrefix = true; break;
+                            }
+                        }
+                    }
+                    if (isPartialPrefix) {
+                        thinkingTagBuffer_ = sfx;  // Buffer for next chunk
                         cleanText.erase(ltPos);
-                        inThinkingTag_ = true;
+                    }
+                }
+
+                // Also check for fullwidth ＜ prefix (U+FF1C = 0xEF 0xBC 0x9C)
+                auto fwPos = cleanText.rfind('\xef');
+                if (fwPos != String::npos && fwPos > ltPos) {
+                    String fwSfx = cleanText.substr(fwPos);
+                    String fwThink = "\xef\xbc\x9c" "think" "\xef\xbc\x9e";
+                    String fwThinking = "\xef\xbc\x9c" "thinking" "\xef\xbc\x9e";
+                    String fwCloseThink = "\xef\xbc\x9c" "/think" "\xef\xbc\x9e";
+                    String fwCloseThinking = "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e";
+                    if (fwThink.size() > fwSfx.size() && fwThink.compare(0, fwSfx.size(), fwSfx) == 0) {
+                        thinkingTagBuffer_ = fwSfx;
+                        cleanText.erase(fwPos);
+                    } else if (fwThinking.size() > fwSfx.size() && fwThinking.compare(0, fwSfx.size(), fwSfx) == 0) {
+                        thinkingTagBuffer_ = fwSfx;
+                        cleanText.erase(fwPos);
+                    } else if (fwCloseThink.size() > fwSfx.size() && fwCloseThink.compare(0, fwSfx.size(), fwSfx) == 0) {
+                        thinkingTagBuffer_ = fwSfx;
+                        cleanText.erase(fwPos);
+                    } else if (fwCloseThinking.size() > fwSfx.size() && fwCloseThinking.compare(0, fwSfx.size(), fwSfx) == 0) {
+                        thinkingTagBuffer_ = fwSfx;
+                        cleanText.erase(fwPos);
                     }
                 }
             }

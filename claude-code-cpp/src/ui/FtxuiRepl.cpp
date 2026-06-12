@@ -1,9 +1,8 @@
 #ifdef HAS_FTXUI
 
 #include "claude/ui/FtxuiRepl.hpp"
-#include "claude/ui/ThinkingFilter.hpp"
+#include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/components/AppLayout.hpp"
-#include "claude/ui/ToolRendererRegistry.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
@@ -18,89 +17,150 @@ namespace claude {
 
 using namespace ftxui_colors;
 
-// ========== New 5-layer pipeline display event handler ==========
+// ========== ContentBlock-based display event handler ==========
 
 void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
     if (!screen_) return;
 
-    // Convert DisplayEvent → StreamEvent and route through MessagePipeline.
-    // TextPartial is the only event handled directly (for smooth per-token rendering).
-    // All structural events (tool use/result, thinking, stream start/end) go through
-    // the pipeline's Normalize → Group → Collapse stages for correct pairing,
-    // collapsing, and rendering.
+    // Build ContentBlock directly from DisplayEvent — no StreamEvent back-conversion,
+    // no MessagePipeline, no ThinkingFilter. The ContentBlock tree is rendered by
+    // renderFtxuiElement() in the AppLayout.
     screen_->Post([this, ev = std::move(event)]() mutable {
         switch (ev.type) {
-            case DisplayEventType::TextPartial:
-                // Per-token streaming — update streamingText_ directly for smooth rendering.
-                // The pipeline also accumulates this via TextDelta; sync happens on flush.
-                streamingText_ += ev.text;
-                streamingRenderer_.append(ev.text);
-                if (isThinking_) isThinking_ = false;
-                lastOutputTime_ = std::chrono::steady_clock::now();
-                // Also feed to pipeline so it tracks the text internally
-                {
-                    StreamEvent deltaEvent;
-                    deltaEvent.type = StreamEvent::Type::TextDelta;
-                    deltaEvent.text = ev.text;
-                    if (messagePipeline_.processEvent(deltaEvent)) {
-                        messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+            case DisplayEventType::TextPartial: {
+                // Defensive: strip any residual thinking tags that may have
+                // leaked through StreamBuffer. This is a last-line-of-defense
+                // filter before the text reaches the display.
+                String filtered = ev.text;
+                // Strip <think> <thinking> and their close tags
+                static const std::vector<std::pair<String, String>> residualTags = {
+                    {"<think>", "</think>"},
+                    {"<thinking>", "</thinking>"},
+                    {"\xef\xbc\x9c" "think" "\xef\xbc\x9e", "\xef\xbc\x9c" "/think" "\xef\xbc\x9e"},
+                    {"\xef\xbc\x9c" "thinking" "\xef\xbc\x9e", "\xef\xbc\x9c" "/thinking" "\xef\xbc\x9e"},
+                    {"&lt;think&gt;", "&lt;/think&gt;"},
+                    {"&lt;thinking&gt;", "&lt;/thinking&gt;"},
+                };
+                for (const auto& [openTag, closeTag] : residualTags) {
+                    size_t pos = 0;
+                    while ((pos = filtered.find(openTag)) != String::npos) {
+                        auto endPos = filtered.find(closeTag, pos + openTag.size());
+                        if (endPos != String::npos) {
+                            filtered.erase(pos, endPos + closeTag.size() - pos);
+                        } else {
+                            filtered.erase(pos);
+                            break;
+                        }
+                    }
+                    // Also strip orphan close tags
+                    while ((pos = filtered.find(closeTag)) != String::npos) {
+                        filtered.erase(pos, closeTag.size());
                     }
                 }
+                if (filtered.empty()) break;
+                streamingText_ += filtered;
+                streamingRenderer_.append(filtered);
+                if (isThinking_) isThinking_ = false;
+                lastOutputTime_ = std::chrono::steady_clock::now();
                 break;
+            }
 
-            case DisplayEventType::TextParagraph:
-                // Paragraph boundary — flush streaming text to pipeline
+            case DisplayEventType::TextParagraph: {
+                String committed = std::move(streamingText_);
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                // Pipeline already accumulated TextDelta events, so no extra action needed.
-                // The text will be committed as AssistantText on the next structural event
-                // (ToolUseStart, StreamEnd, etc.)
+                if (!committed.empty()) {
+                    ContentBlock cb;
+                    cb.type = ContentBlock::AnswerText;
+                    cb.isFirst = isFirstAnswerBlock_;
+                    cb.text = std::move(committed);
+                    isFirstAnswerBlock_ = false;
+                    contentBlocks_.push_back(std::move(cb));
+                }
                 break;
+            }
 
             case DisplayEventType::ThinkingBlock: {
-                StreamEvent thinkEvent;
-                thinkEvent.type = StreamEvent::Type::ThinkingDelta;
-                thinkEvent.text = std::move(ev.thinkingText);
-                if (messagePipeline_.processEvent(thinkEvent)) {
-                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-                }
+                // Store thinking text for the final collapsed ThinkingBlock.
+                // Do NOT show raw reasoning text in the inline indicator —
+                // it causes flickering and leaks model internals to the display.
+                thinkingText_ = std::move(ev.thinkingText);
                 break;
             }
 
             case DisplayEventType::ToolProgress: {
-                // Clear streaming text before tool event (pipeline does this too, but
-                // we must also clear the UI streaming buffer to avoid double-display)
-                streamingText_.clear();
-                streamingRenderer_.reset();
-                StreamEvent toolEvent;
-                toolEvent.type = StreamEvent::Type::ToolUseStart;
-                toolEvent.toolId = std::move(ev.toolCallId);
-                toolEvent.toolName = std::move(ev.toolName);
-                toolEvent.toolInput = "";
-                if (messagePipeline_.processEvent(toolEvent)) {
-                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                // Clear streaming text before tool event
+                if (!streamingText_.empty()) {
+                    ContentBlock textCb;
+                    textCb.type = ContentBlock::AnswerText;
+                    textCb.isFirst = isFirstAnswerBlock_;
+                    textCb.text = std::move(streamingText_);
+                    isFirstAnswerBlock_ = false;
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                    contentBlocks_.push_back(std::move(textCb));
                 }
+                ContentBlock cb;
+                cb.type = ContentBlock::ToolProgress;
+                cb.toolName = std::move(ev.toolName);
+                cb.activity = std::move(ev.activity);
+                cb.toolCallId = ev.toolCallId;
+                contentBlocks_.push_back(std::move(cb));
                 break;
             }
 
             case DisplayEventType::ToolResult: {
-                streamingText_.clear();
-                streamingRenderer_.reset();
-                StreamEvent resultEvent;
-                resultEvent.type = StreamEvent::Type::ToolResultReady;
-                resultEvent.toolId = std::move(ev.toolCallId);
-                resultEvent.toolName = std::move(ev.toolName);
-                resultEvent.toolResult = ev.summary.primaryText;
-                resultEvent.toolIsError = ev.summary.isError;
-                if (messagePipeline_.processEvent(resultEvent)) {
-                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                // Clear streaming text before tool result
+                if (!streamingText_.empty()) {
+                    ContentBlock textCb;
+                    textCb.type = ContentBlock::AnswerText;
+                    textCb.isFirst = isFirstAnswerBlock_;
+                    textCb.text = std::move(streamingText_);
+                    isFirstAnswerBlock_ = false;
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                    contentBlocks_.push_back(std::move(textCb));
                 }
+                // Remove matching ToolProgress (same toolCallId)
+                String callId = ev.toolCallId;
+                if (!callId.empty()) {
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                            [&callId](const ContentBlock& b) {
+                                return b.type == ContentBlock::ToolProgress &&
+                                       b.toolCallId == callId;
+                            }),
+                        contentBlocks_.end());
+                }
+                ContentBlock cb;
+                cb.type = ContentBlock::ToolResult;
+                cb.toolName = std::move(ev.toolName);
+                cb.summary = std::move(ev.summary);
+                cb.rawResultPath = std::move(ev.rawResultPath);
+                cb.toolCallId = std::move(callId);
+                cb.expanded = verboseTools_;
+                // Set result status from summary
+                if (cb.summary.isError) {
+                    cb.resultStatus = ToolResultStatus::Error;
+                } else if (cb.summary.isDim) {
+                    // Detect cancelled vs rejected from summary text
+                    if (cb.summary.primaryText.find("Interrupted") != String::npos) {
+                        cb.resultStatus = ToolResultStatus::Cancelled;
+                    } else if (cb.summary.primaryText.find("Rejected") != String::npos) {
+                        cb.resultStatus = ToolResultStatus::Rejected;
+                    }
+                }
+                contentBlocks_.push_back(std::move(cb));
                 break;
             }
 
             case DisplayEventType::ToolGroup: {
-                // ToolGroup from AnswerPostProcessor — no direct pipeline equivalent.
-                // Ignore; pipeline's GroupStage handles collapsing internally.
+                ContentBlock cb;
+                cb.type = ContentBlock::ToolGroup;
+                cb.toolName = std::move(ev.toolName);
+                cb.summary = std::move(ev.summary);
+                cb.expanded = false;
+                contentBlocks_.push_back(std::move(cb));
                 break;
             }
 
@@ -108,43 +168,89 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 layoutState_.status.systemNotice = std::move(ev.noticeText);
                 break;
 
-            case DisplayEventType::Tombstone: {
-                StreamEvent tombEvent;
-                tombEvent.type = StreamEvent::Type::Tombstone;
-                if (messagePipeline_.processEvent(tombEvent)) {
-                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+            case DisplayEventType::Tombstone:
+                if (!contentBlocks_.empty()) {
+                    contentBlocks_.pop_back();
                 }
                 break;
-            }
 
-            case DisplayEventType::Error:
-                addErrorMessage(ev.text);
+            case DisplayEventType::Error: {
+                ContentBlock cb;
+                cb.type = ContentBlock::ErrorMessage;
+                cb.text = std::move(ev.text);
+                contentBlocks_.push_back(std::move(cb));
                 break;
+            }
 
             case DisplayEventType::AnswerStart:
                 isStreaming_ = true;
                 isThinking_ = true;
+                isFirstAnswerBlock_ = true;
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                {
-                    StreamEvent startEvent;
-                    startEvent.type = StreamEvent::Type::StreamStart;
-                    if (messagePipeline_.processEvent(startEvent)) {
-                        messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-                    }
-                }
+                contentBlocks_.clear();
                 startRefreshThread();
                 break;
 
             case DisplayEventType::AnswerEnd: {
-                // Clear streaming text — pipeline commits it as AssistantText via StreamEnd
-                streamingText_.clear();
-                streamingRenderer_.reset();
-                StreamEvent endEvent;
-                endEvent.type = StreamEvent::Type::StreamEnd;
-                endEvent.success = true;
-                if (messagePipeline_.processEvent(endEvent)) {
-                    messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+                // Commit any remaining streaming text
+                if (!streamingText_.empty()) {
+                    ContentBlock cb;
+                    cb.type = ContentBlock::AnswerText;
+                    cb.isFirst = isFirstAnswerBlock_;
+                    cb.text = std::move(streamingText_);
+                    isFirstAnswerBlock_ = false;
+                    streamingText_.clear();
+                    streamingRenderer_.reset();
+                    contentBlocks_.push_back(std::move(cb));
+                }
+                // Run full message pipeline (replaces simple groupConsecutiveToolResults)
+                runMessagePipeline();
+
+                // Insert collapsed ThinkingBlock after pipeline (before turn duration).
+                // If the model emitted thinking content, show it as a collapsed block
+                // at the start of the assistant response.
+                if (!thinkingText_.empty()) {
+                    ContentBlock thinkBlock;
+                    thinkBlock.type = ContentBlock::ThinkingBlock;
+                    thinkBlock.detailText = std::move(thinkingText_);
+                    thinkBlock.expanded = false;
+                    thinkBlock.text = thinkingSummary_.empty()
+                        ? "Thinking..." : thinkingSummary_;
+                    thinkingSummary_.clear();
+                    thinkingText_.clear();
+                    // Insert after the user message (at position 0) but before first response block
+                    auto it = contentBlocks_.begin();
+                    // Skip past the user message at the start
+                    while (it != contentBlocks_.end() &&
+                           (it->type == ContentBlock::UserMessage ||
+                            it->type == ContentBlock::ThinkingBlock)) {
+                        ++it;
+                    }
+                    contentBlocks_.insert(it, std::move(thinkBlock));
+                }
+
+                // Insert turn duration block after all response content
+                {
+                    auto& meta = newPipelineStatusMetadata_;
+                    if (!meta.durationStr.empty() || meta.outputTokens > 0) {
+                        ContentBlock td;
+                        td.type = ContentBlock::TurnDuration;
+                        td.text = meta.durationStr;
+                        if (meta.outputTokens > 0) {
+                            auto fmtK = [](int64_t n) -> String {
+                                if (n >= 1'000) return std::to_string(n / 100) + "." +
+                                    std::to_string((n % 100) / 10) + "K";
+                                return std::to_string(n);
+                            };
+                            if (!td.text.empty()) td.text += " · ";
+                            td.text += fmtK(meta.outputTokens) + " tokens";
+                        }
+                        if (!meta.costStr.empty()) {
+                            td.text += " · " + meta.costStr;
+                        }
+                        contentBlocks_.push_back(std::move(td));
+                    }
                 }
                 isStreaming_ = false;
                 isThinking_ = false;
@@ -160,6 +266,72 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 break;
         }
     });
+}
+
+void FtxuiRepl::groupConsecutiveToolResults() {
+    std::vector<ContentBlock> result;
+    size_t i = 0;
+    while (i < contentBlocks_.size()) {
+        if (contentBlocks_[i].type == ContentBlock::ToolResult &&
+            AnswerPostProcessor::isCollapsibleTool(contentBlocks_[i].toolName)) {
+            size_t start = i;
+            while (i < contentBlocks_.size() &&
+                   contentBlocks_[i].type == ContentBlock::ToolResult &&
+                   AnswerPostProcessor::isCollapsibleTool(contentBlocks_[i].toolName)) {
+                ++i;
+            }
+            size_t count = i - start;
+            if (count >= 2) {
+                ContentBlock group;
+                group.type = ContentBlock::ToolGroup;
+                group.expanded = false;
+                std::map<String, int> counts;
+                for (size_t j = start; j < i; ++j) {
+                    counts[contentBlocks_[j].toolName]++;
+                }
+                // Build summary with verb form matching TS:
+                // "Read 3 files", "Grep 1 result", "Bash 2 runs"
+                static const std::map<String, std::pair<String, String>> verbForms = {
+                    {"Read",   {"Read",   "files"}},
+                    {"Grep",   {"Grep",   "results"}},
+                    {"Glob",   {"Glob",   "files"}},
+                    {"LS",     {"LS",     "listings"}},
+                    {"Bash",   {"Ran",    "commands"}},
+                    {"WebFetch",  {"Fetched", "pages"}},
+                    {"WebSearch", {"Searched", "queries"}},
+                };
+                String summaryText;
+                for (auto& [name, cnt] : counts) {
+                    if (!summaryText.empty()) summaryText += ", ";
+                    auto it = verbForms.find(name);
+                    if (it != verbForms.end()) {
+                        summaryText += it->second.first + " " +
+                            std::to_string(cnt) + " " + it->second.second;
+                    } else {
+                        summaryText += name + " " + std::to_string(cnt) +
+                            (cnt > 1 ? " times" : " time");
+                    }
+                }
+                group.summary = ToolResultSummary::success(summaryText);
+                group.toolName = "Group";
+                for (size_t j = start; j < i; ++j) {
+                    group.children.push_back(std::move(contentBlocks_[j]));
+                }
+                result.push_back(std::move(group));
+            } else {
+                result.push_back(std::move(contentBlocks_[start]));
+                i = start + 1;
+            }
+        } else {
+            result.push_back(std::move(contentBlocks_[i]));
+            ++i;
+        }
+    }
+    contentBlocks_ = std::move(result);
+}
+
+void FtxuiRepl::runMessagePipeline() {
+    contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
 }
 
 namespace {
@@ -202,8 +374,8 @@ void FtxuiRepl::syncLayoutState() {
     ls.header.gitBranch = gitBranch_;
     ls.header.isStreaming = isStreaming_;
 
-    // Content — point messages pointer directly (no copy)
-    ls.content.messages = &messages_;
+    // Content — point contentBlocks directly (no copy)
+    ls.content.contentBlocks = &contentBlocks_;
     ls.content.streaming.text = streamingText_;
     ls.tickCounter++;
     ls.content.streaming.tickCounter = ls.tickCounter;
@@ -279,22 +451,17 @@ void FtxuiRepl::syncLayoutState() {
     ls.verboseTools = verboseTools_;
 
     // Collapsible tool result focus tracking
-    // Count collapsible tool results and track which message is focused
     ls.collapsibleCount = 0;
     int focusSeq = 0;
-    for (const auto& m : messages_) {
-        auto isToolResult = (m.type == DisplayMessage::Type::UserToolResult ||
-                             m.type == DisplayMessage::Type::UserToolSuccess ||
-                             m.type == DisplayMessage::Type::UserToolError);
-        if (isToolResult) {
-            auto* renderer = ui::ToolRendererRegistry::instance().getRenderer(m.toolResult.toolName);
-            if (renderer && renderer->isCollapsible()) {
-                if (ls.collapsibleFocusIndex == focusSeq) {
-                    // This is the focused collapsible result
-                }
-                focusSeq++;
-                ls.collapsibleCount++;
-            }
+    for (const auto& block : contentBlocks_) {
+        if (block.type == ContentBlock::ToolResult &&
+            AnswerPostProcessor::isCollapsibleTool(block.toolName)) {
+            focusSeq++;
+            ls.collapsibleCount++;
+        } else if (block.type == ContentBlock::ToolGroup ||
+                   block.type == ContentBlock::CollapsedGroup) {
+            focusSeq++;
+            ls.collapsibleCount++;
         }
     }
     // Clamp focus index
@@ -322,78 +489,52 @@ FtxuiRepl::~FtxuiRepl() {
 
 // ========== Thread-safe message operations ==========
 
-namespace {
-
-void processAndSync(MessagePipeline& pipeline, std::vector<DisplayMessage>& messages,
-                    const StreamEvent& event) {
-    if (pipeline.processEvent(event)) {
-        messages = ThinkingFilter::apply(pipeline.getDisplayMessages());
-    }
-}
-
-} // anonymous namespace
-
 void FtxuiRepl::addUserMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        StreamEvent event;
-        event.type = StreamEvent::Type::UserMessage;
-        event.text = std::move(c);
-        processAndSync(messagePipeline_, messages_, event);
+        ContentBlock cb;
+        cb.type = ContentBlock::UserMessage;
+        cb.text = std::move(c);
+        if (!cb.text.empty()) {
+            if (cb.text[0] == '/') cb.userInputType = UserInputType::Command;
+            else if (cb.text[0] == '!') cb.userInputType = UserInputType::Bash;
+        }
+        contentBlocks_.push_back(std::move(cb));
     });
 }
 
 void FtxuiRepl::addAssistantMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        StreamEvent startEvent;
-        startEvent.type = StreamEvent::Type::StreamStart;
-        processAndSync(messagePipeline_, messages_, startEvent);
-
-        StreamEvent deltaEvent;
-        deltaEvent.type = StreamEvent::Type::TextDelta;
-        deltaEvent.text = std::move(c);
-        processAndSync(messagePipeline_, messages_, deltaEvent);
-
-        StreamEvent endEvent;
-        endEvent.type = StreamEvent::Type::StreamEnd;
-        endEvent.success = true;
-        processAndSync(messagePipeline_, messages_, endEvent);
+        ContentBlock cb;
+        cb.type = ContentBlock::AnswerText;
+        cb.text = std::move(c);
+        contentBlocks_.push_back(std::move(cb));
     });
 }
 
 void FtxuiRepl::addToolUseStart(const String& toolName, const String& toolId, const String& input) {
     if (!screen_) return;
     screen_->Post([this, tn = String(toolName), tid = String(toolId), inp = String(input)]() {
-        // Flush streaming text before inserting tool event.
-        // The pipeline's NormalizeStage will also flush its internal accumulator,
-        // committing the text as an AssistantText message before the ToolUse.
-        // We must clear the UI streaming buffer to avoid double-display.
-        streamingText_.clear();
-        streamingRenderer_.reset();
-
-        StreamEvent event;
-        event.type = StreamEvent::Type::ToolUseStart;
-        event.toolName = tn;
-        event.toolId = tid;
-        event.toolInput = inp;
-        processAndSync(messagePipeline_, messages_, event);
+        if (!streamingText_.empty()) {
+            ContentBlock textCb;
+            textCb.type = ContentBlock::AnswerText;
+            textCb.text = std::move(streamingText_);
+            streamingText_.clear();
+            streamingRenderer_.reset();
+            contentBlocks_.push_back(std::move(textCb));
+        }
+        ContentBlock cb;
+        cb.type = ContentBlock::ToolProgress;
+        cb.toolName = tn;
+        cb.toolCallId = tid;
+        cb.activity = "Running";
+        contentBlocks_.push_back(std::move(cb));
     });
 }
 
 void FtxuiRepl::addToolUseComplete(const String& toolId, const String& toolInput) {
-    if (!screen_) return;
-    screen_->Post([this, tid = String(toolId), inp = String(toolInput)]() {
-        // Flush streaming text before tool complete event (maintains inline order)
-        streamingText_.clear();
-        streamingRenderer_.reset();
-
-        StreamEvent event;
-        event.type = StreamEvent::Type::ToolUseComplete;
-        event.toolId = tid;
-        event.toolInput = inp;
-        processAndSync(messagePipeline_, messages_, event);
-    });
+    // No-op: ToolProgress remains until ToolResult replaces it
 }
 
 void FtxuiRepl::addToolResult(const String& toolName, const String& toolId, const String& result,
@@ -401,92 +542,94 @@ void FtxuiRepl::addToolResult(const String& toolName, const String& toolId, cons
     if (!screen_) return;
     screen_->Post([this, tn = String(toolName), tid = String(toolId), res = String(result),
                    err = isError, rej = isRejected, can = isCancelled]() {
-        // Flush streaming text before tool result event.
-        // The pipeline commits accumulated text as AssistantText before ToolResult.
-        // Clear the UI streaming buffer to avoid double-display.
-        streamingText_.clear();
-        streamingRenderer_.reset();
-
-        StreamEvent event;
-        event.type = StreamEvent::Type::ToolResultReady;
-        event.toolName = tn;
-        event.toolId = tid;
-        event.toolResult = res;
-        event.toolIsError = err;
-        event.toolIsRejected = rej;
-        event.toolIsCancelled = can;
-        processAndSync(messagePipeline_, messages_, event);
+        if (!streamingText_.empty()) {
+            ContentBlock textCb;
+            textCb.type = ContentBlock::AnswerText;
+            textCb.text = std::move(streamingText_);
+            streamingText_.clear();
+            streamingRenderer_.reset();
+            contentBlocks_.push_back(std::move(textCb));
+        }
+        // Remove matching ToolProgress
+        if (!tid.empty()) {
+            contentBlocks_.erase(
+                std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                    [&tid](const ContentBlock& b) {
+                        return b.type == ContentBlock::ToolProgress && b.toolCallId == tid;
+                    }),
+                contentBlocks_.end());
+        }
+        ContentBlock cb;
+        cb.type = ContentBlock::ToolResult;
+        cb.toolName = tn;
+        cb.toolCallId = tid;
+        cb.expanded = verboseTools_;
+        if (err) {
+            cb.summary = ToolResultSummary::error(res);
+            cb.resultStatus = ToolResultStatus::Error;
+        } else if (can) {
+            cb.summary = ToolResultSummary::dim("Interrupted");
+            cb.resultStatus = ToolResultStatus::Cancelled;
+        } else if (rej) {
+            cb.summary = ToolResultSummary::dim("Rejected");
+            cb.resultStatus = ToolResultStatus::Rejected;
+        } else {
+            // Truncate raw result for summary display.
+            // The full result is available in the tool result content block
+            // and can be expanded via Ctrl+O.
+            String summary;
+            if (res.empty()) {
+                summary = "completed";
+            } else {
+                // Take first line, max 80 chars
+                auto nlPos = res.find('\n');
+                summary = (nlPos != String::npos) ? res.substr(0, nlPos) : res;
+                if (summary.size() > 80) summary = summary.substr(0, 77) + "...";
+            }
+            cb.summary = ToolResultSummary::dim(summary);
+        }
+        contentBlocks_.push_back(std::move(cb));
     });
 }
 
 void FtxuiRepl::addToolMessage(const String& toolName, const String& input, const String& result) {
     if (input.empty() && !result.empty()) {
-        // Result callback — find earliest unpaired tool_use with matching name in pipeline
-        const auto& rawMsgs = messagePipeline_.rawMessages();
-        String toolId;
-        for (const auto& m : rawMsgs) {
-            if (m.type == DisplayMessage::Type::AssistantToolUse &&
-                m.toolUse.toolName == toolName) {
-                bool alreadyPaired = false;
-                for (const auto& other : rawMsgs) {
-                    if ((other.type == DisplayMessage::Type::UserToolResult ||
-                         other.type == DisplayMessage::Type::UserToolSuccess ||
-                         other.type == DisplayMessage::Type::UserToolError) &&
-                        other.toolResult.toolUseId == m.toolUse.toolId) {
-                        alreadyPaired = true;
-                        break;
-                    }
-                }
-                if (!alreadyPaired) {
-                    toolId = m.toolUse.toolId;
-                    break;
-                }
-            }
-        }
-        addToolResult(toolName, toolId, result, false);
+        addToolResult(toolName, "", result, false);
     } else {
-        addToolUseStart(toolName, MessageIdGenerator::next(), input);
+        addToolUseStart(toolName, "", input);
     }
 }
 
 void FtxuiRepl::addSystemMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        StreamEvent event;
-        event.type = StreamEvent::Type::SystemMessage;
-        event.text = std::move(c);
-        processAndSync(messagePipeline_, messages_, event);
+        ContentBlock cb;
+        cb.type = ContentBlock::AnswerText;
+        cb.text = std::move(c);
+        cb.dimmed = true;
+        contentBlocks_.push_back(std::move(cb));
     });
 }
 
 void FtxuiRepl::addErrorMessage(const String& content) {
     if (!screen_) return;
     screen_->Post([this, c = String(content)]() {
-        StreamEvent event;
-        event.type = StreamEvent::Type::ErrorMessage;
-        event.text = std::move(c);
-        processAndSync(messagePipeline_, messages_, event);
+        ContentBlock cb;
+        cb.type = ContentBlock::ErrorMessage;
+        cb.text = std::move(c);
+        contentBlocks_.push_back(std::move(cb));
     });
 }
 
 void FtxuiRepl::addTurnDurationMessage(int durationMs) {
-    if (!screen_) return;
-    int seconds = durationMs / 1000;
-    String msg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-    screen_->Post([this, m = std::move(msg)]() {
-        StreamEvent event;
-        event.type = StreamEvent::Type::TurnDuration;
-        event.text = std::move(m);
-        processAndSync(messagePipeline_, messages_, event);
-    });
+    // Turn duration is now shown in the status bar via TurnMetadata,
+    // not in the content area. This method is kept for API compatibility.
 }
 
 void FtxuiRepl::clearMessages() {
     if (!screen_) return;
     screen_->Post([this]() {
-        messages_.clear();
-        messagePipeline_.rawMessages().clear();
-        messagePipeline_.reprocess();
+        contentBlocks_.clear();
     });
 }
 
@@ -563,8 +706,8 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
     static ui::ThemeColors defaultTheme;
     renderContext_ = std::make_unique<ui::RenderContext>(defaultTheme);
 
-    // Link messages to layoutState (rendered by AppLayout)
-    layoutState_.content.messages = &messages_;
+    // Link contentBlocks to layoutState (rendered by AppLayout)
+    layoutState_.content.contentBlocks = &contentBlocks_;
 
     // Build the AppLayout renderer component
     auto layoutComp = ui::AppLayoutComponent(layoutState_, *renderContext_);
@@ -737,29 +880,27 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             if (ls->collapsibleCount > 0 && ls->collapsibleFocusIndex >= 0) {
                 // Find the focused collapsible tool result and toggle it
                 int focusSeq = 0;
-                for (auto& m : r->messages_) {
-                    auto isToolResult = (m.type == DisplayMessage::Type::UserToolResult ||
-                                         m.type == DisplayMessage::Type::UserToolSuccess ||
-                                         m.type == DisplayMessage::Type::UserToolError);
-                    if (isToolResult) {
-                        auto* renderer = ui::ToolRendererRegistry::instance().getRenderer(m.toolResult.toolName);
-                        if (renderer && renderer->isCollapsible()) {
-                            if (focusSeq == ls->collapsibleFocusIndex) {
-                                m.expanded = !m.expanded;
-                                break;
-                            }
-                            focusSeq++;
+                for (auto& block : r->contentBlocks_) {
+                    if ((block.type == ContentBlock::ToolResult &&
+                         AnswerPostProcessor::isCollapsibleTool(block.toolName)) ||
+                        block.type == ContentBlock::ToolGroup ||
+                        block.type == ContentBlock::CollapsedGroup) {
+                        if (focusSeq == ls->collapsibleFocusIndex) {
+                            block.expanded = !block.expanded;
+                            break;
                         }
+                        focusSeq++;
                     }
                 }
             } else {
-                // Fallback: toggle all thinking/collapsed-groups (original behavior)
+                // Fallback: toggle all thinking/collapsed-groups
                 r->verboseTools_ = !r->verboseTools_;
                 ls->verboseTools = r->verboseTools_;
-                for (auto& m : r->messages_) {
-                    if (m.type == DisplayMessage::Type::AssistantThinking ||
-                        m.type == DisplayMessage::Type::CollapsedReadSearch) {
-                        m.expanded = r->verboseTools_;
+                for (auto& block : r->contentBlocks_) {
+                    if (block.type == ContentBlock::ThinkingBlock ||
+                        block.type == ContentBlock::ToolGroup ||
+                        block.type == ContentBlock::CollapsedGroup) {
+                        block.expanded = r->verboseTools_;
                     }
                 }
             }
@@ -767,10 +908,8 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
         }
 
         // [ and ] keys: cycle focus between collapsible tool results
-        // Only active in non-streaming state
         if (!r->isStreaming_ && ls->collapsibleCount > 0) {
-            if (event == Event::Character('[') && r->messages_.empty() == false) {
-                // Only handle '[' when input is empty to avoid interfering with typing
+            if (event == Event::Character('[') && r->contentBlocks_.empty() == false) {
                 if (ls->input.text.empty()) {
                     ls->collapsibleFocusIndex = (ls->collapsibleFocusIndex <= 0)
                         ? ls->collapsibleCount - 1
@@ -778,7 +917,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                     return true;
                 }
             }
-            if (event == Event::Character(']') && r->messages_.empty() == false) {
+            if (event == Event::Character(']') && r->contentBlocks_.empty() == false) {
                 if (ls->input.text.empty()) {
                     ls->collapsibleFocusIndex = (ls->collapsibleFocusIndex + 1) % ls->collapsibleCount;
                     return true;
@@ -788,12 +927,12 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
 
         // Permission prompt — MUST be checked BEFORE isStreaming_
         if (r->permissionPromptActive_) {
-            // Helper: clear ToolProgress::Permission on the pending tool_use
+            // Helper: clear permission progress on the pending ToolProgress block
             auto clearPermissionProgress = [r]() {
-                for (auto it = r->messages_.rbegin(); it != r->messages_.rend(); ++it) {
-                    if (it->type == DisplayMessage::Type::AssistantToolUse &&
-                        it->toolUse.progress == ToolProgress::Permission) {
-                        it->toolUse.progress = ToolProgress::None;
+                for (auto it = r->contentBlocks_.rbegin(); it != r->contentBlocks_.rend(); ++it) {
+                    if (it->type == ContentBlock::ToolProgress &&
+                        it->activity == "Waiting for permission") {
+                        it->activity = "Running";
                         break;
                     }
                 }
@@ -963,14 +1102,17 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 r->streamingText_.clear();
                 r->streamingRenderer_.reset();
                 if (!partial.empty()) {
-                    auto msg = DisplayMessage::assistantText(std::move(partial));
-                    msg.messageId = MessageIdGenerator::next();
-                    r->messages_.push_back(std::move(msg));
+                    ContentBlock cb;
+                    cb.type = ContentBlock::AnswerText;
+                    cb.text = std::move(partial);
+                    r->contentBlocks_.push_back(std::move(cb));
                 }
                 {
-                    auto msg = DisplayMessage::systemInfo("Cancelled");
-                    msg.messageId = MessageIdGenerator::next();
-                    r->messages_.push_back(std::move(msg));
+                    ContentBlock cb;
+                    cb.type = ContentBlock::AnswerText;
+                    cb.text = "Cancelled";
+                    cb.dimmed = true;
+                    r->contentBlocks_.push_back(std::move(cb));
                 }
 
                 r->stopRefreshThread();
@@ -985,9 +1127,18 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 String current = ls->input.text;
                 ls->input.text.clear();
                 ls->input.cursorPos = 0;
-                auto msg = DisplayMessage::userPrompt(current);
-                msg.messageId = MessageIdGenerator::next();
-                r->messages_.push_back(std::move(msg));
+                ContentBlock userCb;
+                userCb.type = ContentBlock::UserMessage;
+                userCb.text = current;
+                // Detect user input type
+                if (!current.empty()) {
+                    if (current[0] == '/') {
+                        userCb.userInputType = UserInputType::Command;
+                    } else if (current[0] == '!') {
+                        userCb.userInputType = UserInputType::Bash;
+                    }
+                }
+                r->contentBlocks_.push_back(std::move(userCb));
                 r->isStreaming_ = true;
                 r->isThinking_ = true;
                 r->streamingText_.clear();
@@ -1158,9 +1309,11 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 });
                 r->screen_->Post(std::move(task));
                 r->screen_->Post([r, len = selected.size()]() {
-                    auto msg = DisplayMessage::systemInfo("Copied " + std::to_string(len) + " chars to clipboard");
-                    msg.messageId = MessageIdGenerator::next();
-                    r->messages_.push_back(std::move(msg));
+                    ContentBlock cb;
+                    cb.type = ContentBlock::AnswerText;
+                    cb.text = "Copied " + std::to_string(len) + " chars to clipboard";
+                    cb.dimmed = true;
+                    r->contentBlocks_.push_back(std::move(cb));
                 });
                 // Clear selection after copy
                 r->selectionActive_ = false;
@@ -1191,9 +1344,11 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             r->ctrlCPending_ = true;
             r->lastCtrlC_ = now;
             {
-                auto msg = DisplayMessage::systemInfo("Press Ctrl+C again to exit");
-                msg.messageId = MessageIdGenerator::next();
-                r->messages_.push_back(std::move(msg));
+                ContentBlock cb;
+                cb.type = ContentBlock::AnswerText;
+                cb.text = "Press Ctrl+C again to exit";
+                cb.dimmed = true;
+                r->contentBlocks_.push_back(std::move(cb));
             }
             return true;
         }
