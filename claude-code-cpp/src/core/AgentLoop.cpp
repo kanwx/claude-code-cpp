@@ -1,5 +1,6 @@
 #include <claude/core/AgentLoopImpl.hpp>
 #include <claude/core/ContentBlockParam.hpp>
+#include <claude/core/compact/MicroCompact.hpp>
 #include <claude/api/RetryableClient.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -356,6 +357,33 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 
         // Emit StreamStart at beginning of each iteration
         emitStreamEvent(StreamEvent{StreamEvent::Type::StreamStart});
+
+        // ========== Pre-flight context guard: check before building API request ==========
+        // The TS original checks context BEFORE each API call, not just at loop end.
+        // If context is already tight, do an aggressive micro-compact now to prevent
+        // the API from immediately returning overloaded_error.
+        {
+            double usageRatio = impl_->tokenTracker.getUsagePercentage();
+            if (usageRatio >= 0.85) {
+                spdlog::debug("Pre-flight: context at {:.0f}%, applying aggressive micro-compact",
+                    usageRatio * 100);
+                std::lock_guard lock(impl_->historyMutex);
+                // Keep only the last 2 tool results intact; compact everything else
+                int compacted = compact::MicroCompact::applyByPressure(
+                    impl_->messageHistory, usageRatio, /*keepLast=*/2);
+                if (compacted > 0) {
+                    spdlog::debug("Pre-flight micro-compact: cleared {} results", compacted);
+                }
+            }
+            if (usageRatio >= 0.92) {
+                // Critical: context nearly full, try auto-compact immediately
+                spdlog::warn("Pre-flight: context at {:.0f}%, triggering urgent auto-compact",
+                    usageRatio * 100);
+                if (applyAutoCompact()) {
+                    spdlog::debug("Pre-flight auto-compact succeeded");
+                }
+            }
+        }
 
         // Apply skill model override for this iteration (save/restore pattern)
         String savedModelForSkill;
