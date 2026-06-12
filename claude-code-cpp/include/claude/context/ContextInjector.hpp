@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/Types.hpp"
+#include "../core/ContentBlockParam.hpp"
 #include "../context/GitContext.hpp"
 #include "../context/SkillLoader.hpp"
 #include <string>
@@ -205,7 +206,13 @@ public:
     /// Clear all attachments (for new turn)
     void clearAttachments();
 
-    /// Format injected context as message content
+    /// Build user context as ContentBlockParam blocks with system-reminder tags.
+    /// Returns blocks suitable for a user message: user input first, then
+    /// git status, CLAUDE.md, date, skills, and memories each wrapped in
+    /// <system-reminder> tags — matching the TypeScript injection pattern.
+    std::vector<ContentBlockParam> buildUserContextBlocks(const String& userInput);
+
+    /// Format injected context as message content (legacy flat-string format)
     String formatAsMessageContent(const InjectedContext& ctx);
 
     /// Format system reminders as string

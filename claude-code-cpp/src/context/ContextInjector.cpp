@@ -1,4 +1,5 @@
 #include "claude/context/ContextInjector.hpp"
+#include "claude/core/ContentBlockParam.hpp"
 #include <sstream>
 #include <chrono>
 #include <iomanip>
@@ -185,6 +186,54 @@ void ContextInjector::setPlanMode(const PlanModeAttachment& plan) {
 void ContextInjector::clearAttachments() {
     std::lock_guard lock(contextMutex_);
     attachments_.clear();
+}
+
+std::vector<ContentBlockParam> ContextInjector::buildUserContextBlocks(const String& userInput) {
+    std::vector<ContentBlockParam> blocks;
+
+    // User's actual input
+    blocks.push_back(ContentBlockParam::makeText(userInput));
+
+    // Git status as system-reminder
+    if (gitStatus_.has_value()) {
+        std::ostringstream gitOss;
+        gitOss << "gitStatus: This is the git status at the start of the conversation. "
+               << "Note that this status is a snapshot in time, and will not update "
+               << "during the conversation.\n\n"
+               << formatGitStatus(*gitStatus_);
+        blocks.push_back(ContentBlockParam::makeText(
+            "<system-reminder>\n" + gitOss.str() + "\n</system-reminder>"));
+    }
+
+    // CLAUDE.md as system-reminder
+    if (claudeMd_.has_value() && !claudeMd_->empty()) {
+        blocks.push_back(ContentBlockParam::makeText(
+            "<system-reminder>\n" + *claudeMd_ + "\n</system-reminder>"));
+    }
+
+    // Date
+    blocks.push_back(ContentBlockParam::makeText(
+        "<system-reminder>\n" + getCurrentDate() + "\n</system-reminder>"));
+
+    // Skills
+    if (!skills_.empty()) {
+        std::ostringstream skillOss;
+        skillOss << "Available skills:\n";
+        for (const auto& skill : skills_) {
+            skillOss << "  /" << skill.name << " — " << skill.description << "\n";
+        }
+        blocks.push_back(ContentBlockParam::makeText(
+            "<system-reminder>\n" + skillOss.str() + "\n</system-reminder>"));
+    }
+
+    // Memories (relevant to user query)
+    auto ctx = buildContext(userInput);
+    for (auto& mem : ctx.relevantMemories) {
+        blocks.push_back(ContentBlockParam::makeText(
+            "<system-reminder>\n" + formatMemory(mem) + "\n</system-reminder>"));
+    }
+
+    return blocks;
 }
 
 String ContextInjector::formatAsMessageContent(const InjectedContext& ctx) {

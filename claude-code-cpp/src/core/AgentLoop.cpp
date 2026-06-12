@@ -841,17 +841,17 @@ void AgentLoop::injectContext(const String& userInput) {
         return;
     }
 
-    auto ctx = impl_->contextInjector->buildContext(userInput);
-    String contextPrefix = impl_->contextInjector->formatAsMessageContent(ctx);
+    // Build ContentMessage with system-reminder blocks, then flatten to
+    // legacy Message format (messageHistory is still vector<Message>).
+    auto blocks = impl_->contextInjector->buildUserContextBlocks(userInput);
+    ContentMessage userMsg = ContentMessage::userBlocks(std::move(blocks));
 
-    if (contextPrefix.empty()) {
+    Message legacyMsg;
+    legacyMsg.role = MessageRole::User;
+    legacyMsg.content = userMsg.textContent();
+    {
         std::lock_guard lock(impl_->historyMutex);
-        impl_->messageHistory.push_back(Message::user(userInput));
-    } else {
-        // Inject context as a system-reminder user message prefix, matching TS behavior
-        String fullContent = contextPrefix + userInput;
-        std::lock_guard lock(impl_->historyMutex);
-        impl_->messageHistory.push_back(Message::user(fullContent));
+        impl_->messageHistory.push_back(std::move(legacyMsg));
     }
 
     // Clear per-turn attachments (not system-level context like git/claudeMd)
