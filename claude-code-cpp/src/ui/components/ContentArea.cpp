@@ -1,7 +1,7 @@
 #ifdef HAS_FTXUI
 
 #include <claude/ui/components/ContentArea.hpp>
-#include <claude/ui/components/MessageList.hpp>
+#include <claude/ui/ContentBlockRenderer.hpp>
 #include <claude/ui/FtxuiMarkdown.hpp>
 #include "../FtxuiColors.hpp"
 #include <ftxui/dom/elements.hpp>
@@ -12,12 +12,9 @@ namespace claude::ui {
 using namespace ftxui_colors;
 
 ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& ctx) {
-    // Capture pointers — caller ensures lifetime
-    const auto* msgs = state.messages;
-    const auto* ctxPtr = &ctx;
     auto* st = &state;
 
-    return ftxui::Renderer([st, msgs, ctxPtr] {
+    return ftxui::Renderer([st] {
         using namespace ftxui;
 
         Elements contentEls;
@@ -26,41 +23,43 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
         if (st->messagesAbove > 0) {
             contentEls.push_back(
                 hbox({
-                    text(" ↑ " + std::to_string(st->messagesAbove) + " messages above ")
+                    text(" \xe2\x86\x91 " + std::to_string(st->messagesAbove) + " messages above ")
                     | dim | color(MacShadow)
                     | center
                 }) | flex
             );
         }
 
-        // Message list — dispatches to per-type components
-        if (msgs && !msgs->empty()) {
-            contentEls.push_back(RenderMessageList(msgs, ctxPtr, -1));
+        // Content blocks — render via renderFtxuiElement
+        if (st->contentBlocks && !st->contentBlocks->empty()) {
+            for (const auto& block : *st->contentBlocks) {
+                contentEls.push_back(renderFtxuiElement(block));
+            }
         }
 
-        // Streaming text — live assistant text with blinking cursor
+        // Streaming text — rendered as a virtual AnswerText block inline
+        // with committed content blocks. This avoids the visual "jump" that
+        // occurs when text moves between the old separate streaming area and
+        // the committed blocks area. Using the same rendering path ensures
+        // that committing text (moving it from streamingText_ to contentBlocks_)
+        // is visually seamless.
         if (!st->streaming.text.empty()) {
-            if (!contentEls.empty()) contentEls.push_back(text(""));
+            // Build a virtual ContentBlock for the streaming text
+            ContentBlock streamingCb;
+            streamingCb.type = ContentBlock::AnswerText;
+            streamingCb.text = st->streaming.text;
+            // isFirst: true only when there are no committed AnswerText blocks
+            // and the streaming text is the very first assistant content
+            streamingCb.isFirst = st->contentBlocks &&
+                std::none_of(st->contentBlocks->begin(), st->contentBlocks->end(),
+                    [](const ContentBlock& b) { return b.type == ContentBlock::AnswerText; });
+            contentEls.push_back(renderFtxuiElement(streamingCb));
 
-            auto mdBlocks = FtxuiMarkdown::render(st->streaming.text);
-            bool firstElem = true;
-            for (auto& elem : mdBlocks) {
-                if (firstElem) {
-                    contentEls.push_back(hbox({
-                        text("● ") | color(MacSky),
-                        std::move(elem) | flex,
-                    }));
-                    firstElem = false;
-                } else {
-                    contentEls.push_back(std::move(elem));
-                }
-            }
-
-            // Blinking cursor
+            // Blinking cursor after streaming text
             bool cursorVisible = (st->streaming.tickCounter % 4) < 2;
             Color cursorColor = cursorVisible ? MacPeach : MacCream;
             contentEls.push_back(hbox({
-                text("  ◉") | color(cursorColor) | blink,
+                text("  \xe2\x97\x89") | color(cursorColor) | blink,
             }));
         }
 
@@ -78,26 +77,30 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
                 | bold | color(thinkColor)
             );
             if (glimmerPhase) {
-                thinkingElems.push_back(text(" ●") | color(thinkColor) | dim);
+                thinkingElems.push_back(text(" \xe2\x97\x8f") | color(thinkColor) | dim);
             }
-            if (!st->thinking.summary.empty()) {
+            if (!st->thinking.summary.empty() && st->thinking.summary.size() <= 60) {
                 thinkingElems.push_back(text("  ") | dim);
-                std::string summary = st->thinking.summary;
-                if (summary.size() > 60) {
-                    summary = "..." + summary.substr(summary.size() - 57);
-                }
-                thinkingElems.push_back(text(summary) | dim | color(MacCream));
+                thinkingElems.push_back(text(st->thinking.summary) | dim | color(MacCream));
             }
-            thinkingElems.push_back(text(" (ctrl+o)") | dim | color(MacShadow));
+            thinkingElems.push_back(text(" [Ctrl+O]") | dim | color(MacShadow));
 
             contentEls.push_back(hbox(std::move(thinkingElems)));
         }
 
-        // Wrap in a scrollable flex area
+        // Wrap in a scrollable flex area.
+        // During active streaming (autoScroll), pin to bottom so new text is always
+        // visible. When the user scrolls manually (autoScroll becomes false), remove
+        // programmatic positioning and let yframe handle scrolling natively.
+        // Using focusPositionRelative outside of auto-scroll causes a tug-of-war
+        // with ftxui's internal scroll state, making content appear to shift.
         auto content = vbox(std::move(contentEls)) | flex;
 
+        if (st->autoScroll) {
+            content = content | focusPositionRelative(0.f, 1.0f);
+        }
+
         content = content
-            | focusPositionRelative(0.f, st->scrollRatio)
             | yframe
             | vscroll_indicator
             | flex;
