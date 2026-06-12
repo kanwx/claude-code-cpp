@@ -137,4 +137,12 @@ struct ContentMessage {
 // Shared serialization: provider-specific ContentBlockParam -> JSON
 Json serializeContentBlock(const ContentBlockParam& block, const String& provider);
 
+// ContentMessage -> provider-specific JSON
+Json serializeContentMessageForAnthropic(const ContentMessage& msg);
+Json buildAnthropicApiMessages(const std::vector<ContentMessage>& history);
+Json serializeContentMessageForOpenAI(const ContentMessage& msg);
+
+// Legacy Message -> ContentMessage conversion
+ContentMessage convertLegacyMessage(const Message& old);
+
 } // namespace claude

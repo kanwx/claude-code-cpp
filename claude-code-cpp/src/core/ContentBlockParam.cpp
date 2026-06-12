@@ -40,4 +40,134 @@ Json serializeContentBlock(const ContentBlockParam& block, const String& provide
     return j;
 }
 
+Json serializeContentMessageForAnthropic(const ContentMessage& msg) {
+    Json j;
+    switch (msg.role) {
+        case MessageRole::System:    j["role"] = "system"; break;
+        case MessageRole::User:      j["role"] = "user"; break;
+        case MessageRole::Assistant: j["role"] = "assistant"; break;
+        case MessageRole::ToolResult: j["role"] = "user"; break;
+    }
+    Json contentArr = Json::array();
+    for (auto& block : msg.content) {
+        contentArr.push_back(serializeContentBlock(block, "anthropic"));
+    }
+    j["content"] = contentArr;
+    return j;
+}
+
+Json buildAnthropicApiMessages(const std::vector<ContentMessage>& history) {
+    Json messages = Json::array();
+    for (size_t i = 0; i < history.size(); ++i) {
+        auto& msg = history[i];
+        if (msg.role == MessageRole::System) continue;
+
+        auto serialized = serializeContentMessageForAnthropic(msg);
+
+        // Merge consecutive tool-result-only messages (Anthropic requires tool_results in user messages,
+        // and two consecutive user messages are invalid, so we merge when BOTH are tool-result-only)
+        if (!messages.empty() && serialized["role"] == "user") {
+            auto& last = messages.back();
+            if (last["role"] == "user") {
+                // Check if the previous message was tool-result-only
+                bool lastAllToolResults = true;
+                for (auto& b : last["content"]) {
+                    if (b.value("type", "") != "tool_result") {
+                        lastAllToolResults = false;
+                        break;
+                    }
+                }
+                // Check if current message is also tool-result-only
+                bool curAllToolResults = true;
+                for (auto& b : msg.content) {
+                    if (b.type != ContentBlockParam::ToolResult) {
+                        curAllToolResults = false;
+                        break;
+                    }
+                }
+                if (lastAllToolResults && curAllToolResults) {
+                    for (auto& block : serialized["content"]) {
+                        last["content"].push_back(block);
+                    }
+                    continue;
+                }
+            }
+        }
+        messages.push_back(serialized);
+    }
+    return messages;
+}
+
+Json serializeContentMessageForOpenAI(const ContentMessage& msg) {
+    Json j;
+    switch (msg.role) {
+        case MessageRole::System:    j["role"] = "system"; break;
+        case MessageRole::User:      j["role"] = "user"; break;
+        case MessageRole::Assistant: j["role"] = "assistant"; break;
+        case MessageRole::ToolResult: j["role"] = "tool"; break;
+    }
+
+    bool hasToolUse = false;
+    for (auto& b : msg.content) {
+        if (b.type == ContentBlockParam::ToolUse) { hasToolUse = true; break; }
+    }
+
+    if (hasToolUse) {
+        j["content"] = msg.textContent();
+        Json toolCalls = Json::array();
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolUse) {
+                toolCalls.push_back(serializeContentBlock(block, "openai"));
+            }
+        }
+        j["tool_calls"] = toolCalls;
+    } else if (msg.role == MessageRole::ToolResult) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult) {
+                j["tool_call_id"] = block.toolUseId;
+                j["content"] = block.resultContent;
+                break;
+            }
+        }
+    } else {
+        j["content"] = msg.textContent();
+    }
+
+    return j;
+}
+
+ContentMessage convertLegacyMessage(const Message& old) {
+    ContentMessage result;
+    result.role = old.role;
+    result.timestamp = old.timestamp;
+    result.apiRound = old.apiRound;
+
+    if (old.thinking.has_value() && !old.thinking->empty()) {
+        result.content.push_back(ContentBlockParam::makeThinking(
+            *old.thinking, old.signature.value_or("")));
+    }
+
+    if (!old.content.empty()) {
+        result.content.push_back(ContentBlockParam::makeText(old.content));
+    }
+
+    for (auto& tc : old.toolCalls) {
+        Json input = Json::object();
+        try { input = Json::parse(tc.arguments); } catch (...) {}
+        result.content.push_back(ContentBlockParam::makeToolUse(tc.id, tc.name, input));
+    }
+
+    for (auto& tr : old.toolResults) {
+        auto block = ContentBlockParam::makeToolResult(tr.callId, tr.content, tr.isError);
+        result.content.push_back(std::move(block));
+    }
+
+    for (auto& rt : old.redactedThinking) {
+        result.content.push_back(ContentBlockParam::makeRedactedThinking(
+            rt.value("data", rt.dump())));
+    }
+
+    return result;
+}
+
 } // namespace claude
