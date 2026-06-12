@@ -619,7 +619,7 @@ private:
         if (agentLoop_) {
             statusLine_ = std::make_unique<StatusLine>(std::cout);
             String rawModel = config_->getModel();
-            if (rawModel.empty()) rawModel = "glm-5";
+            if (rawModel.empty()) rawModel = "unknown";
             statusLine_->enable(rawModel, agentLoop_->getTokenTracker());
             auto ms = AppState::instance().modelStrings();
             statusLine_->setModelName(ms.has_value() ? ms->displayName : rawModel);
@@ -725,10 +725,22 @@ private:
             replPtr->setGitBranch(gitCtx.branch);
         }
 
-        // Show model info in header — prefer display name from ModelStrings
+        // Show model info in header — prefer display name from ModelStrings.
+        // Use the ACTUAL model from config (which reflects env.ANTHROPIC_MODEL,
+        // CLI --model, and settings.json with correct priority).
         if (agentLoop_) {
             auto ms = AppState::instance().modelStrings();
-            String info = ms.has_value() ? ms->displayName : (config_->getModel().empty() ? "glm-5" : config_->getModel());
+            String actualModel = config_->getModel();
+            // Prefer ModelStrings display name; fall back to config model;
+            // only use a hardcoded default if absolutely nothing is configured.
+            String info;
+            if (ms.has_value()) {
+                info = ms->displayName;
+            } else if (!actualModel.empty()) {
+                info = actualModel;
+            } else {
+                info = "anthropic";  // default provider model
+            }
             ftxuiRepl_->setModelInfo(info);
         }
 
