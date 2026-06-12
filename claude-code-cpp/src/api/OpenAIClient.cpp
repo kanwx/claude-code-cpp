@@ -171,6 +171,21 @@ void OpenAIClient::stream(
             Json& chunk = *json;
             if (chunk.contains("choices") && !chunk["choices"].empty()) {
                 success = true;
+
+                // Check for refusal finish_reason — the model declined to respond
+                const auto& choice = chunk["choices"][0];
+                if (choice.contains("finish_reason") && choice["finish_reason"].is_string()) {
+                    String finishReason = choice["finish_reason"].get<String>();
+                    if (finishReason == "refusal") {
+                        spdlog::warn("OpenAI stream ended with refusal finish_reason");
+                        Json errorChunk = {
+                            {"type", "error"},
+                            {"error", "Model refused to respond"}
+                        };
+                        onChunk(errorChunk);
+                        return;
+                    }
+                }
             }
             onChunk(chunk);
         } else {
