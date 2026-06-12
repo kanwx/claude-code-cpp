@@ -125,6 +125,7 @@ set(CORE_SOURCES
     src/core/FeatureFlags.cpp
     src/core/QueryEngine.cpp
     src/core/ReactiveState.cpp
+    src/core/ContentBlockParam.cpp
 )
 
 # 工具源文件
@@ -278,14 +279,12 @@ set(CONSOLE_SOURCES
     src/console/MarkdownRenderer.cpp
     src/console/DiffRenderer.cpp
     src/console/ThinkingRenderer.cpp
-    src/console/ToolStatusRenderer.cpp
     src/console/ThemeSystem.cpp
     src/console/Completer.cpp
     src/console/CreativeVerbs.cpp
     src/console/PermissionPromptRenderer.cpp
     src/console/PromptRenderer.cpp
     src/console/TurnDurationRenderer.cpp
-    src/console/CollapsedToolRenderer.cpp
     src/console/ActivityDescription.cpp
     src/console/TerminalCapabilities.cpp
 )
@@ -470,56 +469,18 @@ set(UI_SOURCES
     src/ui/FtxuiPermission.cpp
     src/ui/FtxuiRender.cpp
     src/ui/FtxuiMarkdown.cpp
-    src/ui/UiMessageTypes.cpp
-    src/ui/XmlTagDispatcher.cpp
-    src/ui/MessagePipeline.cpp
     src/ui/VirtualScroll.cpp
     src/ui/OffscreenFreeze.cpp
-    src/ui/components/MessageRenderer.cpp
-    src/ui/components/AssistantTextRenderer.cpp
-    src/ui/components/ToolUseRenderer.cpp
     src/ui/components/StatusBarRenderer.cpp
-    src/ui/components/MessageComponent.cpp
     src/ui/components/HeaderBar.cpp
     src/ui/components/PermissionPrompt.cpp
     src/ui/components/ModalOverlay.cpp
     src/ui/components/TextInputComponent.cpp
-    src/ui/components/ToolResultComponent.cpp
-    src/ui/components/UserToolSuccessComponent.cpp
-    src/ui/components/UserToolErrorComponent.cpp
-    src/ui/components/UserToolRejectedComponent.cpp
-    src/ui/components/UserToolCanceledComponent.cpp
-    src/ui/components/AssistantRedactedThinkingComponent.cpp
-    src/ui/components/UserPromptComponent.cpp
-    src/ui/components/AssistantTextComponent.cpp
-    src/ui/components/SystemInfoComponent.cpp
-    src/ui/components/SystemErrorComponent.cpp
-    src/ui/components/TurnDurationComponent.cpp
-    src/ui/components/CompactBoundaryComponent.cpp
-    src/ui/components/AssistantThinkingComponent.cpp
-    src/ui/components/ToolUseComponent.cpp
-    src/ui/components/CollapsedReadSearchComponent.cpp
-    src/ui/components/GroupedToolUseComponent.cpp
-    src/ui/components/AgentProgressComponent.cpp
-    src/ui/components/CollapsibleToolResult.cpp
     src/ui/components/StreamingText.cpp
     src/ui/components/ThinkingIndicator.cpp
-    src/ui/components/MessageList.cpp
     src/ui/components/ContentArea.cpp
     src/ui/components/AppLayout.cpp
     src/ui/PromptInputFooter.cpp
-    src/ui/ToolRendererRegistry.cpp
-    src/ui/renderers/DefaultToolRenderer.cpp
-    src/ui/renderers/ReadToolRenderer.cpp
-    src/ui/renderers/BashToolRenderer.cpp
-    src/ui/renderers/EditToolRenderer.cpp
-    src/ui/renderers/WriteToolRenderer.cpp
-    src/ui/renderers/GrepToolRenderer.cpp
-    src/ui/renderers/GlobToolRenderer.cpp
-    src/ui/renderers/AgentToolRenderer.cpp
-    src/ui/renderers/WebFetchToolRenderer.cpp
-    src/ui/renderers/WebSearchToolRenderer.cpp
-    src/ui/renderers/LspToolRenderer.cpp
     src/ui/renderers/ContentBlockAnsi.cpp
     src/ui/renderers/ContentBlockFtxui.cpp
     src/ui/SearchOverlay.cpp
@@ -529,7 +490,6 @@ set(UI_SOURCES
     src/ui/permissions/FileEditPermissionRenderer.cpp
     src/ui/permissions/FileWritePermissionRenderer.cpp
     src/ui/permissions/FileReadPermissionRenderer.cpp
-    src/ui/ThinkingFilter.cpp
 )
 
 # RAG源文件

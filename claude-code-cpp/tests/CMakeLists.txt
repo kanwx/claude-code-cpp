@@ -180,18 +180,6 @@ add_executable(test_ui_alignment test_ui_alignment.cpp)
 target_link_libraries(test_ui_alignment PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ui_alignment)
 
-add_executable(test_tool_renderer_registry test_tool_renderer_registry.cpp)
-target_link_libraries(test_tool_renderer_registry PRIVATE claude_core Catch2::Catch2WithMain)
-catch_discover_tests(test_tool_renderer_registry)
-
-add_executable(test_display_message_types test_display_message_types.cpp)
-target_link_libraries(test_display_message_types PRIVATE claude_core Catch2::Catch2WithMain)
-catch_discover_tests(test_display_message_types)
-
-add_executable(test_xml_dispatcher test_xml_dispatcher.cpp)
-target_link_libraries(test_xml_dispatcher PRIVATE claude_core Catch2::Catch2WithMain)
-catch_discover_tests(test_xml_dispatcher)
-
 add_executable(test_terminal_capabilities test_terminal_capabilities.cpp)
 target_link_libraries(test_terminal_capabilities PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_terminal_capabilities)
@@ -207,10 +195,6 @@ catch_discover_tests(test_search_overlay)
 add_executable(test_permission_renderer test_permission_renderer.cpp)
 target_link_libraries(test_permission_renderer PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_permission_renderer)
-
-add_executable(test_thinking_filter test_thinking_filter.cpp)
-target_link_libraries(test_thinking_filter PRIVATE claude_core Catch2::Catch2WithMain)
-catch_discover_tests(test_thinking_filter)
 
 add_executable(test_TypedStreamEvent stream/test_TypedStreamEvent.cpp)
 target_link_libraries(test_TypedStreamEvent PRIVATE claude_core Catch2::Catch2WithMain)
@@ -247,3 +231,7 @@ catch_discover_tests(test_AnswerPostProcessor)
 add_executable(test_ContentBlockRenderer stream/test_ContentBlockRenderer.cpp)
 target_link_libraries(test_ContentBlockRenderer PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ContentBlockRenderer)
+
+add_executable(test_content_block_param test_content_block_param.cpp)
+target_link_libraries(test_content_block_param PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_content_block_param)
