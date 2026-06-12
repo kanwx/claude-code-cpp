@@ -302,9 +302,6 @@ String getToneAndStyleSection() {
     for (const auto& item : prependBullets(items)) {
         oss << item << "\n";
     }
-    oss << "\n";
-    oss << "Match responses to the task: a simple question gets a direct answer, "
-        << "not headers and numbered sections.\n";
     return oss.str();
 }
 
@@ -322,9 +319,7 @@ Focus text output on:
 - High-level status updates at natural milestones
 - Errors or blockers that change the plan
 
-If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls.
-
-End-of-turn summary: one or two sentences. What changed and what's next. Nothing else.)";
+If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls.)";
 }
 
 String getEnvironmentInfoSection(const EnvironmentInfo& env) {
@@ -363,8 +358,9 @@ String getLanguageSection(const String& language) {
 
     std::ostringstream oss;
     oss << "# Language\n";
-    oss << "The user has configured the language to: " << language << ".\n";
-    oss << "Respond in this language unless the user explicitly asks for another.\n";
+    oss << "Always respond in " << language << ". Use " << language
+        << " for all explanations, comments, and communications with the user. "
+        << "Technical terms and code identifiers should remain in their original form.\n";
     return oss.str();
 }
 
@@ -450,23 +446,34 @@ String getSessionGuidanceSection(const PromptContext& ctx) {
 }
 
 String getSystemRemindersSection() {
-    return "# System Reminders\n"
-           "System reminders appear in tool results. They provide important context "
-           "about the current state of the system, such as git status, loaded memory, "
-           "or available skills. Pay attention to these reminders.\n";
+    return "- Tool results and user messages may include <system-reminder> tags. "
+           "<system-reminder> tags contain useful information and reminders from the "
+           "system. Follow the instructions in the <system-reminder> tags, but do not "
+           "mention them to the user.\n"
+           "- If the instructions in the <system-reminder> tag conflict with anything "
+           "above, follow the <system-reminder> tag without hesitation.";
 }
 
 String getToolResultSummarizationSection() {
-    return R"(# Tool result handling
+    return "When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.";
+}
 
-When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.
+String getMemorySection() {
+    return "The user has a memory system at ~/.claude/projects/<project-hash>/memory/.\n"
+           "This directory contains markdown files with memories the user has asked you to save.\n"
+           "Read the MEMORY.md index file to find relevant memories.\n"
+           "When the user asks you to remember something, save it as a markdown file.\n"
+           "When the user asks you to forget something, remove the relevant file.\n"
+           "Do not save code patterns, git history, or information derivable from the codebase.";
+}
 
-Do not dump raw tool output to the user. Instead, internalize the key findings and present them as part of your narrative. For example:
-- After reading a file, summarize the relevant parts rather than pasting the entire contents
-- After searching, describe what you found rather than listing every match
-- After running a command, state the outcome rather than showing the full terminal output
+String getScratchpadSection() {
+    return "The user has a per-session scratchpad directory for temporary files.\n"
+           "Use it for intermediate outputs that don't need to persist across sessions.";
+}
 
-This makes your responses feel like a knowledgeable assistant who has done the work, not a terminal that echoes commands.)";
+String getFrcSection() {
+    return "Function results may be cleared after processing. Write down important information from tool results that you may need later in your response.";
 }
 
 // ========== Main Prompt Builders ==========

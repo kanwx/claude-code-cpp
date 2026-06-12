@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <mutex>
 #include <ctime>
+#include <filesystem>
 
 namespace claude {
 
@@ -732,6 +733,24 @@ std::vector<String> SystemPromptBuilder::buildResolvedDynamicSections() {
         return getToolResultSummarizationSection();
     }));
 
+    // Memory section — conditional on MEMORY.md existence
+    sections.push_back(DANGEROUS_uncachedSystemPromptSection("memory",
+        [this]() -> String {
+            if (memoryPath_.empty()) return "";
+            if (!std::filesystem::exists(memoryPath_)) return "";
+            return getMemorySection();
+        }, "memory file may change between turns"));
+
+    // Scratchpad section
+    sections.push_back(systemPromptSection("scratchpad", [this]() -> String {
+        return getScratchpadSection();
+    }));
+
+    // FRC (function result clearing) section
+    sections.push_back(systemPromptSection("frc", [this]() -> String {
+        return getFrcSection();
+    }));
+
     // Proactive section (if active)
     sections.push_back(systemPromptSection("proactive", [this]() {
         return getProactiveSection();
@@ -824,34 +843,8 @@ String SystemPromptBuilder::build() {
             oss << p;
         }
 
-        // Git context
-        if (!gitCtx_.branch.empty()) {
-            oss << "\n\n# Git Status\n";
-            oss << "Current branch: " << gitCtx_.branch << "\n";
-            if (!gitCtx_.status.empty()) {
-                oss << "Main branch (you will usually use this for PRs): main\n\n";
-                oss << "Status:\n" << gitCtx_.status << "\n";
-            }
-        }
-
-        // CLAUDE.md content
-        if (!claudeMd_.empty()) {
-            oss << "\n\n# Codebase and user instructions\n";
-            oss << "Codebase and user instructions are shown below. Be sure to adhere to these instructions. "
-                << "IMPORTANT: These instructions OVERRIDE any default behavior and you must follow them exactly as written.\n\n";
-            oss << "Contents of " << workDir_ << "/CLAUDE.md:\n";
-            oss << claudeMd_ << "\n";
-        }
-
-        // Extra context
-        if (!additionalContext_.empty()) {
-            oss << "\n" << additionalContext_ << "\n";
-        }
-
-        // RAG context
-        if (!ragContext_.empty()) {
-            oss << "\n" << ragContext_ << "\n";
-        }
+        // Note: git context, CLAUDE.md, and RAG context are now injected
+        // into user messages (Task 15), not the system prompt.
 
         return oss.str();
     }
@@ -872,34 +865,8 @@ String SystemPromptBuilder::build() {
         first = false;
     }
 
-    // Git context
-    if (!gitCtx_.branch.empty()) {
-        oss << "\n\n# Git Status\n";
-        oss << "Current branch: " << gitCtx_.branch << "\n";
-        if (!gitCtx_.status.empty()) {
-            oss << "Main branch (you will usually use this for PRs): main\n\n";
-            oss << "Status:\n" << gitCtx_.status << "\n";
-        }
-    }
-
-    // CLAUDE.md content
-    if (!claudeMd_.empty()) {
-        oss << "\n\n# Codebase and user instructions\n";
-        oss << "Codebase and user instructions are shown below. Be sure to adhere to these instructions. "
-            << "IMPORTANT: These instructions OVERRIDE any default behavior and you must follow them exactly as written.\n\n";
-        oss << "Contents of " << workDir_ << "/CLAUDE.md:\n";
-        oss << claudeMd_ << "\n";
-    }
-
-    // Extra context
-    if (!additionalContext_.empty()) {
-        oss << "\n" << additionalContext_ << "\n";
-    }
-
-    // RAG context
-    if (!ragContext_.empty()) {
-        oss << "\n" << ragContext_ << "\n";
-    }
+    // Note: git context, CLAUDE.md, and RAG context are now injected
+    // into user messages (Task 15), not the system prompt.
 
     return oss.str();
 }
@@ -913,38 +880,8 @@ std::vector<TextBlockParam> SystemPromptBuilder::buildBlocks() {
             blocks.push_back({.text = std::move(p)});
         }
 
-        // Git context
-        if (!gitCtx_.branch.empty()) {
-            std::ostringstream oss;
-            oss << "# Git Status\n";
-            oss << "Current branch: " << gitCtx_.branch << "\n";
-            if (!gitCtx_.status.empty()) {
-                oss << "Main branch (you will usually use this for PRs): main\n\n";
-                oss << "Status:\n" << gitCtx_.status << "\n";
-            }
-            blocks.push_back({.text = oss.str()});
-        }
-
-        // CLAUDE.md content
-        if (!claudeMd_.empty()) {
-            std::ostringstream oss;
-            oss << "# Codebase and user instructions\n";
-            oss << "Codebase and user instructions are shown below. Be sure to adhere to these instructions. "
-                << "IMPORTANT: These instructions OVERRIDE any default behavior and you must follow them exactly as written.\n\n";
-            oss << "Contents of " << workDir_ << "/CLAUDE.md:\n";
-            oss << claudeMd_ << "\n";
-            blocks.push_back({.text = oss.str()});
-        }
-
-        // Extra context
-        if (!additionalContext_.empty()) {
-            blocks.push_back({.text = additionalContext_});
-        }
-
-        // RAG context
-        if (!ragContext_.empty()) {
-            blocks.push_back({.text = ragContext_});
-        }
+        // Note: git context, CLAUDE.md, and RAG context are now injected
+        // into user messages (Task 15), not the system prompt.
 
         // Add cache control to last block
         if (!blocks.empty()) {
@@ -961,6 +898,8 @@ std::vector<TextBlockParam> SystemPromptBuilder::buildBlocks() {
     auto parts = buildDefaultSystemPromptVector();
     std::vector<TextBlockParam> blocks;
 
+    // First pass: build all blocks, applying Global cache control at the
+    // dynamic boundary (last static section).
     for (auto& p : parts) {
         if (p == SYSTEM_PROMPT_DYNAMIC_BOUNDARY) {
             // Boundary marker: do NOT emit as text. Instead, apply global
@@ -977,40 +916,12 @@ std::vector<TextBlockParam> SystemPromptBuilder::buildBlocks() {
         }
     }
 
-    // Git context
-    if (!gitCtx_.branch.empty()) {
-        std::ostringstream oss;
-        oss << "# Git Status\n";
-        oss << "Current branch: " << gitCtx_.branch << "\n";
-        if (!gitCtx_.status.empty()) {
-            oss << "Main branch (you will usually use this for PRs): main\n\n";
-            oss << "Status:\n" << gitCtx_.status << "\n";
-        }
-        blocks.push_back({.text = oss.str()});
-    }
+    // Note: git context, CLAUDE.md, and RAG context are now injected
+    // into user messages (Task 15), not the system prompt.
 
-    // CLAUDE.md content
-    if (!claudeMd_.empty()) {
-        std::ostringstream oss;
-        oss << "# Codebase and user instructions\n";
-        oss << "Codebase and user instructions are shown below. Be sure to adhere to these instructions. "
-            << "IMPORTANT: These instructions OVERRIDE any default behavior and you must follow them exactly as written.\n\n";
-        oss << "Contents of " << workDir_ << "/CLAUDE.md:\n";
-        oss << claudeMd_ << "\n";
-        blocks.push_back({.text = oss.str()});
-    }
-
-    // Extra context
-    if (!additionalContext_.empty()) {
-        blocks.push_back({.text = additionalContext_});
-    }
-
-    // RAG context
-    if (!ragContext_.empty()) {
-        blocks.push_back({.text = ragContext_});
-    }
-
-    // Add cache control to last block (org-level cache)
+    // Second pass: set the last block overall to Org cache control.
+    // This overrides the first pass if the last block is also the last
+    // static block (i.e., no dynamic sections were added).
     if (!blocks.empty()) {
         blocks.back().cache_control = CacheControl{
             .type = "ephemeral",
@@ -1039,32 +950,25 @@ SystemPromptBuilder& SystemPromptBuilder::withWorkDir(const String& dir) {
     return *this;
 }
 
+SystemPromptBuilder& SystemPromptBuilder::withMemoryPath(const String& path) {
+    memoryPath_ = path;
+    return *this;
+}
+
 SystemPromptBuilder& SystemPromptBuilder::withAdditionalContext(const String& context) {
     additionalContext_ = context;
     return *this;
 }
 
-SystemPromptBuilder& SystemPromptBuilder::withRagContext(const String& context) {
-    ragContext_ = context;
+SystemPromptBuilder& SystemPromptBuilder::withRagContext(const String& /*context*/) {
+    // RAG context is no longer injected into the system prompt.
+    // It will be injected into user messages (Task 15).
     return *this;
 }
 
-SystemPromptBuilder& SystemPromptBuilder::withAutoRag(const String& query, int maxDocs) {
-    if (!isRagEnabled()) {
-        return *this;
-    }
-
-    auto& manager = rag::RagManager::instance();
-
-    if (!manager.shouldTrigger(query)) {
-        return *this;
-    }
-
-    if (!manager.isAvailable()) {
-        return *this;
-    }
-
-    ragContext_ = manager.buildContext(query, maxDocs, 3000);
+SystemPromptBuilder& SystemPromptBuilder::withAutoRag(const String& /*query*/, int /*maxDocs*/) {
+    // RAG context is no longer injected into the system prompt.
+    // It will be injected into user messages (Task 15).
     return *this;
 }
 
