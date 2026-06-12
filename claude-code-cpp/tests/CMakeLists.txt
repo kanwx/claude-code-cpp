@@ -235,3 +235,7 @@ catch_discover_tests(test_ContentBlockRenderer)
 add_executable(test_content_block_param test_content_block_param.cpp)
 target_link_libraries(test_content_block_param PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_content_block_param)
+
+add_executable(test_message_content_blocks test_message_content_blocks.cpp)
+target_link_libraries(test_message_content_blocks PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_message_content_blocks)

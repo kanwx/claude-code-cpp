@@ -1,9 +1,10 @@
 #pragma once
 
 #include <optional>
-#include <string>
+#include <chrono>
+#include <vector>
 #include <nlohmann/json.hpp>
-#include "claude/core/ApiTypes.hpp"  // for CacheControl, CacheScope, MessageRole, etc.
+#include "claude/core/ApiTypes.hpp"  // for CacheControl, CacheScope, MessageRole, String, Json
 
 namespace claude {
 
@@ -53,6 +54,83 @@ struct ContentBlockParam {
     }
     static ContentBlockParam makeRedactedThinking(String data) {
         return {.type = RedactedThinking, .redactedData = std::move(data)};
+    }
+};
+
+// New ContentBlock-based message type (replaces flat-string Message)
+struct ContentMessage {
+    MessageRole role;
+    std::vector<ContentBlockParam> content;
+    std::chrono::steady_clock::time_point timestamp = std::chrono::steady_clock::now();
+    int apiRound = 0;
+
+    static ContentMessage user(String text) {
+        ContentMessage m; m.role = MessageRole::User;
+        m.content.push_back(ContentBlockParam::makeText(std::move(text)));
+        return m;
+    }
+    static ContentMessage userBlocks(std::vector<ContentBlockParam> blocks) {
+        ContentMessage m; m.role = MessageRole::User;
+        m.content = std::move(blocks);
+        return m;
+    }
+    static ContentMessage assistant(String text) {
+        ContentMessage m; m.role = MessageRole::Assistant;
+        m.content.push_back(ContentBlockParam::makeText(std::move(text)));
+        return m;
+    }
+    static ContentMessage assistantBlocks(std::vector<ContentBlockParam> blocks) {
+        ContentMessage m; m.role = MessageRole::Assistant;
+        m.content = std::move(blocks);
+        return m;
+    }
+    static ContentMessage system(String text) {
+        ContentMessage m; m.role = MessageRole::System;
+        m.content.push_back(ContentBlockParam::makeText(std::move(text)));
+        return m;
+    }
+    static ContentMessage toolResultBlocks(std::vector<ContentBlockParam> blocks) {
+        ContentMessage m; m.role = MessageRole::User;  // tool results go in user messages
+        m.content = std::move(blocks);
+        return m;
+    }
+
+    String textContent() const {
+        String result;
+        for (auto& b : content) {
+            if (b.type == ContentBlockParam::Text && !b.text.empty()) {
+                if (!result.empty()) result += " ";
+                result += b.text;
+            }
+        }
+        return result;
+    }
+
+    std::vector<ContentBlockParam> toolUseBlocks() const {
+        std::vector<ContentBlockParam> result;
+        for (auto& b : content) {
+            if (b.type == ContentBlockParam::ToolUse) {
+                result.push_back(b);
+            }
+        }
+        return result;
+    }
+
+    bool hasContent() const {
+        for (auto& b : content) {
+            if (b.type == ContentBlockParam::Text && !b.text.empty()) return true;
+            if (b.type == ContentBlockParam::ToolUse) return true;
+            if (b.type == ContentBlockParam::ToolResult && !b.resultContent.empty()) return true;
+            if (b.type == ContentBlockParam::RedactedThinking) return true;
+        }
+        return false;
+    }
+
+    bool hasToolCalls() const {
+        for (auto& b : content) {
+            if (b.type == ContentBlockParam::ToolUse) return true;
+        }
+        return false;
     }
 };
 
