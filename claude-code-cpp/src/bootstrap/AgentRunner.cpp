@@ -6,6 +6,7 @@
 #include <claude/api/ApiClient.hpp>
 #include <claude/api/AnthropicClient.hpp>
 #include <claude/stream/StreamBuffer.hpp>
+#include <claude/stream/AnswerPostProcessor.hpp>
 #include <claude/stream/ContentBlock.hpp>
 #include <claude/ui/ContentBlockRenderer.hpp>
 #include <claude/api/OpenAIClient.hpp>
@@ -356,11 +357,26 @@ void setupCallbacks(AgentLoop& loop,
     // Pipeline: TypedStreamEvent/StreamToolEvent → StreamBuffer → FtxuiRepl/ANSI
     auto streamBuffer = std::make_shared<StreamBuffer>();
 
+    auto postProcessor = std::make_shared<AnswerPostProcessor>();  // B4
+
     streamBuffer->setDisplayCallback(
-        [useFtxui, ftxuiRepl](DisplayEvent&& event) {
+        [useFtxui, ftxuiRepl, postProcessor](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
-                // FTXUI: handleDisplayEvent posts to UI thread internally
-                ftxuiRepl->handleDisplayEvent(std::move(event));
+                // B4: Route through AnswerPostProcessor for tool grouping/reordering
+                if (event.type == DisplayEventType::AnswerEnd) {
+                    // Phase 1: process the AnswerEnd event itself
+                    auto proc = postProcessor->process(std::move(event));
+                    ftxuiRepl->handleDisplayEvent(std::move(proc));
+                    // Phase 2: finalize — group tools, reorder traces, emit tombstones
+                    auto finalEvents = postProcessor->finalize();
+                    for (auto& fe : finalEvents) {
+                        ftxuiRepl->handleDisplayEvent(std::move(fe));
+                    }
+                    postProcessor->reset();
+                } else {
+                    auto proc = postProcessor->process(std::move(event));
+                    ftxuiRepl->handleDisplayEvent(std::move(proc));
+                }
             } else {
                 // ANSI mode: render DisplayEvents directly to stdout
                 std::lock_guard lock(ansiStreamMutex);
