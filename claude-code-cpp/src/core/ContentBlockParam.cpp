@@ -170,4 +170,78 @@ ContentMessage convertLegacyMessage(const Message& old) {
     return result;
 }
 
+void migrateLegacySession(Json& msg) {
+    // Skip already-migrated format
+    if (msg.value("_format_version", 0) >= 2) return;
+    // Skip if content is already an array (new format)
+    if (!msg.contains("content") || !msg["content"].is_string()) return;
+
+    String flatContent = msg["content"].get<String>();
+    auto role = msg.value("role", "");
+
+    std::vector<Json> blocks;
+
+    // 1. Thinking block (assistant only)
+    if (role == "assistant" && msg.contains("thinking") && msg["thinking"].is_string()) {
+        String thinkingText = msg["thinking"].get<String>();
+        String signature = msg.value("signature", "");
+        blocks.push_back({{"type", "thinking"}, {"thinking", thinkingText}, {"signature", signature}});
+    }
+
+    // 2. Text block
+    if (!flatContent.empty()) {
+        blocks.push_back({{"type", "text"}, {"text", flatContent}});
+    }
+
+    // 3. ToolUse blocks (assistant)
+    if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+        for (auto& tc : msg["tool_calls"]) {
+            Json input = tc.value("input", Json::object());
+            if (input.is_string()) {
+                try { input = Json::parse(input.get<String>()); } catch (...) { input = Json::object(); }
+            }
+            // Handle both {id, name, input} and OpenAI {id, function:{name,arguments}} formats
+            String name = tc.value("name", "");
+            if (name.empty() && tc.contains("function")) {
+                name = tc["function"].value("name", "");
+                String args = tc["function"].value("arguments", "");
+                if (!args.empty()) {
+                    try { input = Json::parse(args); } catch (...) { input = Json::object(); }
+                }
+            }
+            blocks.push_back({{"type", "tool_use"},
+                {"id", tc.value("id", "")},
+                {"name", name},
+                {"input", input}});
+        }
+    }
+
+    // 4. ToolResult blocks
+    if (msg.contains("tool_results") && msg["tool_results"].is_array()) {
+        for (auto& tr : msg["tool_results"]) {
+            Json block = {{"type", "tool_result"},
+                {"tool_use_id", tr.value("tool_use_id", tr.value("tool_call_id", tr.value("call_id", "")))},
+                {"content", tr.value("content", "")}};
+            if (tr.value("is_error", false)) block["is_error"] = true;
+            blocks.push_back(block);
+        }
+    }
+
+    // 5. RedactedThinking blocks (assistant)
+    if (role == "assistant" && msg.contains("redacted_thinking") && msg["redacted_thinking"].is_array()) {
+        for (auto& rt : msg["redacted_thinking"]) {
+            blocks.push_back({{"type", "redacted_thinking"}, {"data", rt.value("data", rt.dump())}});
+        }
+    }
+
+    // Replace content, remove old fields
+    msg["content"] = blocks;
+    msg.erase("tool_calls");
+    msg.erase("tool_results");
+    msg.erase("thinking");
+    msg.erase("signature");
+    msg.erase("redacted_thinking");
+    msg["_format_version"] = 2;
+}
+
 } // namespace claude

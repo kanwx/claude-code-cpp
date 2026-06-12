@@ -145,4 +145,8 @@ Json serializeContentMessageForOpenAI(const ContentMessage& msg);
 // Legacy Message -> ContentMessage conversion
 ContentMessage convertLegacyMessage(const Message& old);
 
+// Migrate old-format session JSON (flat content string + top-level tool_calls/etc.)
+// to ContentBlock array format in-place.
+void migrateLegacySession(Json& msg);
+
 } // namespace claude

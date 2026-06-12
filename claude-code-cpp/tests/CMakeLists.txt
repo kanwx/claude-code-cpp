@@ -243,3 +243,7 @@ catch_discover_tests(test_message_content_blocks)
 add_executable(test_serialize_content_block test_serialize_content_block.cpp)
 target_link_libraries(test_serialize_content_block PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_serialize_content_block)
+
+add_executable(test_session_migration test_session_migration.cpp)
+target_link_libraries(test_session_migration PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_session_migration)

@@ -2,6 +2,7 @@
 #include <claude/bootstrap/SignalHandler.hpp>
 #include <claude/core/AgentLoop.hpp>
 #include <claude/core/TokenTracker.hpp>
+#include <claude/core/ContentBlockParam.hpp>
 #include <claude/api/ApiClient.hpp>
 #include <claude/api/AnthropicClient.hpp>
 #include <claude/stream/StreamBuffer.hpp>
@@ -26,17 +27,6 @@
 
 #ifdef HAS_FTXUI
 #include <claude/ui/FtxuiRepl.hpp>
-#include <claude/ui/ToolRendererRegistry.hpp>
-#include <claude/ui/renderers/ReadToolRenderer.hpp>
-#include <claude/ui/renderers/BashToolRenderer.hpp>
-#include <claude/ui/renderers/EditToolRenderer.hpp>
-#include <claude/ui/renderers/WriteToolRenderer.hpp>
-#include <claude/ui/renderers/GrepToolRenderer.hpp>
-#include <claude/ui/renderers/GlobToolRenderer.hpp>
-#include <claude/ui/renderers/AgentToolRenderer.hpp>
-#include <claude/ui/renderers/WebFetchToolRenderer.hpp>
-#include <claude/ui/renderers/WebSearchToolRenderer.hpp>
-#include <claude/ui/renderers/LspToolRenderer.hpp>
 #include <claude/ui/PermissionRendererRegistry.hpp>
 #include <claude/ui/permissions/DefaultPermissionRenderer.hpp>
 #include <claude/ui/permissions/BashPermissionRenderer.hpp>
@@ -107,20 +97,8 @@ AgentLoopHolder createAgentLoop(const AgentLoopParams& params) {
         permRegistry.registerRenderer("Write", std::make_unique<ui::FileWritePermissionRenderer>());
         permRegistry.registerRenderer("Read", std::make_unique<ui::FileReadPermissionRenderer>());
     }
-    // Register tool renderers (idempotent — singleton just overwrites)
-    {
-        auto& registry = ui::ToolRendererRegistry::instance();
-        registry.registerRenderer("Read", std::make_unique<ui::ReadToolRenderer>());
-        registry.registerRenderer("Bash", std::make_unique<ui::BashToolRenderer>());
-        registry.registerRenderer("Edit", std::make_unique<ui::EditToolRenderer>());
-        registry.registerRenderer("Write", std::make_unique<ui::WriteToolRenderer>());
-        registry.registerRenderer("Grep", std::make_unique<ui::GrepToolRenderer>());
-        registry.registerRenderer("Glob", std::make_unique<ui::GlobToolRenderer>());
-        registry.registerRenderer("Agent", std::make_unique<ui::AgentToolRenderer>());
-        registry.registerRenderer("WebFetch", std::make_unique<ui::WebFetchToolRenderer>());
-        registry.registerRenderer("WebSearch", std::make_unique<ui::WebSearchToolRenderer>());
-        registry.registerRenderer("LSP", std::make_unique<ui::LspToolRenderer>());
-    }
+    // Tool renderers are no longer needed — ContentBlock-based rendering
+    // handles all tool result display via renderFtxuiElement()
 #endif
 
     // --- Collect environment context ---
@@ -470,8 +448,12 @@ bool resumeLastSession(AgentLoop& loop) {
         if (!sessionJson.contains("messages") || !sessionJson["messages"].is_array()) return false;
 
         std::vector<Message> loadedMessages;
-        for (const auto& jm : sessionJson["messages"]) {
+        for (auto& jm : sessionJson["messages"]) {
             if (!jm.is_object()) continue;
+
+            // Convert old format if needed
+            migrateLegacySession(jm);
+
             String roleStr = jm.value("role", "user");
             MessageRole role = MessageRole::User;
             if (roleStr == "system") role = MessageRole::System;
@@ -480,35 +462,35 @@ bool resumeLastSession(AgentLoop& loop) {
 
             Message msg;
             msg.role = role;
-            msg.content = jm.value("content", "");
 
-            if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
-                for (const auto& tcj : jm["tool_calls"]) {
-                    if (!tcj.is_object()) continue;
-                    ToolCall tc;
-                    tc.id = tcj.value("id", "");
-                    if (tcj.contains("function") && tcj["function"].is_object()) {
-                        tc.name = tcj["function"].value("name", "");
-                        tc.arguments = tcj["function"].value("arguments", "");
+            if (jm["content"].is_array()) {
+                // New format: extract into old Message fields for backward compat
+                for (auto& bj : jm["content"]) {
+                    String btype = bj.value("type", "");
+                    if (btype == "text") {
+                        msg.content += bj.value("text", "");
+                    } else if (btype == "tool_use") {
+                        ToolCall tc;
+                        tc.id = bj.value("id", "");
+                        tc.name = bj.value("name", "");
+                        tc.arguments = bj.value("input", Json::object()).dump();
+                        msg.toolCalls.push_back(std::move(tc));
+                    } else if (btype == "tool_result") {
+                        ToolResponse tr;
+                        tr.callId = bj.value("tool_use_id", "");
+                        tr.content = bj.value("content", "");
+                        tr.isError = bj.value("is_error", false);
+                        msg.toolResults.push_back(std::move(tr));
+                    } else if (btype == "thinking") {
+                        msg.thinking = bj.value("thinking", "");
+                        msg.signature = bj.value("signature", "");
+                    } else if (btype == "redacted_thinking") {
+                        msg.redactedThinking.push_back(bj);
                     }
-                    msg.toolCalls.push_back(tc);
                 }
-            }
-
-            if (jm.contains("tool_results") && jm["tool_results"].is_array()) {
-                for (const auto& trj : jm["tool_results"]) {
-                    if (!trj.is_object()) continue;
-                    ToolResponse tr;
-                    tr.callId = trj.value("tool_call_id", "");
-                    tr.toolName = trj.value("name", "");
-                    tr.content = trj.value("content", "");
-                    tr.isError = trj.value("is_error", false);
-                    msg.toolResults.push_back(tr);
-                }
-            }
-
-            if (jm.contains("thinking")) {
-                msg.thinking = jm["thinking"].get<String>();
+            } else if (jm["content"].is_string()) {
+                // Fallback: should not happen after migration, but safety
+                msg.content = jm["content"].get<String>();
             }
 
             loadedMessages.push_back(std::move(msg));
