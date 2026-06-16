@@ -32,9 +32,14 @@ std::vector<ContentBlock> MessagePipeline::process(std::vector<ContentBlock> blo
         buildLookups(blocks);
     }
 
-    // Post-processing: assign stable IDs to any blocks created by pipeline
-    // (blocks coming from FtxuiRepl already have stableId > 0)
+    // Post-processing: assign stable IDs to any blocks created by pipeline.
+    // Scan existing IDs first to avoid collisions with IDs assigned by FtxuiRepl.
     uint64_t nextId = 1;
+    for (const auto& block : blocks) {
+        if (block.stableId >= nextId) {
+            nextId = block.stableId + 1;
+        }
+    }
     for (auto& block : blocks) {
         if (block.stableId == 0) {
             block.stableId = nextId++;
