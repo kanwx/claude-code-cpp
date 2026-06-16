@@ -200,6 +200,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 }
                 cb.stableId = nextStableId_++;
                 contentBlocks_.push_back(std::move(cb));
+                runIncrementalPipeline();
                 break;
             }
 
@@ -211,6 +212,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 cb.expanded = false;
                 cb.stableId = nextStableId_++;
                 contentBlocks_.push_back(std::move(cb));
+                runIncrementalPipeline();
                 break;
             }
 
@@ -275,6 +277,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 currentTurnStartIndex_ = contentBlocks_.size();    // B6: preserve scrollback
                 useExternalPostProcessor_ = true;                  // B4: external post-processor handles grouping
                 toolProgressIndices_.clear();                        // B5: fresh indices for new turn
+                lastStableIndex_ = 0;                               // reset anchor for new turn
                 startRefreshThread();
                 break;
 
@@ -302,10 +305,11 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 }
                 toolProgressIndices_.clear();
 
-                // Only run internal pipeline if no external post-processor is active (B4)
+                // Final full pass: process all blocks, advance anchor
                 if (!useExternalPostProcessor_) {
-                    runMessagePipeline();
+                    contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
                 }
+                lastStableIndex_ = contentBlocks_.size();
 
                 // Insert or update collapsed ThinkingBlock after pipeline (before turn duration).
                 // If the model emitted thinking content, show it as a collapsed block
@@ -461,6 +465,26 @@ void FtxuiRepl::groupConsecutiveToolResults() {
 
 void FtxuiRepl::runMessagePipeline() {
     contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
+}
+
+void FtxuiRepl::runIncrementalPipeline() {
+    if (lastStableIndex_ >= contentBlocks_.size()) return;
+
+    // Slice the unstable tail
+    std::vector<ContentBlock> tail;
+    tail.reserve(contentBlocks_.size() - lastStableIndex_);
+    for (size_t i = lastStableIndex_; i < contentBlocks_.size(); i++) {
+        tail.push_back(contentBlocks_[i]);
+    }
+
+    // Run full pipeline on the tail
+    auto processed = messagePipeline_.process(std::move(tail));
+
+    // Replace the tail section with processed results
+    contentBlocks_.resize(lastStableIndex_);
+    for (auto& block : processed) {
+        contentBlocks_.push_back(std::move(block));
+    }
 }
 
 namespace {
