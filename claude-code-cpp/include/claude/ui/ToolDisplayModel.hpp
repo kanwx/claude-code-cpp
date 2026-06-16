@@ -46,6 +46,9 @@ struct ToolDisplayModel {
     String errorText;
     bool isCancelled = false;
     bool isRejected = false;
+
+    /// Build the display text string from structured per-tool data.
+    String toDisplayText() const;
 };
 
 } // namespace claude

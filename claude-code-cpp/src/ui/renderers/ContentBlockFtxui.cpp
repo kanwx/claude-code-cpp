@@ -198,42 +198,11 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             }
 
             // Build per-tool display text
-            String displayText;
+            String displayText = dm.toDisplayText();
             String detailText;
-
-            if (dm.toolName == "Read" && dm.lineCount > 0) {
-                displayText = dm.filePath.empty()
-                    ? "Read " + std::to_string(dm.lineCount) + " lines"
-                    : dm.filePath + " (" + std::to_string(dm.lineCount) + " lines)";
-            }
-            else if (dm.toolName == "Grep" && dm.matchCount > 0) {
-                displayText = "Found " + std::to_string(dm.matchCount) + " matches";
-            }
-            else if ((dm.toolName == "Glob" || dm.toolName == "LS") && dm.fileCount > 0) {
-                displayText = "Found " + std::to_string(dm.fileCount) + " files";
-            }
-            else if (dm.toolName == "Edit" || dm.toolName == "Write") {
-                std::ostringstream oss;
-                if (dm.linesAdded > 0) oss << "Added " << dm.linesAdded << " lines";
-                if (dm.linesRemoved > 0) {
-                    if (oss.tellp() > 0) oss << ", ";
-                    oss << "Removed " << dm.linesRemoved << " lines";
-                }
-                if (oss.tellp() == 0) oss << dm.primaryText;
-                displayText = oss.str();
-                if (!dm.filePath.empty()) detailText = dm.filePath;
-            }
-            else if (dm.toolName == "Bash") {
-                displayText = dm.primaryText.empty() ? "Done" : dm.primaryText;
-            }
-            else if (dm.toolName == "WebSearch" && dm.resultCount > 0) {
-                displayText = "Found " + std::to_string(dm.resultCount) + " results";
-            }
-            else if (dm.toolName == "WebFetch") {
-                displayText = dm.pageTitle.empty() ? "Fetched" : dm.pageTitle;
-            }
-            else {
-                displayText = dm.primaryText.empty() ? "completed" : dm.primaryText;
+            // FTXUI-specific: show file path on second line for Edit/Write
+            if ((dm.toolName == "Edit" || dm.toolName == "Write") && !dm.filePath.empty()) {
+                detailText = dm.filePath;
             }
 
             auto summaryEl = text(displayText) | dim;

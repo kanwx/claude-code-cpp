@@ -1,5 +1,6 @@
 #include "claude/ui/ToolResultFormatter.hpp"
 #include "claude/stream/ContentBlock.hpp"
+#include <sstream>
 #include <string>
 
 namespace claude {
@@ -112,6 +113,40 @@ ToolDisplayModel formatToolResult(const ContentBlock& block) {
     }
 
     return m;
+}
+
+String ToolDisplayModel::toDisplayText() const {
+    if (toolName == "Read" && lineCount > 0) {
+        return filePath.empty()
+            ? "Read " + std::to_string(lineCount) + " lines"
+            : filePath + " (" + std::to_string(lineCount) + " lines)";
+    }
+    if (toolName == "Grep" && matchCount > 0) {
+        return "Found " + std::to_string(matchCount) + " matches";
+    }
+    if ((toolName == "Glob" || toolName == "LS") && fileCount > 0) {
+        return "Found " + std::to_string(fileCount) + " files";
+    }
+    if (toolName == "Edit" || toolName == "Write") {
+        std::ostringstream oss;
+        if (linesAdded > 0) oss << "Added " << linesAdded << " lines";
+        if (linesRemoved > 0) {
+            if (oss.tellp() > 0) oss << ", ";
+            oss << "Removed " << linesRemoved << " lines";
+        }
+        if (oss.tellp() == 0) return primaryText.empty() ? "completed" : primaryText;
+        return oss.str();
+    }
+    if (toolName == "Bash") {
+        return primaryText.empty() ? "Done" : primaryText;
+    }
+    if (toolName == "WebSearch" && resultCount > 0) {
+        return "Found " + std::to_string(resultCount) + " results";
+    }
+    if (toolName == "WebFetch") {
+        return pageTitle.empty() ? "Fetched" : pageTitle;
+    }
+    return primaryText.empty() ? "completed" : primaryText;
 }
 
 } // namespace claude
