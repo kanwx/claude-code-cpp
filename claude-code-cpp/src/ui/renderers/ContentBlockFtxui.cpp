@@ -219,7 +219,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                     renderToolBadge(dm.toolName),
                     text(" "),
                     summaryEl,
-                    dm.expandHint.empty() ? text("") : ctrlOHint(),
+                    ctrlOHint(),
                 });
             }
             return hbox({
