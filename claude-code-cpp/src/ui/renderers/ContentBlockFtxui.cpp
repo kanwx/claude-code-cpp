@@ -25,7 +25,7 @@ namespace {
 /// - User messages → no prefix (frame handles it)
 String contentMargin(const ContentBlock& block, bool isResponse = true) {
     if (block.type == ContentBlock::UserMessage) return "";
-    if (block.type == ContentBlock::AnswerText && block.isFirst) return "⏺ ";
+    if (block.type == ContentBlock::AnswerText && block.isFirst) return "● ";
     if (isResponse) return "  ⎿ ";
     return "  ";
 }
@@ -113,7 +113,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             auto elements = FtxuiMarkdown::render(block.text);
             if (elements.empty()) return text("");
             Elements result;
-            String prefix = block.isFirst ? "⏺ " : "  ";
+            String prefix = block.isFirst ? "● " : "  ";
             bool first = true;
             for (auto& el : elements) {
                 if (first) {
