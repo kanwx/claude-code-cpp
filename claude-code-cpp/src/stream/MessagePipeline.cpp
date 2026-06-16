@@ -92,12 +92,33 @@ std::vector<ContentBlock> MessagePipeline::reorderToolTrails(std::vector<Content
 
 std::vector<ContentBlock> MessagePipeline::groupToolResultPairs(
     std::vector<ContentBlock> blocks) {
-    // Pair adjacent ToolProgress→ToolResult into ToolGroup units.
-    // After reorderToolTrails, each ToolProgress is immediately followed
-    // by its ToolResult. This pass wraps them into a single ToolGroup.
-    //
-    // Stub for now — full implementation in Task 2.
-    return blocks;
+    if (config_.verbose) return blocks;
+
+    std::vector<ContentBlock> result;
+
+    for (size_t i = 0; i < blocks.size(); i++) {
+        // Look for ToolProgress followed immediately by ToolResult with same toolCallId
+        if (blocks[i].type == ContentBlock::ToolProgress &&
+            i + 1 < blocks.size() &&
+            blocks[i + 1].type == ContentBlock::ToolResult &&
+            blocks[i].toolCallId == blocks[i + 1].toolCallId) {
+
+            ContentBlock pair;
+            pair.type = ContentBlock::ToolGroup;
+            pair.toolName = blocks[i].toolName;
+            pair.toolCallId = blocks[i].toolCallId;
+            pair.summary = blocks[i + 1].summary;  // copy BEFORE move
+            pair.children.push_back(std::move(blocks[i]));     // ToolProgress
+            pair.children.push_back(std::move(blocks[i + 1])); // ToolResult
+
+            result.push_back(std::move(pair));
+            i++; // skip the ToolResult we just consumed
+        } else {
+            result.push_back(std::move(blocks[i]));
+        }
+    }
+
+    return result;
 }
 
 // ========== Pass 3: groupConsecutiveToolUses ==========
