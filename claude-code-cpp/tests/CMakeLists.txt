@@ -232,6 +232,10 @@ add_executable(test_ContentBlockRenderer stream/test_ContentBlockRenderer.cpp)
 target_link_libraries(test_ContentBlockRenderer PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ContentBlockRenderer)
 
+add_executable(test_MessagePipeline stream/test_MessagePipeline.cpp)
+target_link_libraries(test_MessagePipeline PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_MessagePipeline)
+
 add_executable(test_content_block_param test_content_block_param.cpp)
 target_link_libraries(test_content_block_param PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_content_block_param)

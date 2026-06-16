@@ -83,6 +83,13 @@ public:
     void exit();
     bool isRunning() const { return running_; }
 
+    /// Trigger a screen refresh from any thread. Used by idle callbacks during
+    /// long-running blocking tool execution (e.g. AgentTool sub-agent polling)
+    /// to keep the terminal responsive.
+    void triggerRefresh() {
+        if (screen_) screen_->RequestAnimationFrame();
+    }
+
     // Access to content blocks (for rendering)
     const std::vector<ContentBlock>& contentBlocks() const { return contentBlocks_; }
     std::vector<ContentBlock>& contentBlocks() { return contentBlocks_; }
@@ -166,6 +173,7 @@ private:
     // Refresh thread
     std::thread refreshThread_;
     std::atomic<bool> refreshActive_{false};
+    std::atomic<bool> refreshContentChanged_{false};  // Set by UI thread when new display events arrive
 
     // ========== Completion state ==========
     ReplCompleter completer_;
@@ -213,6 +221,9 @@ private:
 
     // ========== Message pipeline ==========
     MessagePipeline messagePipeline_;
+
+    // ========== Stable block ID counter ==========
+    uint64_t nextStableId_ = 1;
 };
 
 } // namespace claude

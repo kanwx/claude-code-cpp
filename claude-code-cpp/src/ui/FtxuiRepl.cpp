@@ -26,6 +26,31 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
     // no MessagePipeline, no ThinkingFilter. The ContentBlock tree is rendered by
     // renderFtxuiElement() in the AppLayout.
     screen_->Post([this, ev = std::move(event)]() mutable {
+        // Only signal content change for events that materially change the
+        // visible display. ThinkingBlock and TurnMetadata fire at high
+        // frequency during thinking (for spinner and token updates) but
+        // don't change any visible content — the spinner is tickCounter-
+        // driven and refreshes at its own pace. Letting these through
+        // prevents the idle throttle from kicking in, causing excessive
+        // terminal redraws that manifest as "frantically refreshing" tool
+        // status indicators during the thinking phase.
+        switch (ev.type) {
+            case DisplayEventType::TextPartial:
+            case DisplayEventType::TextParagraph:
+            case DisplayEventType::ToolProgress:
+            case DisplayEventType::ToolResult:
+            case DisplayEventType::ToolGroup:
+            case DisplayEventType::Tombstone:
+            case DisplayEventType::Error:
+            case DisplayEventType::AnswerStart:
+            case DisplayEventType::AnswerEnd:
+            case DisplayEventType::SystemNotice:
+                refreshContentChanged_.store(true, std::memory_order_release);
+                break;
+            default:
+                break;
+        }
+
         switch (ev.type) {
             case DisplayEventType::TextPartial: {
                 // Defensive: strip any residual thinking tags that may have
@@ -69,7 +94,13 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::TextParagraph: {
-                String committed = std::move(streamingText_);
+                // ev.text carries the full paragraph from StreamBuffer::flushTextBuffer.
+                // streamingText_ is only populated by TextPartial (emitted at 256-char
+                // threshold), so short responses and paragraph-boundary flushes would
+                // be silently discarded if we only read streamingText_.
+                String committed = ev.text.empty()
+                    ? std::move(streamingText_)
+                    : std::move(ev.text);
                 streamingText_.clear();
                 streamingRenderer_.reset();
                 // Guard: skip empty or whitespace-only paragraphs
@@ -80,6 +111,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     cb.isFirst = isFirstAnswerBlock_;
                     cb.text = std::move(committed);
                     isFirstAnswerBlock_ = false;
+                    cb.stableId = nextStableId_++;
                     contentBlocks_.push_back(std::move(cb));
                 }
                 break;
@@ -103,6 +135,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     isFirstAnswerBlock_ = false;
                     streamingText_.clear();
                     streamingRenderer_.reset();
+                    textCb.stableId = nextStableId_++;
                     contentBlocks_.push_back(std::move(textCb));
                 }
                 ContentBlock cb;
@@ -110,6 +143,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 cb.toolName = std::move(ev.toolName);
                 cb.activity = std::move(ev.activity);
                 cb.toolCallId = ev.toolCallId;
+                cb.stableId = nextStableId_++;
                 toolProgressIndices_[ev.toolCallId] = contentBlocks_.size();  // B5: record index before push
                 contentBlocks_.push_back(std::move(cb));
                 break;
@@ -125,6 +159,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     isFirstAnswerBlock_ = false;
                     streamingText_.clear();
                     streamingRenderer_.reset();
+                    textCb.stableId = nextStableId_++;
                     contentBlocks_.push_back(std::move(textCb));
                 }
                 // B5: O(1) ToolProgress removal using index map
@@ -163,6 +198,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                         cb.resultStatus = ToolResultStatus::Rejected;
                     }
                 }
+                cb.stableId = nextStableId_++;
                 contentBlocks_.push_back(std::move(cb));
                 break;
             }
@@ -173,6 +209,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 cb.toolName = std::move(ev.toolName);
                 cb.summary = std::move(ev.summary);
                 cb.expanded = false;
+                cb.stableId = nextStableId_++;
                 contentBlocks_.push_back(std::move(cb));
                 break;
             }
@@ -181,29 +218,54 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 layoutState_.status.systemNotice = std::move(ev.noticeText);
                 break;
 
-            case DisplayEventType::Tombstone:
-                if (!contentBlocks_.empty()) {
-                    contentBlocks_.pop_back();
+            case DisplayEventType::Tombstone: {
+                // Remove the specific ToolResult block identified by toolCallId.
+                // Previously used pop_back() which blindly removed the last block,
+                // but after AnswerEnd commits streaming text and inserts TurnDuration,
+                // the last block is no longer the ToolResult being tombstoned.
+                if (!ev.toolCallId.empty()) {
+                    auto it = std::find_if(contentBlocks_.begin(), contentBlocks_.end(),
+                        [&](const ContentBlock& b) {
+                            return (b.type == ContentBlock::ToolResult ||
+                                    b.type == ContentBlock::ToolProgress) &&
+                                   b.toolCallId == ev.toolCallId;
+                        });
+                    if (it != contentBlocks_.end()) {
+                        contentBlocks_.erase(it);
+                    }
+                } else if (!contentBlocks_.empty()) {
+                    // Fallback: remove last ToolResult block
+                    auto it = contentBlocks_.end();
+                    while (it != contentBlocks_.begin()) {
+                        --it;
+                        if (it->type == ContentBlock::ToolResult) {
+                            contentBlocks_.erase(it);
+                            break;
+                        }
+                    }
                 }
                 break;
+            }
 
             case DisplayEventType::Error: {
                 ContentBlock cb;
                 cb.type = ContentBlock::ErrorMessage;
                 cb.text = std::move(ev.text);
+                cb.stableId = nextStableId_++;
                 contentBlocks_.push_back(std::move(cb));
                 break;
             }
 
             case DisplayEventType::AnswerStart:
-                // Remove stale TurnDuration blocks from previous API calls within
-                // the same user turn. Each AnswerEnd appends a TurnDuration, but
-                // if the model makes multiple API calls (tool->result->continue),
-                // only the final TurnDuration should remain visible.
-                while (!contentBlocks_.empty() &&
-                       contentBlocks_.back().type == ContentBlock::TurnDuration) {
-                    contentBlocks_.pop_back();
-                }
+                // Remove ALL stale TurnDuration blocks from previous API calls
+                // within the same user turn. Each AnswerEnd appends a TurnDuration,
+                // but tool results can arrive between AnswerEnd and the next
+                // AnswerStart, so we must scan the entire list, not just pop_back().
+                contentBlocks_.erase(
+                    std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                        [](const ContentBlock& b) { return b.type == ContentBlock::TurnDuration; }),
+                    contentBlocks_.end()
+                );
 
                 isStreaming_ = true;
                 isThinking_ = true;
@@ -226,6 +288,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     isFirstAnswerBlock_ = false;
                     streamingText_.clear();
                     streamingRenderer_.reset();
+                    cb.stableId = nextStableId_++;
                     contentBlocks_.push_back(std::move(cb));
                 }
                 // B5: Clean up orphaned ToolProgress blocks (tools that never completed)
@@ -244,27 +307,38 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     runMessagePipeline();
                 }
 
-                // Insert collapsed ThinkingBlock after pipeline (before turn duration).
+                // Insert or update collapsed ThinkingBlock after pipeline (before turn duration).
                 // If the model emitted thinking content, show it as a collapsed block
-                // at the start of the assistant response.
+                // at the start of the assistant response. When multiple continuation API
+                // calls each produce thinking (e.g., DeepSeek), merge into a single block.
                 if (!thinkingText_.empty()) {
-                    ContentBlock thinkBlock;
-                    thinkBlock.type = ContentBlock::ThinkingBlock;
-                    thinkBlock.detailText = std::move(thinkingText_);
-                    thinkBlock.expanded = false;
-                    thinkBlock.text = thinkingSummary_.empty()
-                        ? "Thinking..." : thinkingSummary_;
+                    // Check if a ThinkingBlock already exists from a previous continuation
+                    auto existingThink = std::find_if(contentBlocks_.begin(), contentBlocks_.end(),
+                        [](const ContentBlock& b) { return b.type == ContentBlock::ThinkingBlock; });
+
+                    if (existingThink != contentBlocks_.end()) {
+                        // Merge: append new thinking text to existing block
+                        existingThink->detailText += "\n\n" + thinkingText_;
+                        // Keep expanded state of existing block
+                    } else {
+                        ContentBlock thinkBlock;
+                        thinkBlock.type = ContentBlock::ThinkingBlock;
+                        thinkBlock.detailText = std::move(thinkingText_);
+                        thinkBlock.expanded = false;
+                        thinkBlock.text = thinkingSummary_.empty()
+                            ? "Thinking..." : thinkingSummary_;
+                        thinkBlock.stableId = nextStableId_++;
+                        // Insert after the user message (at position 0) but before first response block
+                        auto it = contentBlocks_.begin();
+                        while (it != contentBlocks_.end() &&
+                               (it->type == ContentBlock::UserMessage ||
+                                it->type == ContentBlock::ThinkingBlock)) {
+                            ++it;
+                        }
+                        contentBlocks_.insert(it, std::move(thinkBlock));
+                    }
                     thinkingSummary_.clear();
                     thinkingText_.clear();
-                    // Insert after the user message (at position 0) but before first response block
-                    auto it = contentBlocks_.begin();
-                    // Skip past the user message at the start
-                    while (it != contentBlocks_.end() &&
-                           (it->type == ContentBlock::UserMessage ||
-                            it->type == ContentBlock::ThinkingBlock)) {
-                        ++it;
-                    }
-                    contentBlocks_.insert(it, std::move(thinkBlock));
                 }
 
                 // Insert turn duration block after all response content
@@ -274,6 +348,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                         ContentBlock td;
                         td.type = ContentBlock::TurnDuration;
                         td.text = meta.durationStr;
+                        td.stableId = nextStableId_++;
                         if (meta.outputTokens > 0) {
                             auto fmtK = [](int64_t n) -> String {
                                 if (n >= 1'000) return std::to_string(n / 100) + "." +
