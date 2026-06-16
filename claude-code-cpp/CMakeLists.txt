@@ -400,6 +400,7 @@ set(STREAM_SOURCES
     src/stream/IncrementalBlockParser.cpp
     src/stream/StreamBuffer.cpp
     src/stream/AnswerPostProcessor.cpp
+    src/stream/MessagePipeline.cpp
 )
 
 # Bridge源文件
@@ -483,6 +484,7 @@ set(UI_SOURCES
     src/ui/PromptInputFooter.cpp
     src/ui/renderers/ContentBlockAnsi.cpp
     src/ui/renderers/ContentBlockFtxui.cpp
+    src/ui/ToolResultFormatter.cpp
     src/ui/SearchOverlay.cpp
     src/ui/PermissionRendererRegistry.cpp
     src/ui/permissions/DefaultPermissionRenderer.cpp

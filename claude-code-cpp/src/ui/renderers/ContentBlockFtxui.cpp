@@ -1,4 +1,5 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
+#include "claude/ui/ToolResultFormatter.hpp"
 
 #ifdef HAS_FTXUI
 #include <ftxui/component/component.hpp>
@@ -6,6 +7,7 @@
 #include "claude/ui/FtxuiMarkdown.hpp"
 #include "claude/console/CreativeVerbs.hpp"
 #include "../FtxuiColors.hpp"
+#include <sstream>
 
 namespace claude {
 
@@ -173,46 +175,87 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
 
         // ===== Tool Result =====
         case ContentBlock::ToolResult: {
-            if (block.summary.isError) {
-                String errDisplay = block.summary.errorText.empty()
-                    ? "Error" : block.summary.errorText;
+            auto dm = formatToolResult(block);
+
+            if (dm.isError) {
+                String errDisplay = dm.errorText.empty() ? "Error" : dm.errorText;
                 return hbox({
                     text("  ⎿ "),
-                    renderToolBadge(block.toolName),
+                    renderToolBadge(dm.toolName),
                     text(" "),
                     text(errDisplay) | color(MacRose),
                 });
             }
-            // Rejected / cancelled states: dimmed with ⊘ symbol
-            if (block.resultStatus == ToolResultStatus::Rejected ||
-                block.resultStatus == ToolResultStatus::Cancelled) {
-                String label = block.resultStatus == ToolResultStatus::Rejected
-                    ? "Rejected" : "Interrupted";
+
+            if (dm.isCancelled || dm.isRejected) {
+                String label = dm.isRejected ? "Rejected" : "Interrupted";
                 return hbox({
                     text("  ⊘ ") | dim,
-                    renderToolBadge(block.toolName, /*dimmed=*/true),
+                    renderToolBadge(dm.toolName, /*dimmed=*/true),
                     text(" "),
                     text(label) | dim,
                 });
             }
-            // Success / normal result
-            String summaryText = block.summary.primaryText.empty()
-                ? "completed" : block.summary.primaryText;
-            auto summaryEl = block.summary.primaryBold
-                ? text(summaryText) | bold
-                : text(summaryText) | dim;
+
+            // Build per-tool display text
+            String displayText;
+            String detailText;
+
+            if (dm.toolName == "Read" && dm.lineCount > 0) {
+                displayText = dm.filePath.empty()
+                    ? "Read " + std::to_string(dm.lineCount) + " lines"
+                    : dm.filePath + " (" + std::to_string(dm.lineCount) + " lines)";
+            }
+            else if (dm.toolName == "Grep" && dm.matchCount > 0) {
+                displayText = "Found " + std::to_string(dm.matchCount) + " matches";
+            }
+            else if ((dm.toolName == "Glob" || dm.toolName == "LS") && dm.fileCount > 0) {
+                displayText = "Found " + std::to_string(dm.fileCount) + " files";
+            }
+            else if (dm.toolName == "Edit" || dm.toolName == "Write") {
+                std::ostringstream oss;
+                if (dm.linesAdded > 0) oss << "Added " << dm.linesAdded << " lines";
+                if (dm.linesRemoved > 0) {
+                    if (oss.tellp() > 0) oss << ", ";
+                    oss << "Removed " << dm.linesRemoved << " lines";
+                }
+                if (oss.tellp() == 0) oss << dm.primaryText;
+                displayText = oss.str();
+                if (!dm.filePath.empty()) detailText = dm.filePath;
+            }
+            else if (dm.toolName == "Bash") {
+                displayText = dm.primaryText.empty() ? "Done" : dm.primaryText;
+            }
+            else if (dm.toolName == "WebSearch" && dm.resultCount > 0) {
+                displayText = "Found " + std::to_string(dm.resultCount) + " results";
+            }
+            else if (dm.toolName == "WebFetch") {
+                displayText = dm.pageTitle.empty() ? "Fetched" : dm.pageTitle;
+            }
+            else {
+                displayText = dm.primaryText.empty() ? "completed" : dm.primaryText;
+            }
+
+            auto summaryEl = text(displayText) | dim;
+            if (!detailText.empty()) {
+                summaryEl = vbox({
+                    text(displayText) | dim,
+                    text("  " + detailText) | dim | color(MacShadow),
+                });
+            }
+
             if (!block.expanded) {
                 return hbox({
                     text("  ⎿ "),
-                    renderToolBadge(block.toolName),
+                    renderToolBadge(dm.toolName),
                     text(" "),
                     summaryEl,
-                    ctrlOHint(),
+                    dm.expandHint.empty() ? text("") : ctrlOHint(),
                 });
             }
             return hbox({
                 text("  ⎿ "),
-                renderToolBadge(block.toolName),
+                renderToolBadge(dm.toolName),
                 text(" "),
                 summaryEl,
             });

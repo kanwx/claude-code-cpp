@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "claude/ui/ContentBlockRenderer.hpp"
+#include "claude/ui/ToolResultFormatter.hpp"
 #include "claude/stream/ContentBlock.hpp"
 
 using namespace claude;
@@ -53,4 +54,58 @@ TEST_CASE("ContentBlock ToolResult with expand hint", "[renderer]") {
     ContentBlock block{.type = ContentBlock::ToolResult, .summary = ToolResultSummary::success("Read 42 lines")};
     String rendered = ContentBlockRenderer::renderAnsi(block);
     CHECK(rendered.find("Ctrl+O") != String::npos);
+}
+
+// ---- ToolResultFormatter tests ----
+
+TEST_CASE("ToolResultFormatter extracts Read file details", "[ToolResultFormatter]") {
+    ContentBlock block;
+    block.type = ContentBlock::ToolResult;
+    block.toolName = "Read";
+    block.summary = ToolResultSummary::success("42 lines", true, " from src/main.cpp");
+    block.resultStatus = ToolResultStatus::Success;
+
+    auto dm = formatToolResult(block);
+    REQUIRE(dm.toolName == "Read");
+    REQUIRE(dm.lineCount == 42);
+    REQUIRE(dm.filePath == "src/main.cpp");
+    REQUIRE(!dm.isError);
+}
+
+TEST_CASE("ToolResultFormatter extracts Grep match count", "[ToolResultFormatter]") {
+    ContentBlock block;
+    block.type = ContentBlock::ToolResult;
+    block.toolName = "Grep";
+    block.summary = ToolResultSummary::success("Found 14 matches", true);
+    block.resultStatus = ToolResultStatus::Success;
+
+    auto dm = formatToolResult(block);
+    REQUIRE(dm.toolName == "Grep");
+    REQUIRE(dm.matchCount == 14);
+}
+
+TEST_CASE("ToolResultFormatter extracts Edit diff stats", "[ToolResultFormatter]") {
+    ContentBlock block;
+    block.type = ContentBlock::ToolResult;
+    block.toolName = "Edit";
+    block.summary = ToolResultSummary::success("Added 5 lines, Removed 2 lines", true, " to src/ui/Repl.cpp");
+    block.resultStatus = ToolResultStatus::Success;
+
+    auto dm = formatToolResult(block);
+    REQUIRE(dm.toolName == "Edit");
+    REQUIRE(dm.linesAdded == 5);
+    REQUIRE(dm.linesRemoved == 2);
+    REQUIRE(dm.filePath == "src/ui/Repl.cpp");
+}
+
+TEST_CASE("ToolResultFormatter handles error state", "[ToolResultFormatter]") {
+    ContentBlock block;
+    block.type = ContentBlock::ToolResult;
+    block.toolName = "Bash";
+    block.summary = ToolResultSummary::error("Command failed: permission denied");
+    block.resultStatus = ToolResultStatus::Error;
+
+    auto dm = formatToolResult(block);
+    REQUIRE(dm.isError);
+    REQUIRE(dm.errorText == "Command failed: permission denied");
 }
