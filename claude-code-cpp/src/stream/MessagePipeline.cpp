@@ -13,8 +13,11 @@ std::vector<ContentBlock> MessagePipeline::process(std::vector<ContentBlock> blo
     if (config_.reorderToolTrails) {
         blocks = reorderToolTrails(std::move(blocks));
     }
-    if (config_.applyGrouping) {
-        blocks = applyGrouping(std::move(blocks));
+    if (config_.groupToolResultPairs) {
+        blocks = groupToolResultPairs(std::move(blocks));
+    }
+    if (config_.groupConsecutiveToolUses) {
+        blocks = groupConsecutiveToolUses(std::move(blocks));
     }
     if (config_.collapseReadSearch) {
         blocks = collapseReadSearchGroups(std::move(blocks));
@@ -85,9 +88,21 @@ std::vector<ContentBlock> MessagePipeline::reorderToolTrails(std::vector<Content
     return result;
 }
 
-// ========== Pass 2: applyGrouping ==========
+// ========== Pass 2: groupToolResultPairs ==========
 
-std::vector<ContentBlock> MessagePipeline::applyGrouping(std::vector<ContentBlock> blocks) {
+std::vector<ContentBlock> MessagePipeline::groupToolResultPairs(
+    std::vector<ContentBlock> blocks) {
+    // Pair adjacent ToolProgress→ToolResult into ToolGroup units.
+    // After reorderToolTrails, each ToolProgress is immediately followed
+    // by its ToolResult. This pass wraps them into a single ToolGroup.
+    //
+    // Stub for now — full implementation in Task 2.
+    return blocks;
+}
+
+// ========== Pass 3: groupConsecutiveToolUses ==========
+
+std::vector<ContentBlock> MessagePipeline::groupConsecutiveToolUses(std::vector<ContentBlock> blocks) {
     // Skip grouping in verbose mode
     if (config_.verbose) return blocks;
 
