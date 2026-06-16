@@ -161,7 +161,7 @@ std::vector<ContentBlock> MessagePipeline::groupConsecutiveToolUses(std::vector<
     return result;
 }
 
-// ========== Pass 3: collapseReadSearchGroups ==========
+// ========== Pass 4: collapseReadSearchGroups ==========
 
 bool MessagePipeline::isCollapsibleBlock(const ContentBlock& block) const {
     if (block.type != ContentBlock::ToolResult) return false;
@@ -476,7 +476,7 @@ String MessagePipeline::buildActiveSummary(const GroupAccumulator& acc) {
     return oss.str();
 }
 
-// ========== Pass 4-6: Stub implementations ==========
+// ========== Pass 5-7: Stub implementations ==========
 
 std::vector<ContentBlock> MessagePipeline::collapseBackgroundBash(
     std::vector<ContentBlock> blocks) {
