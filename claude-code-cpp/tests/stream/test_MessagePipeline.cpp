@@ -241,3 +241,40 @@ TEST_CASE("groupToolResultPairs does not pair mismatched toolCallIds", "[Message
     REQUIRE(processed[0].type == ContentBlock::ToolProgress);
     REQUIRE(processed[1].type == ContentBlock::ToolResult);
 }
+
+TEST_CASE("collapseReadSearchGroups separates Read and Grep into different groups", "[MessagePipeline][groupkind]") {
+    std::vector<ContentBlock> blocks;
+    uint64_t nextId = 1;
+
+    auto makeBlock = [&nextId](const String& toolName, const String& tcId, const String& summaryText) {
+        ContentBlock b;
+        b.type = ContentBlock::ToolResult;
+        b.toolName = toolName;
+        b.toolCallId = tcId;
+        b.summary = ToolResultSummary::success(summaryText);
+        b.resultStatus = ToolResultStatus::Success;
+        b.stableId = nextId++;
+        return b;
+    };
+
+    // Interleave Read and Grep — should produce separate groups
+    blocks.push_back(makeBlock("Read",  "t1", "42 lines"));
+    blocks.push_back(makeBlock("Read",  "t2", "15 lines"));
+    blocks.push_back(makeBlock("Grep",  "t3", "Found 5 matches"));
+    blocks.push_back(makeBlock("Grep",  "t4", "Found 2 matches"));
+    blocks.push_back(makeBlock("Bash",  "t5", "Done"));
+
+    MessagePipeline pipeline;
+    // Call collapseReadSearchGroups directly to test GroupKind subdivision
+    // in isolation (process() would run groupConsecutiveToolUses first, which
+    // wraps consecutive same-name results into ToolGroup blocks that
+    // collapseReadSearchGroups then ignores).
+    auto result = pipeline.collapseReadSearchGroups(blocks);
+
+    // Count CollapsedGroup blocks — expect 3 (Read x2, Grep x2, Bash x1)
+    int collapsedCount = 0;
+    for (auto& b : result) {
+        if (b.type == ContentBlock::CollapsedGroup) collapsedCount++;
+    }
+    REQUIRE(collapsedCount == 3);
+}

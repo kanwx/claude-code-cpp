@@ -341,6 +341,14 @@ std::vector<ContentBlock> MessagePipeline::collapseReadSearchGroups(
             acc.toolUseIds.insert(block.toolCallId);
 
             auto cat = categorizeBlock(block);
+            auto gk = GroupAccumulator::toGroupKind(cat);
+
+            // Flush if this block starts a different kind of group
+            if (acc.kind != GroupAccumulator::GroupKind::None && acc.kind != gk) {
+                flushGroup();
+            }
+            acc.kind = gk;
+
             switch (cat) {
                 case GroupAccumulator::Search:
                     acc.searchCount++;
