@@ -133,6 +133,8 @@
 // Extracted bootstrap modules
 #include <claude/bootstrap/SignalHandler.hpp>
 #include <claude/bootstrap/AgentRunner.hpp>
+#include <claude/bootstrap/UiMode.hpp>
+#include <claude/metrics/HeadlessContentBlockAccumulator.hpp>
 
 // AppState needed for modelStrings() in both FTXUI and readline paths
 #include <claude/bootstrap/AppState.hpp>
@@ -225,20 +227,25 @@ private:
 
         try {
             app.parse(argc, argv);
+
+        // Delegate UI mode decision to pure function (testable, single source of truth).
+        // The order matters: interactive_ default must be set before useFtxui_ check.
+        auto uiDecision = decideUiMode(
 #ifdef HAS_FTXUI
-            if (noFtxui) useFtxui_ = false;
-            // Auto-fallback to readline when stdout is not a TTY
-            if (useFtxui_ && !isatty(STDOUT_FILENO)) {
-                useFtxui_ = false;
-            }
+            /*hasFtxuiBuild=*/true,
+            /*explicitNoFtxui=*/noFtxui,
+#else
+            /*hasFtxuiBuild=*/false,
+            /*explicitNoFtxui=*/false,
 #endif
+            /*explicitInteractive=*/interactive_,
+            /*hasPrompt=*/!prompt_.empty(),
+            /*stdoutIsTty=*/isatty(STDOUT_FILENO));
+        interactive_ = uiDecision.interactive;
+        useFtxui_ = uiDecision.useFtxui;
+
         } catch (const CLI::ParseError& e) {
             return app.exit(e);
-        }
-
-        // 如果没有指定，默认交互模式
-        if (!interactive_ && prompt_.empty()) {
-            interactive_ = true;
         }
 
         return true;
@@ -368,6 +375,24 @@ private:
         }
 #endif
 
+        // Metrics collection (env-var gated, zero overhead when unset)
+        {
+            const char* metricsPath = std::getenv("CLAUDE_CODE_METRICS");
+#ifdef HAS_FTXUI
+            if (useFtxui_ && ftxuiRepl_ && interactive_) {
+                if (metricsPath && metricsPath[0] != '\0') {
+                    ftxuiRepl_->enableMetricsCollection(metricsPath);
+                }
+            } else
+#endif
+            {
+                if (metricsPath && metricsPath[0] != '\0') {
+                    headlessAccumulator_ = std::make_unique<HeadlessContentBlockAccumulator>();
+                    headlessAccumulator_->enableMetricsCollection(metricsPath);
+                }
+            }
+        }
+
         // 初始化 AgentLoop (via agent_runner)
         initAgentLoop();
 
@@ -375,6 +400,40 @@ private:
         mcpManager_ = agent_runner::initMcp(*toolRegistry_);
 
         spdlog::debug("Claude Code C++ initialized");
+
+        // Debug: dump UI mode selection when CLAUDE_CODE_DEBUG_UI=1
+        if (const char* debugUi = std::getenv("CLAUDE_CODE_DEBUG_UI")) {
+            if (debugUi[0] == '1' && debugUi[1] == '\0') {
+                const char* mode = "plain";
+                const char* reason = "unknown";
+#ifdef HAS_FTXUI
+                if (useFtxui_) {
+                    mode = "ftxui";
+                    reason = "interactive_tty_default";
+                } else if (!interactive_) {
+                    mode = "headless";
+                    reason = "print_mode";
+                } else if (!isatty(STDOUT_FILENO)) {
+                    mode = "headless";
+                    reason = "stdout_not_tty";
+                }
+#else
+                if (!interactive_) {
+                    mode = "headless";
+                    reason = "print_mode";
+                }
+#endif
+                std::cerr << "ui_mode=" << mode << "\n"
+                          << "reason=" << reason << "\n"
+                          << "interactive=" << (interactive_ ? "true" : "false") << "\n"
+                          << "useFtxui=" << (useFtxui_ ? "true" : "false") << "\n"
+                          << "stdin_isatty=" << (isatty(STDIN_FILENO) ? "true" : "false") << "\n"
+                          << "stdout_isatty=" << (isatty(STDOUT_FILENO) ? "true" : "false") << "\n"
+                          << "term=" << (std::getenv("TERM") ? std::getenv("TERM") : "(unset)") << "\n"
+                          << "prompt=" << (prompt_.empty() ? "(none)" : prompt_) << "\n"
+                          << std::flush;
+            }
+        }
     }
 
     void initCommands() {
@@ -608,6 +667,7 @@ private:
 #else
             nullptr,
 #endif
+            headlessAccumulator_.get(),
             [this](const PermissionRequest& req) -> PermissionChoice {
                 return promptPermission(req);
             });
@@ -744,6 +804,13 @@ private:
             ftxuiRepl_->setModelInfo(info);
         }
 
+        // Register an idle callback so long-running blocking tools (e.g. AgentTool
+        // during sub-agent polling) can keep the FTXUI event loop responsive.
+        // Called from the agent thread, so it must be thread-safe.
+        agentLoop_->getToolContext().idleCallback = [replPtr]() {
+            replPtr->triggerRefresh();
+        };
+
         ftxuiRepl_->setOnSubmit([this, replPtr](const String& input) {
             // Don't join the previous agent thread on the UI thread — it could
             // deadlock if the agent is waiting on a permission prompt.
@@ -752,8 +819,9 @@ private:
                 if (agentLoop_) agentLoop_->cancel();
                 agentThread_.detach();
             }
+            unsigned int gen = ++agentGeneration_;
             // Agent must run on background thread — UI thread cannot block
-            agentThread_ = std::thread([this, replPtr, input]() {
+            agentThread_ = std::thread([this, replPtr, input, gen]() {
                 g_agentStreaming.store(true, std::memory_order_release);
                 try {
                     auto result = agentLoop_->runStreaming(input,
@@ -761,9 +829,14 @@ private:
                             // Token output now handled by new 5-layer pipeline
                             // via TypedStreamEvent → StreamBuffer → FtxuiRepl
                         });
+                    // Stale thread guard: skip UI updates if a newer thread has started
+                    if (agentGeneration_.load(std::memory_order_acquire) != gen) return;
                     if (!result.has_value()) {
                         if (result.error() == "Cancelled by user") {
-                            // UI already transitioned to idle in the ESC/Ctrl+C handler
+                            // ESC/Ctrl+C handler already set isStreaming_ = false
+                            // and stopped the refresh thread. Call finishStream
+                            // as a safety net to ensure the UI state is consistent.
+                            replPtr->finishStream(true, "");
                         } else {
                             replPtr->finishStream(false, result.error());
                         }
@@ -783,6 +856,7 @@ private:
                         }
                     }
                 } catch (const std::exception& e) {
+                    if (agentGeneration_.load(std::memory_order_acquire) != gen) return;
                     replPtr->finishStream(false, String(e.what()));
                 }
                 g_agentStreaming.store(false, std::memory_order_release);
@@ -819,8 +893,12 @@ private:
                 if (agentLoop_) agentLoop_->cancel();
                 agentThread_.detach();
             }
-            agentThread_ = std::thread([this, replPtr, input]() {
+            unsigned int gen = ++agentGeneration_;
+            agentThread_ = std::thread([this, replPtr, input, gen]() {
+                // Stale thread guard
+                if (agentGeneration_.load(std::memory_order_acquire) != gen) return;
                 String result = handleSlashCommand(input);
+                if (agentGeneration_.load(std::memory_order_acquire) != gen) return;
                 if (!result.empty()) {
                     replPtr->addSystemMessage(result);
                 }
@@ -888,6 +966,13 @@ private:
         double turnDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
             turnEnd - spinnerStart_).count() / 1000.0;
         std::cout << TurnDurationRenderer::render(turnDuration, tracker.getTotalTokens()) << "\n";
+
+        // Flush headless metrics before cleanup. std::_Exit() in main() skips
+        // destructors, so we must write metrics explicitly at the end of each
+        // non-interactive run.
+        if (headlessAccumulator_) {
+            headlessAccumulator_->flushMetrics();
+        }
 
         // Refresh status line with updated token/cost info
         if (statusLine_) statusLine_->refresh();
@@ -974,12 +1059,14 @@ private:
     std::unique_ptr<Spinner> spinner_;
     std::chrono::steady_clock::time_point spinnerStart_;
     std::thread agentThread_;
+    std::atomic<unsigned int> agentGeneration_{0};  // Stale-thread guard
     std::unique_ptr<StatusLine> statusLine_;
     std::unique_ptr<Completer> completer_;
 
 #ifdef HAS_FTXUI
     std::unique_ptr<FtxuiRepl> ftxuiRepl_;
 #endif
+    std::unique_ptr<HeadlessContentBlockAccumulator> headlessAccumulator_;
 
     ApiClient* apiClient_ = nullptr;
     std::unique_ptr<ApiClient> apiClientHolder_;

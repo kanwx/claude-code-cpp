@@ -9,6 +9,7 @@
 #include <claude/stream/AnswerPostProcessor.hpp>
 #include <claude/stream/ContentBlock.hpp>
 #include <claude/ui/ContentBlockRenderer.hpp>
+#include <claude/metrics/HeadlessContentBlockAccumulator.hpp>
 #include <claude/api/OpenAIClient.hpp>
 #include <claude/config/AppConfig.hpp>
 #include <claude/tool/ToolRegistry.hpp>
@@ -293,6 +294,7 @@ void setupCallbacks(AgentLoop& loop,
                      bool useFtxui,
                      Spinner* spinner,
                      FtxuiRepl* ftxuiRepl,
+                     HeadlessContentBlockAccumulator* headlessAccumulator,
                      std::function<PermissionChoice(const PermissionRequest&)> permissionCallback) {
     // Tool event callback — now handled by new 5-layer pipeline via StreamToolEvent.
     // Kept as minimal callback for spinner stop and debug logging only.
@@ -370,9 +372,14 @@ void setupCallbacks(AgentLoop& loop,
     auto postProcessor = std::make_shared<AnswerPostProcessor>();  // B4
 
     streamBuffer->setDisplayCallback(
-        [useFtxui, ftxuiRepl, postProcessor](DisplayEvent&& event) {
+        [useFtxui, ftxuiRepl, postProcessor, headlessAccumulator, spinner](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
-                // B4: Route through AnswerPostProcessor for tool grouping/reordering
+                // B4: Route through AnswerPostProcessor for tool grouping/reordering.
+                // Reset processor on AnswerStart to clear stale state from
+                // previous (possibly cancelled) streaming iterations.
+                if (event.type == DisplayEventType::AnswerStart) {
+                    postProcessor->reset();
+                }
                 if (event.type == DisplayEventType::AnswerEnd) {
                     // Phase 1: process the AnswerEnd event itself
                     auto proc = postProcessor->process(std::move(event));
@@ -388,51 +395,79 @@ void setupCallbacks(AgentLoop& loop,
                     ftxuiRepl->handleDisplayEvent(std::move(proc));
                 }
             } else {
-                // ANSI mode: render DisplayEvents directly to stdout
-                std::lock_guard lock(ansiStreamMutex);
-                switch (event.type) {
-                    case DisplayEventType::TextParagraph:
-                    case DisplayEventType::TextPartial:
-                        std::cout << event.text << std::flush;
-                        break;
-                    case DisplayEventType::ThinkingBlock:
-                        std::cout << "\n" << AnsiStyle::DIM
-                                  << "Thinking..." << AnsiStyle::RESET
-                                  << "\n" << std::flush;
-                        break;
-                    case DisplayEventType::ToolProgress:
-                        std::cout << "\n" << AnsiStyle::DIM
-                                  << "  ⎿ ● " << event.activity
-                                  << AnsiStyle::RESET << "\n" << std::flush;
-                        break;
-                    case DisplayEventType::ToolResult: {
-                        ContentBlock cb;
-                        cb.type = ContentBlock::ToolResult;
-                        cb.toolName = event.toolName;
-                        cb.summary = event.summary;
-                        std::cout << "\n" << ContentBlockRenderer::renderAnsi(cb)
-                                  << "\n" << std::flush;
-                        break;
+                // ANSI / plain CLI mode: render DisplayEvents directly to stdout.
+                //
+                // Coordination rules:
+                // - Spinner writes to stderr (in-place \r updates), never to stdout.
+                // - ThinkingBlock events are suppressed — Spinner handles thinking status.
+                // - AnswerStart stops the spinner and clears its line with \n.
+                // - TextPartial / TextParagraph writes directly to stdout.
+                // - ToolProgress events use Spinner tool-context (no stdout line).
+                // - AnswerEnd writes \n to close the turn.
+                {
+                    std::lock_guard lock(ansiStreamMutex);
+                    switch (event.type) {
+                        case DisplayEventType::AnswerStart:
+                            // Stop spinner and move past its stderr line before
+                            // any content is written to stdout.  This prevents
+                            // AnswerText from appearing on the same line as the
+                            // spinner frame.
+                            if (spinner) spinner->stop();
+                            std::cout << "\n" << std::flush;
+                            break;
+
+                        case DisplayEventType::TextParagraph:
+                        case DisplayEventType::TextPartial:
+                            std::cout << event.text << std::flush;
+                            break;
+
+                        case DisplayEventType::ThinkingBlock:
+                            // Suppressed: Spinner on stderr handles thinking status.
+                            // Emitting "Thinking..." lines to stdout would interleave
+                            // with TextPartial content and cause spam.
+                            break;
+
+                        case DisplayEventType::ToolProgress:
+                            // Suppressed in ANSI mode: Spinner tool-context handles
+                            // in-progress display on stderr with \r in-place updates.
+                            break;
+
+                        case DisplayEventType::ToolResult: {
+                            ContentBlock cb;
+                            cb.type = ContentBlock::ToolResult;
+                            cb.toolName = event.toolName;
+                            cb.summary = event.summary;
+                            std::cout << ContentBlockRenderer::renderAnsi(cb)
+                                      << "\n" << std::flush;
+                            break;
+                        }
+                        case DisplayEventType::ToolGroup: {
+                            ContentBlock cb;
+                            cb.type = ContentBlock::ToolGroup;
+                            cb.toolName = event.toolName;
+                            cb.summary = event.summary;
+                            std::cout << ContentBlockRenderer::renderAnsi(cb)
+                                      << "\n" << std::flush;
+                            break;
+                        }
+                        case DisplayEventType::Error:
+                            if (spinner) spinner->stop();
+                            std::cout << "\n" << AnsiStyle::RED
+                                      << "✕ " << event.text
+                                      << AnsiStyle::RESET << "\n" << std::flush;
+                            break;
+
+                        case DisplayEventType::AnswerEnd:
+                            if (spinner) spinner->stop();
+                            std::cout << std::flush;
+                            break;
+
+                        default:
+                            break;
                     }
-                    case DisplayEventType::ToolGroup: {
-                        ContentBlock cb;
-                        cb.type = ContentBlock::ToolGroup;
-                        cb.toolName = event.toolName;
-                        cb.summary = event.summary;
-                        std::cout << "\n" << ContentBlockRenderer::renderAnsi(cb)
-                                  << "\n" << std::flush;
-                        break;
-                    }
-                    case DisplayEventType::Error:
-                        std::cout << "\n" << AnsiStyle::RED
-                                  << "✕ " << event.text
-                                  << AnsiStyle::RESET << "\n" << std::flush;
-                        break;
-                    case DisplayEventType::AnswerEnd:
-                        std::cout << "\n" << std::flush;
-                        break;
-                    default:
-                        break;
+                }
+                if (headlessAccumulator) {
+                    headlessAccumulator->handleDisplayEvent(std::move(event));
                 }
             }
         });
@@ -531,7 +566,7 @@ bool resumeLastSession(AgentLoop& loop) {
 
         if (!loadedMessages.empty()) {
             // Replace history, preserving the system prompt
-            auto& currentHistory = loop.getMessageHistory();
+            auto currentHistory = loop.getMessageHistory();
             String currentSystemPrompt;
             for (const auto& m : currentHistory) {
                 if (m.role == MessageRole::System) {
