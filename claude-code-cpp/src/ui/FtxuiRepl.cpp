@@ -274,9 +274,8 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 isFirstAnswerBlock_ = true;
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                currentTurnStartIndex_ = contentBlocks_.size();    // B6: preserve scrollback
-                useExternalPostProcessor_ = true;                  // B4: external post-processor handles grouping
-                toolProgressIndices_.clear();                        // B5: fresh indices for new turn
+                currentTurnStartIndex_ = contentBlocks_.size();    // preserve scrollback
+                toolProgressIndices_.clear();                        // fresh indices for new turn
                 lastStableIndex_ = 0;                               // reset anchor for new turn
                 startRefreshThread();
                 break;
@@ -305,10 +304,10 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 }
                 toolProgressIndices_.clear();
 
-                // Final full pass: process all blocks, advance anchor
-                if (!useExternalPostProcessor_) {
-                    contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
-                }
+                // Always run full MessagePipeline at AnswerEnd.
+                // This guarantees FTXUI final ContentBlock tree == Headless final tree
+                // for the same DisplayEvent input.
+                contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
                 lastStableIndex_ = contentBlocks_.size();
 
                 // Insert or update collapsed ThinkingBlock after pipeline (before turn duration).
@@ -368,6 +367,14 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                         contentBlocks_.push_back(std::move(td));
                     }
                 }
+
+                // [METRICS] Turn-level metrics collection (read-only, no side effects)
+                if (metricsCollector_) {
+                    auto m = metricsCollector_->analyze(
+                        contentBlocks_, currentTurnStartIndex_, modelInfo_);
+                    metricsCollector_->write(std::move(m));
+                }
+
                 isStreaming_ = false;
                 isThinking_ = false;
                 stopRefreshThread();
@@ -468,23 +475,20 @@ void FtxuiRepl::runMessagePipeline() {
 }
 
 void FtxuiRepl::runIncrementalPipeline() {
-    if (lastStableIndex_ >= contentBlocks_.size()) return;
-
-    // Slice the unstable tail
-    std::vector<ContentBlock> tail;
-    tail.reserve(contentBlocks_.size() - lastStableIndex_);
-    for (size_t i = lastStableIndex_; i < contentBlocks_.size(); i++) {
-        tail.push_back(contentBlocks_[i]);
-    }
-
-    // Run full pipeline on the tail
-    auto processed = messagePipeline_.process(std::move(tail));
-
-    // Replace the tail section with processed results
-    contentBlocks_.resize(lastStableIndex_);
-    for (auto& block : processed) {
-        contentBlocks_.push_back(std::move(block));
-    }
+    // P0: Defer all pipeline processing to AnswerEnd.
+    //
+    // Running grouping passes (3/4) during streaming causes premature wrapping:
+    // pass 4 wraps ToolResult → CollapsedGroup before pass 3 sees subsequent
+    // tools, preventing consecutive same-type ToolResults from being merged.
+    // This causes FTXUI and Headless to produce different final ContentBlock
+    // trees for consecutive tool calls (e.g., Read×3 becomes 3×CollapsedGroup
+    // instead of 1×CollapsedGroup "Read 3 files").
+    //
+    // During streaming, bare ToolResults are display-safe: the FTXUI renderer
+    // shows only 1 line (badge + truncated summary + [Ctrl+O]) when expanded=false,
+    // which is the default. Full output lives in rawResultPath and is never
+    // rendered inline. At AnswerEnd, the full MessagePipeline processes all
+    // accumulated blocks at once, producing the same tree as Headless.
 }
 
 namespace {
@@ -807,6 +811,10 @@ void FtxuiRepl::setContextInfo(long usedTokens, long maxTokens, double costUsd) 
         contextMaxTokens_ = maxTokens;
         costUsd_ = costUsd;
     });
+}
+
+void FtxuiRepl::enableMetricsCollection(const std::string& outputPath) {
+    metricsCollector_ = std::make_unique<TurnMetricsCollector>(outputPath);
 }
 
 void FtxuiRepl::setTokenCounts(int inputTokens, int outputTokens) {

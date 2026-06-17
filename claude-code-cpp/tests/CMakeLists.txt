@@ -236,6 +236,30 @@ add_executable(test_MessagePipeline stream/test_MessagePipeline.cpp)
 target_link_libraries(test_MessagePipeline PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_MessagePipeline)
 
+add_executable(test_TurnMetricsCollector metrics/test_TurnMetricsCollector.cpp)
+target_link_libraries(test_TurnMetricsCollector PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_TurnMetricsCollector)
+
+add_executable(test_mini_baseline metrics/test_mini_baseline.cpp)
+target_link_libraries(test_mini_baseline PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_mini_baseline)
+
+add_executable(test_HeadlessContentBlockAccumulator metrics/test_HeadlessContentBlockAccumulator.cpp)
+target_link_libraries(test_HeadlessContentBlockAccumulator PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_HeadlessContentBlockAccumulator)
+
+add_executable(test_runtime_replay metrics/test_runtime_replay.cpp)
+target_link_libraries(test_runtime_replay PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_runtime_replay)
+
+add_executable(test_metrics_consistency metrics/test_metrics_consistency.cpp)
+target_link_libraries(test_metrics_consistency PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_metrics_consistency)
+
+add_executable(test_collapse_strategies metrics/test_collapse_strategies.cpp)
+target_link_libraries(test_collapse_strategies PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_collapse_strategies)
+
 add_executable(test_content_block_param test_content_block_param.cpp)
 target_link_libraries(test_content_block_param PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_content_block_param)

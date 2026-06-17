@@ -16,6 +16,7 @@
 #include "../stream/ContentBlock.hpp"
 #include "../stream/AnswerPostProcessor.hpp"
 #include "../stream/MessagePipeline.hpp"
+#include "../metrics/TurnMetricsCollector.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -83,6 +84,10 @@ public:
     void exit();
     bool isRunning() const { return running_; }
 
+    /// Enable turn-level metrics collection (for prompt A/B testing).
+    /// @param outputPath Path to JSONL file for metrics output.
+    void enableMetricsCollection(const std::string& outputPath);
+
     /// Trigger a screen refresh from any thread. Used by idle callbacks during
     /// long-running blocking tool execution (e.g. AgentTool sub-agent polling)
     /// to keep the terminal responsive.
@@ -116,6 +121,9 @@ private:
     // Run the full MessagePipeline on contentBlocks_ (called at AnswerEnd)
     void runMessagePipeline();
 
+    // Run pipeline incrementally on only the unstable tail [lastStableIndex_, end)
+    void runIncrementalPipeline();
+
     // UI state — only modified from closures posted to the UI thread via screen_->Post()
     std::vector<ContentBlock> contentBlocks_;
     String streamingText_;
@@ -127,9 +135,6 @@ private:
 
     // ToolProgress index tracking (Fix B5) — O(1) lookup for ToolResult→ToolProgress replacement
     std::map<String, size_t> toolProgressIndices_;  // toolCallId -> index in contentBlocks_
-
-    // External post-processor flag (Fix B4) — set true when AnswerPostProcessor handles grouping
-    bool useExternalPostProcessor_ = false;
     FtxuiMarkdown::StreamingRenderer streamingRenderer_;
     bool isStreaming_ = false;
     bool isThinking_ = false;
@@ -224,6 +229,10 @@ private:
 
     // ========== Stable block ID counter ==========
     uint64_t nextStableId_ = 1;
+    size_t lastStableIndex_ = 0;       // blocks before this index are pipeline-stable
+
+    // ========== Metrics collector (optional, for A/B testing) ==========
+    std::unique_ptr<TurnMetricsCollector> metricsCollector_;
 };
 
 } // namespace claude
