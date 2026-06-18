@@ -145,16 +145,22 @@ struct ToolResultSummary {
     bool isDim = false;
     bool isError = false;
 
+    /// Semantic display hint for collapse summaries.
+    /// Carries structured info (file path, search pattern, URL) from the Tool
+    /// layer through to the MessagePipeline collapse summary without text parsing.
+    String displayHint;
+
     static ToolResultSummary success(const String& primary, bool bold = false,
                                       const String& secondary = "",
-                                      const String& expand = "") {
-        return {primary, bold, secondary, expand, "", false, false};
+                                      const String& expand = "",
+                                      const String& hint = "") {
+        return {primary, bold, secondary, expand, "", false, false, hint};
     }
     static ToolResultSummary dim(const String& primary) {
-        return {primary, false, "", "", "", true, false};
+        return {primary, false, "", "", "", true, false, ""};
     }
     static ToolResultSummary error(const String& text) {
-        return {"", false, "", "", text, false, true};
+        return {"", false, "", "", text, false, true, ""};
     }
 
     /// Check if this summary has any renderable content

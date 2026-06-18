@@ -56,6 +56,9 @@ public:
     String getProviderName() const override { return "openai"; }
     String getModelName() const override { return model_; }
 
+    // 请求构建 (public — pure JSON transform, testable)
+    Json buildRequest(const Json& messages, const Json& tools);
+
 private:
     String apiKey_;
     String baseUrl_ = "https://api.openai.com/v1";
@@ -67,9 +70,6 @@ private:
     std::unique_ptr<httplib::Client> httpClient_;
     CircuitBreaker circuitBreaker_;
     std::atomic<bool> aborted_{false};
-
-    // 请求构建
-    Json buildRequest(const Json& messages, const Json& tools);
 };
 
 } // namespace claude

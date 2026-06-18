@@ -69,11 +69,11 @@ String getIntroSection(const std::optional<OutputStyleConfig>& outputStyle) {
         << "with programming. You may use URLs provided by the user in their "
         << "messages or local files.\n\n";
 
-    // Key difference from raw LLM chat: narrate your actions
-    // The original TS version explicitly instructs the model to communicate
-    // intent before tool calls, creating the fluid agentic feel.
-    // Do NOT suppress this - it's what makes the output feel like an agent,
-    // not a raw API response.
+    // NOTE: The OutputEfficiency section now instructs the model to be silent
+    // between tool calls. Tool badges provide the "agentic feel" — narration
+    // between every tool call produces log-like output, not a fluid experience.
+    // A single goal statement at the start of a tool batch is acceptable;
+    // per-tool narration ("Let me...", "I'll...") is not.
 
     return oss.str();
 }
@@ -293,8 +293,8 @@ String getToneAndStyleSection() {
         "format (e.g. anthropics/claude-code#100) so they render as clickable links.",
 
         "Do not use a colon before tool calls. Your tool calls may not be shown "
-        "directly in the output, so text like \"Let me read the file:\" followed by "
-        "a read tool call should just be \"Let me read the file.\" with a period."
+        "directly in the output, so text like \"Reading the file:\" followed by "
+        "a read tool call should just be \"Reading the file.\" with a period."
     };
 
     std::ostringstream oss;
@@ -310,44 +310,70 @@ String getOutputEfficiencySection() {
 
 IMPORTANT: Go straight to the point. Try the simplest approach first without going in circles. Do not overdo it. Be extra concise.
 
-When sending user-facing text, you're writing for a person, not logging to a console. Assume users can't see most tool calls or thinking - only your text output. Before your first tool call, briefly state what you're about to do. While working, give short updates at key moments: when you find something load-bearing (a bug, a root cause), when changing direction, when you've made progress without an update.
+When sending user-facing text, you're writing for a person, not logging to a console. Assume users can't see most tool calls or thinking — only your text output.
 
-Keep your text output brief and direct. Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. Do not restate what the user said — just do it. When explaining, include only what is necessary for the user to understand.
+CRITICAL: Do NOT narrate your intent before tool calls. Do NOT write text between consecutive tool calls. When you are about to run tools, be silent — just invoke them. The tool badges already tell the user what is happening.
+
+BANNED before/between tool calls (these patterns are noise in the tool-execution phase):
+  English: "Let me...", "I'll...", "I will...", "Now let me...", "First let me...", "Next I'll...", "Let's...", "I need to...", "I should..."
+  中文: "让我...", "我来...", "我将...", "接下来...", "现在让我...", "继续读取...", "继续查看...", "最后再...", "我已经收集了...", "让我先...", "我先..."
+
+These phrases MAY be used in your final answer when semantically necessary. The restriction applies ONLY before or between tool calls — not to the final response you give the user after all tools have completed. Your final answer should be natural, complete, and well-written in the user's language.
+
+If you must write before a batch of tools, limit to at most one short sentence stating the overall goal. Do not write a sentence before every individual tool call.
+
+After your tool calls complete (not before or during), provide a single concise summary of what you found or did. Consolidate findings rather than giving piecemeal updates.
+
+Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. Do not restate what the user said — just do it. When explaining, include only what is necessary for the user to understand.
 
 Focus text output on:
+- The final answer or result the user needs
 - Decisions that need the user's input
-- High-level status updates at natural milestones
 - Errors or blockers that change the plan
 
-If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls.)";
+If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls.
+
+FINAL EXECUTION RULE:
+When tools are needed, call tools directly. Do not write progress narration before tool calls, between tool calls, or immediately after tool calls. In multi-step tasks, continue using tools silently until you have enough information, then answer once. Do not say: "Let me", "I'll", "I will", "Now", "Next", "First", "I need to", "Let's", "I'm going to". These phrases are only acceptable in the final answer when they are part of user-facing explanation, not tool progress.
+
+中文版：
+需要工具时直接调用工具。不要在工具调用前、工具调用之间、工具调用后输出进度说明。多步骤任务中请静默连续调用工具直到信息足够后再统一回答。不要说："让我"、"我来"、"我将"、"现在"、"接下来"、"首先"、"我需要"、"我们来"、"继续"。这些表达只允许出现在最终回答中不能作为工具进度说明。
+
+ERROR CORRECTION RULE (v3.1):
+If a tool call fails due to a wrong path, missing file, invalid input, or similar error: silently fix the mistake and call the correct tool. Do not use progress narration before the corrected tool call. If you must explain the correction, state only the fact (e.g., "File not found at X, trying Y"), not "Let me fix that" or "I'll try another path" or similar progress narration.
+
+中文版（错误修正规则）：
+如果工具调用因路径错误、文件缺失、输入无效等原因失败，请静默修正后直接调用正确的工具。不要在修正后的工具调用前输出进度说明。若必须说明修正原因，只陈述事实（如"X路径不存在，尝试Y"），不要使用"让我修正"、"我来重试"、"接下来换一种方式"等进度叙事表达。)";
 }
 
 String getEnvironmentInfoSection(const EnvironmentInfo& env) {
     std::ostringstream oss;
-    oss << "# Environment\n";
-    oss << "You have been invoked in the following environment:\n";
-    oss << " - Primary working directory: " << env.cwd << "\n";
+    oss << "<env>\n";
+    oss << "Working directory: " << env.cwd << "\n";
 
     if (env.isWorktree) {
-        oss << " - This is a git worktree — an isolated copy of the repository. "
-            << "Run all commands from this directory. Do NOT `cd` to the original "
-            << "repository root.\n";
+        oss << "This is a git worktree (isolated copy of the repository). "
+            << "Run all commands from this directory.\n";
     }
 
-    oss << " - Is a git repository: " << (env.isGit ? "true" : "false") << "\n";
+    oss << "Is git repository: " << (env.isGit ? "Yes" : "No") << "\n";
 
     for (const auto& dir : env.additionalWorkingDirs) {
-        oss << " - Additional working directory: " << dir << "\n";
+        oss << "Additional working directory: " << dir << "\n";
     }
 
-    oss << " - Platform: " << env.platform << "\n";
-    oss << " - Shell: " << env.shell << "\n";
-    oss << " - OS Version: " << env.osVersion << "\n";
+    oss << "Platform: " << env.platform << "\n";
+    oss << "Shell: " << env.shell << "\n";
+    oss << "OS Version: " << env.osVersion << "\n";
 
+    if (!env.modelId.empty()) {
+        oss << "Model ID: " << env.modelId << "\n";
+    }
     if (!env.modelName.empty()) {
-        oss << " - You are powered by the model named " << env.modelName << ".\n";
+        oss << "Model name: " << env.modelName << "\n";
     }
 
+    oss << "</env>";
     return oss.str();
 }
 

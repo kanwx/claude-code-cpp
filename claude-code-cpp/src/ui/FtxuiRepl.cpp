@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <execinfo.h>
 #include <unistd.h>
+#include <cstdio>
 #include <cstdlib>
 #include <termios.h>
 #include <algorithm>
@@ -26,6 +27,45 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
     // no MessagePipeline, no ThinkingFilter. The ContentBlock tree is rendered by
     // renderFtxuiElement() in the AppLayout.
     screen_->Post([this, ev = std::move(event)]() mutable {
+        // [DEBUG_METRICS] Log every display event
+        {
+            const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                       std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                       std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+            if (debugMetrics) {
+                static const char* eventTypeNames[] = {
+                    "TextParagraph",  // 0
+                    "TextPartial",    // 1
+                    "ThinkingBlock",  // 2
+                    "ToolProgress",   // 3
+                    "ToolResult",     // 4
+                    "ToolGroup",      // 5
+                    "AnswerStart",    // 6
+                    "AnswerEnd",      // 7
+                    "TurnMetadata",   // 8
+                    "SystemNotice",   // 9
+                    "Tombstone",      // 10
+                    "Error"           // 11
+                };
+                static constexpr int eventTypeCount = 12;
+                int rawType = static_cast<int>(ev.type);
+                const char* etname = (rawType >= 0 && rawType < eventTypeCount)
+                    ? eventTypeNames[rawType] : "?";
+                size_t before = contentBlocks_.size();
+                fprintf(stderr, "[DEBUG_METRICS] onDisplayEvent type=%s(%d) cb_size_before=%zu",
+                        etname, rawType, before);
+                if (ev.type == DisplayEventType::ToolProgress ||
+                    ev.type == DisplayEventType::ToolResult) {
+                    fprintf(stderr, " tool=%s callId=%s",
+                            ev.toolName.c_str(), ev.toolCallId.c_str());
+                }
+                if (!ev.activity.empty()) {
+                    fprintf(stderr, " activity=\"%s\"", ev.activity.c_str());
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+
         // Only signal content change for events that materially change the
         // visible display. ThinkingBlock and TurnMetadata fire at high
         // frequency during thinking (for spinner and token updates) but
@@ -269,6 +309,8 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     contentBlocks_.end()
                 );
 
+                apiRoundIndex_++;  // each AnswerStart = new API round within the user turn
+
                 isStreaming_ = true;
                 isThinking_ = true;
                 isFirstAnswerBlock_ = true;
@@ -307,8 +349,46 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 // Always run full MessagePipeline at AnswerEnd.
                 // This guarantees FTXUI final ContentBlock tree == Headless final tree
                 // for the same DisplayEvent input.
+                {
+                    const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+                    if (debugMetrics) {
+                        fprintf(stderr, "[DEBUG_METRICS] AnswerEnd BEFORE pipeline: contentBlocks_.size()=%zu, metricsTurnStartIndex_=%zu (apiRound=%d)\n",
+                                contentBlocks_.size(), metricsTurnStartIndex_, apiRoundIndex_);
+                        static const char* typeNames[] = {
+                            "UserMessage","AnswerText","ThinkingBlock","ToolProgress",
+                            "ToolResult","ToolGroup","AgentProgress","ErrorMessage",
+                            "SystemMessage","CompactBoundary","CollapsedGroup","TurnDuration"
+                        };
+                        for (size_t i = 0; i < contentBlocks_.size(); ++i) {
+                            int t = static_cast<int>(contentBlocks_[i].type);
+                            const char* tn = (t >= 0 && t < 12) ? typeNames[t] : "?";
+                            fprintf(stderr, "  BEFORE[%zu] %s\n", i, tn);
+                        }
+                    }
+                }
                 contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
                 lastStableIndex_ = contentBlocks_.size();
+                {
+                    const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+                    if (debugMetrics) {
+                        fprintf(stderr, "[DEBUG_METRICS] AnswerEnd AFTER pipeline: contentBlocks_.size()=%zu\n",
+                                contentBlocks_.size());
+                        static const char* typeNames[] = {
+                            "UserMessage","AnswerText","ThinkingBlock","ToolProgress",
+                            "ToolResult","ToolGroup","AgentProgress","ErrorMessage",
+                            "SystemMessage","CompactBoundary","CollapsedGroup","TurnDuration"
+                        };
+                        for (size_t i = 0; i < contentBlocks_.size(); ++i) {
+                            int t = static_cast<int>(contentBlocks_[i].type);
+                            const char* tn = (t >= 0 && t < 12) ? typeNames[t] : "?";
+                            fprintf(stderr, "  AFTER[%zu] %s\n", i, tn);
+                        }
+                    }
+                }
 
                 // Insert or update collapsed ThinkingBlock after pipeline (before turn duration).
                 // If the model emitted thinking content, show it as a collapsed block
@@ -369,10 +449,85 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 }
 
                 // [METRICS] Turn-level metrics collection (read-only, no side effects)
-                if (metricsCollector_) {
-                    auto m = metricsCollector_->analyze(
-                        contentBlocks_, currentTurnStartIndex_, modelInfo_);
-                    metricsCollector_->write(std::move(m));
+                {
+                    const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+                    if (debugMetrics) {
+                        fprintf(stderr, "[DEBUG_METRICS] AnswerEnd: metricsCollector_=%s, modelInfo_=%s, metricsTurnStartIndex_=%zu, contentBlocks_.size()=%zu, apiRound=%d\n",
+                                metricsCollector_ ? "non-null" : "null",
+                                modelInfo_.empty() ? "(empty)" : modelInfo_.c_str(),
+                                metricsTurnStartIndex_,
+                                contentBlocks_.size(),
+                                apiRoundIndex_);
+
+                        // Block type dump for turn window
+                        fprintf(stderr, "[DEBUG_METRICS] AnswerEnd block dump (metrics window [%zu, %zu), apiRound=%d):\n",
+                                metricsTurnStartIndex_, contentBlocks_.size(), apiRoundIndex_);
+                        static const char* blockTypeNames[] = {
+                            "UserMessage",     // 0
+                            "AnswerText",      // 1
+                            "ThinkingBlock",   // 2
+                            "ToolProgress",    // 3
+                            "ToolResult",      // 4
+                            "ToolGroup",       // 5
+                            "AgentProgress",   // 6
+                            "ErrorMessage",    // 7
+                            "SystemMessage",   // 8
+                            "CompactBoundary", // 9
+                            "CollapsedGroup",  // 10
+                            "TurnDuration"     // 11
+                        };
+                        static constexpr int blockTypeCount = 12;
+                        for (size_t bi = metricsTurnStartIndex_; bi < contentBlocks_.size(); ++bi) {
+                            const auto& b = contentBlocks_[bi];
+                            int rawType = static_cast<int>(b.type);
+                            const char* tname = (rawType >= 0 && rawType < blockTypeCount)
+                                ? blockTypeNames[rawType] : nullptr;
+
+                            const char* summary = "";
+                            if (b.type == ContentBlock::CollapsedGroup) {
+                                summary = b.text.c_str();
+                            } else if (b.type == ContentBlock::ToolGroup) {
+                                summary = b.text.c_str();
+                            } else if (b.type == ContentBlock::ToolResult) {
+                                summary = b.summary.primaryText.c_str();
+                            } else if (b.type == ContentBlock::AgentProgress) {
+                                summary = b.text.c_str();
+                            }
+
+                            if (tname) {
+                                fprintf(stderr, "  [%zu] %s%s%s\n",
+                                        bi, tname,
+                                        summary[0] ? " \"" : "",
+                                        summary[0] ? summary : "");
+                            } else {
+                                // Unknown block — dump all available info
+                                fprintf(stderr, "  [%zu] Unknown(raw=%d) text=\"%s\" toolName=\"%s\""
+                                        " children=%zu expanded=%d stableId=%llu\n",
+                                        bi, rawType,
+                                        b.text.c_str(),
+                                        b.toolName.c_str(),
+                                        b.children.size(),
+                                        b.expanded ? 1 : 0,
+                                        (unsigned long long)b.stableId);
+                            }
+                        }
+                    }
+                    if (metricsCollector_) {
+                        if (debugMetrics) {
+                            fprintf(stderr, "[DEBUG_METRICS] AnswerEnd: calling analyze+write, answer_end_seen=true\n");
+                        }
+                        auto m = metricsCollector_->analyze(
+                            contentBlocks_, metricsTurnStartIndex_, modelInfo_, userTurnIndex_);
+                        m.apiRoundIndex = apiRoundIndex_;  // cumulative snapshot round
+                        metricsCollector_->write(std::move(m));
+                        if (debugMetrics) {
+                            fprintf(stderr, "[DEBUG_METRICS] AnswerEnd: write completed, metrics_written=true, write_error=none\n");
+                        }
+                    } else if (debugMetrics) {
+                        fprintf(stderr, "[DEBUG_METRICS] AnswerEnd: metricsCollector_ is null, skipping write\n");
+                    }
                 }
 
                 isStreaming_ = false;
@@ -394,6 +549,8 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                     currentTurnStartIndex_ = (currentTurnStartIndex_ > toRemove)
                         ? (currentTurnStartIndex_ - toRemove) : 0;
+                    metricsTurnStartIndex_ = (metricsTurnStartIndex_ > toRemove)
+                        ? (metricsTurnStartIndex_ - toRemove) : 0;
                 }
                 break;
             }
@@ -404,6 +561,17 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
 
             default:
                 break;
+        }
+
+        // [DEBUG_METRICS] Log cb_size after event processing
+        {
+            const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                       std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                       std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+            if (debugMetrics) {
+                fprintf(stderr, "[DEBUG_METRICS] onDisplayEvent done, cb_size_after=%zu\n",
+                        contentBlocks_.size());
+            }
         }
     });
 }
@@ -656,6 +824,9 @@ void FtxuiRepl::addUserMessage(const String& content) {
             if (cb.text[0] == '/') cb.userInputType = UserInputType::Command;
             else if (cb.text[0] == '!') cb.userInputType = UserInputType::Bash;
         }
+        metricsTurnStartIndex_ = contentBlocks_.size();  // user turn starts at this UserMessage
+        apiRoundIndex_ = 0;
+        userTurnIndex_++;
         contentBlocks_.push_back(std::move(cb));
     });
 }
@@ -814,7 +985,18 @@ void FtxuiRepl::setContextInfo(long usedTokens, long maxTokens, double costUsd) 
 }
 
 void FtxuiRepl::enableMetricsCollection(const std::string& outputPath) {
+    const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+    if (debugMetrics) {
+        fprintf(stderr, "[DEBUG_METRICS] FtxuiRepl::enableMetricsCollection: path=%s\n",
+                outputPath.c_str());
+    }
     metricsCollector_ = std::make_unique<TurnMetricsCollector>(outputPath);
+    if (debugMetrics) {
+        fprintf(stderr, "[DEBUG_METRICS] FtxuiRepl::enableMetricsCollection: collector_initialized=%s\n",
+                metricsCollector_ ? "true" : "false");
+    }
 }
 
 void FtxuiRepl::setTokenCounts(int inputTokens, int outputTokens) {
@@ -1308,6 +1490,9 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                         userCb.userInputType = UserInputType::Bash;
                     }
                 }
+                r->metricsTurnStartIndex_ = r->contentBlocks_.size();  // user turn starts here
+                r->apiRoundIndex_ = 0;
+                r->userTurnIndex_++;
                 r->contentBlocks_.push_back(std::move(userCb));
                 r->isStreaming_ = true;
                 r->isThinking_ = true;

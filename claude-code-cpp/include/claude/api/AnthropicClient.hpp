@@ -7,11 +7,26 @@
 #include "../utils/CircuitBreaker.hpp"
 #include "../core/Cache.hpp"
 #include <httplib.h>
+#include <atomic>
 #include <memory>
 #include <chrono>
 #include <shared_mutex>
 
 namespace claude {
+
+/// Protocol used to communicate with the API endpoint.
+///
+/// Determines where the system prompt is placed in the request:
+///   Anthropic:         top-level "system" field, removed from messages
+///   OpenAICompatible:  first message in the "messages" array (role:"system")
+///
+/// Derived automatically from base URL (setBaseUrl), but callers may
+/// override via setApiProtocol() for Anthropic-compatible proxies that
+/// use a custom base URL.
+enum class ApiProtocol {
+    OpenAICompatible,  // default for custom base URLs (DeepSeek, etc.)
+    Anthropic,         // official api.anthropic.com
+};
 
 /// Streaming response accumulator state
 struct StreamingState {
@@ -189,11 +204,37 @@ public:
         promptCachingEnabled_ = enabled;
     }
 
+    /// Explicitly set API protocol (overrides base-URL inference).
+    ///
+    /// Use ApiProtocol::Anthropic for Anthropic-compatible proxies that use
+    /// a custom base URL but expect the system prompt at the top-level
+    /// "system" field. The default (derived from setBaseUrl) is
+    /// Anthropic for api.anthropic.com, OpenAICompatible otherwise.
+    void setApiProtocol(ApiProtocol proto) {
+        std::unique_lock lock(configMutex_);
+        apiProtocol_ = proto;
+        apiProtocolExplicit_ = true;
+    }
+
+    ApiProtocol getApiProtocol() const {
+        std::shared_lock lock(configMutex_);
+        return apiProtocol_;
+    }
+
     /// 设置查询来源 (影响缓存 TTL)
     void setQuerySource(const String& source) {
         std::unique_lock lock(configMutex_);
         querySource_ = source;
     }
+
+    // ========== Abort ==========
+
+    void abort() override {
+        aborted_.store(true, std::memory_order_release);
+        if (httpClient_) httpClient_->stop();
+    }
+    bool isAborted() const override { return aborted_.load(std::memory_order_acquire); }
+    void resetAbort() override { aborted_.store(false, std::memory_order_release); }
 
     /// Set stream idle timeout (seconds). 0 disables watchdog.
     void setStreamIdleTimeout(int seconds) {
@@ -247,9 +288,13 @@ public:
         return lastDidFallBack_;
     }
 
+    // 请求构建 (public — pure JSON transform, testable)
+    Json buildRequest(const Json& messages, const Json& tools);
+
 private:
     String apiKey_;
     String baseUrl_ = "https://api.anthropic.com/v1";
+    String basePath_;  // path prefix extracted from baseUrl (e.g. "/anthropic"); cleared for official Anthropic
     String model_ = "claude-sonnet-4-20250514";
     int maxTokens_ = 16384;
     double temperature_ = -1;  // -1 = not set (use API default)
@@ -257,6 +302,8 @@ private:
     int thinkingBudget_ = 10000;
     bool promptCachingEnabled_ = true;  // 默认启用
     bool isCustomBaseUrl_ = false;      // 是否为自定义 base URL
+    ApiProtocol apiProtocol_ = ApiProtocol::Anthropic;  // default base URL is api.anthropic.com
+    bool apiProtocolExplicit_ = false;  // true if user called setApiProtocol()
     String querySource_;
     std::vector<String> betaHeaders_;
 
@@ -266,6 +313,7 @@ private:
     // Streaming fallback & watchdog config
     int streamIdleTimeoutSec_ = 30;     // seconds before stall detection
     bool lastDidFallBack_ = false;      // tracks last stream fallback
+    std::atomic<bool> aborted_{false};  // stream abort flag
 
     // Quota tracking
     QuotaStatus lastQuotaStatus_;
@@ -276,9 +324,6 @@ private:
     ApiCache apiCache_;
     bool cacheEnabled_ = false;
     mutable std::shared_mutex configMutex_;  // guards model/baseUrl/apiKey and all setters
-
-    // 请求构建
-    Json buildRequest(const Json& messages, const Json& tools);
     httplib::Headers buildHttpHeaders();
 
     // Internal: process a single SSE event into StreamingState

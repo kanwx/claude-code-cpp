@@ -129,7 +129,10 @@ private:
     String streamingText_;
 
     // Turn boundary tracking (Fix B6)
-    size_t currentTurnStartIndex_ = 0;
+    size_t currentTurnStartIndex_ = 0;   // current API response start (updated at AnswerStart)
+    size_t metricsTurnStartIndex_ = 0;   // user turn start (updated ONLY at UserMessage)
+    int apiRoundIndex_ = 0;              // which API call within current user turn (0-based)
+    int userTurnIndex_ = 0;              // logical user turn id (incremented at each UserMessage)
     std::vector<size_t> turnBoundaries_;
     static constexpr size_t MAX_BLOCKS = 2000;
 

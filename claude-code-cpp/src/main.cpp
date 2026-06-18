@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <memory>
@@ -378,17 +379,48 @@ private:
         // Metrics collection (env-var gated, zero overhead when unset)
         {
             const char* metricsPath = std::getenv("CLAUDE_CODE_METRICS");
+            const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                       std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                       std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+
+            if (debugMetrics) {
+                fprintf(stderr, "[DEBUG_METRICS] main.cpp: metrics_env_set=%s, metrics_path=%s\n",
+                        metricsPath ? "true" : "false",
+                        (metricsPath && metricsPath[0]) ? metricsPath : "(empty_or_unset)");
+            }
+
 #ifdef HAS_FTXUI
+            if (debugMetrics) {
+                fprintf(stderr, "[DEBUG_METRICS] main.cpp: HAS_FTXUI=defined, useFtxui_=%s, ftxuiRepl_=%s, interactive_=%s\n",
+                        useFtxui_ ? "true" : "false",
+                        ftxuiRepl_ ? "non-null" : "null",
+                        interactive_ ? "true" : "false");
+            }
+
             if (useFtxui_ && ftxuiRepl_ && interactive_) {
                 if (metricsPath && metricsPath[0] != '\0') {
+                    if (debugMetrics) {
+                        fprintf(stderr, "[DEBUG_METRICS] main.cpp: routing to FTXUI path, calling enableMetricsCollection(%s)\n",
+                                metricsPath);
+                    }
                     ftxuiRepl_->enableMetricsCollection(metricsPath);
+                } else if (debugMetrics) {
+                    fprintf(stderr, "[DEBUG_METRICS] main.cpp: FTXUI path but metricsPath empty, skipping\n");
                 }
             } else
 #endif
             {
+                if (debugMetrics) {
+                    fprintf(stderr, "[DEBUG_METRICS] main.cpp: routing to headless path\n");
+                }
                 if (metricsPath && metricsPath[0] != '\0') {
+                    if (debugMetrics) {
+                        fprintf(stderr, "[DEBUG_METRICS] main.cpp: creating HeadlessContentBlockAccumulator, enabling metrics\n");
+                    }
                     headlessAccumulator_ = std::make_unique<HeadlessContentBlockAccumulator>();
                     headlessAccumulator_->enableMetricsCollection(metricsPath);
+                } else if (debugMetrics) {
+                    fprintf(stderr, "[DEBUG_METRICS] main.cpp: headless path but metricsPath empty, skipping\n");
                 }
             }
         }

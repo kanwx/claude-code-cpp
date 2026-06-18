@@ -403,6 +403,11 @@ set(STREAM_SOURCES
     src/stream/MessagePipeline.cpp
 )
 
+# Metrics源文件
+set(METRICS_SOURCES
+    src/metrics/TurnMetricsCollector.cpp
+)
+
 # Bridge源文件
 set(BRIDGE_SOURCES
     src/bridge/BridgeClient.cpp
@@ -530,6 +535,7 @@ add_library(claude_core STATIC
     ${VIM_SOURCES}
     ${VOICE_SOURCES}
     ${STREAM_SOURCES}
+    ${METRICS_SOURCES}
     ${BRIDGE_SOURCES}
     ${COMPUTER_USE_SOURCES}
     ${KEYBINDINGS_SOURCES}

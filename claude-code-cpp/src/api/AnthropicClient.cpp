@@ -11,6 +11,10 @@
 #include <httplib.h>
 #include <cstdlib>
 #include <chrono>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace claude {
 
@@ -50,7 +54,22 @@ void AnthropicClient::setBaseUrl(const String& url) {
         pooledBaseUrl_.clear();
     }
 
-    baseUrl_ = url;
+    // Parse URL to extract scheme, host, port, and path prefix.
+    // httplib::Client(scheme_host_port) discards the path component of its
+    // constructor argument (it only passes host:port to the internal ClientImpl).
+    // We must preserve the path prefix ourselves and prepend it to request paths.
+    basePath_.clear();
+    String hostOnly = url;
+    auto schemeEnd = url.find("://");
+    if (schemeEnd != String::npos) {
+        auto pathStart = url.find('/', schemeEnd + 3);
+        if (pathStart != String::npos) {
+            basePath_ = url.substr(pathStart);          // e.g., "/anthropic" or "/v1"
+            hostOnly = url.substr(0, pathStart);         // e.g., "https://api.deepseek.com"
+        }
+    }
+
+    baseUrl_ = hostOnly;
 
     // Get a pooled client for the new base URL (reuses existing connections)
     httpClient_ = ConnectionPool::instance().getConnection(baseUrl_);
@@ -59,8 +78,19 @@ void AnthropicClient::setBaseUrl(const String& url) {
     // Check if this is the official Anthropic API or a custom server
     isCustomBaseUrl_ = (url.find("api.anthropic.com") == String::npos);
 
+    // Derive protocol from base URL (only when user hasn't set it explicitly).
+    // TODO: an Anthropic-compatible proxy at a custom base URL would need
+    // ApiProtocol::Anthropic. Currently derived automatically; callers can
+    // override via setApiProtocol().
+    if (!apiProtocolExplicit_) {
+        apiProtocol_ = isCustomBaseUrl_
+            ? ApiProtocol::OpenAICompatible
+            : ApiProtocol::Anthropic;
+    }
+
     if (isCustomBaseUrl_) {
-        spdlog::debug("Using custom base URL {} - will use OpenAI-compatible format", url);
+        spdlog::debug("Using custom base URL {} - api_protocol={}", url,
+                      apiProtocol_ == ApiProtocol::Anthropic ? "anthropic" : "openai-compatible");
     }
 }
 
@@ -103,22 +133,28 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
         {"messages", Json::array()}
     };
 
-    // Anthropic format: system is a top-level param, not in messages
+    // System prompt placement depends on provider protocol:
+    //   Anthropic (api.anthropic.com):   top-level req["system"], not in messages
+    //   OpenAI-compatible (custom URL):  inside messages as role:"system", no top-level
     String systemContent;
-    Json systemBlocks;        // Pre-built system content blocks (from SystemPromptBuilder::buildBlocks)
+    Json systemBlocks;
     bool hasSystemBlocks = false;
     Json regularMessages = Json::array();
 
     for (const auto& msg : messages) {
         if (msg.contains("role") && msg["role"] == "system") {
             if (msg.contains("content")) {
-                // Check if content is already an array of content blocks
-                // (pre-built by SystemPromptBuilder::buildBlocks with cache_control)
-                if (msg["content"].is_array()) {
-                    systemBlocks = msg["content"];
-                    hasSystemBlocks = true;
+                if (apiProtocol_ == ApiProtocol::OpenAICompatible) {
+                    // OpenAI-compatible: system stays in messages
+                    regularMessages.push_back(msg);
                 } else {
-                    systemContent = msg["content"].get<String>();
+                    // Anthropic: extract system to place at top level
+                    if (msg["content"].is_array()) {
+                        systemBlocks = msg["content"];
+                        hasSystemBlocks = true;
+                    } else {
+                        systemContent = msg["content"].get<String>();
+                    }
                 }
             }
         } else {
@@ -126,26 +162,26 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
         }
     }
 
-    // Set system message (with caching blocks)
-    if (hasSystemBlocks && !systemBlocks.empty()) {
-        // Use pre-built blocks directly — they already have the correct
-        // cache_control markers (global on static, org on last, etc.)
-        req["system"] = systemBlocks;
-    } else if (!systemContent.empty()) {
-        // Fallback: build blocks from flat string using heuristic splitting
-        auto blocks = buildSystemPromptBlocks(
-            systemContent,
-            promptCachingEnabled_,
-            false,  // skipGlobalCache
-            querySource_
-        );
+    // Place system prompt — top-level only for Anthropic protocol
+    if (apiProtocol_ == ApiProtocol::Anthropic) {
+        if (hasSystemBlocks && !systemBlocks.empty()) {
+            req["system"] = systemBlocks;
+        } else if (!systemContent.empty()) {
+            auto blocks = buildSystemPromptBlocks(
+                systemContent,
+                promptCachingEnabled_,
+                false,  // skipGlobalCache
+                querySource_
+            );
 
-        Json systemJson = Json::array();
-        for (const auto& block : blocks) {
-            systemJson.push_back(block.toJson());
+            Json systemJson = Json::array();
+            for (const auto& block : blocks) {
+                systemJson.push_back(block.toJson());
+            }
+            req["system"] = systemJson;
         }
-        req["system"] = systemJson;
     }
+    // For custom base URLs, system is already in regularMessages — no top-level field
 
     req["messages"] = regularMessages;
 
@@ -178,82 +214,96 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
 
         if (role == "user") {
             flushToolResults();
-            // Ensure user content is in content-block format if not already
-            if (msg.contains("content") && msg["content"].is_string()) {
+
+            // Already in Anthropic content-block format? Pass through.
+            if (msg.contains("content") && msg["content"].is_array()) {
+                convertedMessages.push_back(msg);
+            } else if (msg.contains("content") && msg["content"].is_string()) {
+                // Convert string content to content-block format
                 String text = msg["content"].get<String>();
                 Json contentBlocks = Json::array();
                 contentBlocks.push_back({{"type", "text"}, {"text", text}});
                 msg["content"] = contentBlocks;
+                convertedMessages.push_back(msg);
+            } else {
+                // No content — wrap in content-block array for safety
+                msg["content"] = Json::array();
+                convertedMessages.push_back(msg);
             }
-            convertedMessages.push_back(msg);
         }
         else if (role == "assistant") {
             flushToolResults();
 
-            // Build content blocks for assistant message
-            Json contentBlocks = Json::array();
+            // Already in Anthropic content-block format? Pass through.
+            // buildAnthropicApiMessages pre-converts assistant messages to
+            // content-block arrays that include thinking, text, and tool_use blocks.
+            if (msg.contains("content") && msg["content"].is_array()) {
+                convertedMessages.push_back(msg);
+            } else {
+                // Convert from internal (OpenAI-compatible) format
+                Json contentBlocks = Json::array();
 
-            // Text content
-            String textContent = msg.value("content", "");
-            if (!textContent.empty()) {
-                contentBlocks.push_back({{"type", "text"}, {"text", textContent}});
-            }
+                // Text content
+                String textContent = msg.value("content", "");
+                if (!textContent.empty()) {
+                    contentBlocks.push_back({{"type", "text"}, {"text", textContent}});
+                }
 
-            // Thinking blocks (if present in the message)
-            if (msg.contains("thinking") && msg["thinking"].is_string()) {
-                String thinkingContent = msg["thinking"].get<String>();
-                if (!thinkingContent.empty()) {
-                    Json thinkingBlock;
-                    thinkingBlock["type"] = "thinking";
-                    thinkingBlock["thinking"] = thinkingContent;
-                    if (msg.contains("signature") && msg["signature"].is_string()) {
-                        thinkingBlock["signature"] = msg["signature"].get<String>();
+                // Thinking blocks (if present in the message)
+                if (msg.contains("thinking") && msg["thinking"].is_string()) {
+                    String thinkingContent = msg["thinking"].get<String>();
+                    if (!thinkingContent.empty()) {
+                        Json thinkingBlock;
+                        thinkingBlock["type"] = "thinking";
+                        thinkingBlock["thinking"] = thinkingContent;
+                        if (msg.contains("signature") && msg["signature"].is_string()) {
+                            thinkingBlock["signature"] = msg["signature"].get<String>();
+                        }
+                        contentBlocks.push_back(thinkingBlock);
                     }
-                    contentBlocks.push_back(thinkingBlock);
                 }
-            }
 
-            // Redacted thinking blocks (if present)
-            if (msg.contains("redacted_thinking") && msg["redacted_thinking"].is_array()) {
-                for (const auto& rt : msg["redacted_thinking"]) {
-                    contentBlocks.push_back(rt);
+                // Redacted thinking blocks (if present)
+                if (msg.contains("redacted_thinking") && msg["redacted_thinking"].is_array()) {
+                    for (const auto& rt : msg["redacted_thinking"]) {
+                        contentBlocks.push_back(rt);
+                    }
                 }
-            }
 
-            // Tool use blocks — convert from OpenAI format
-            if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
-                for (const auto& tc : msg["tool_calls"]) {
-                    Json toolUseBlock;
-                    toolUseBlock["type"] = "tool_use";
-                    toolUseBlock["id"] = tc.value("id", "call_0");
+                // Tool use blocks — convert from OpenAI format
+                if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+                    for (const auto& tc : msg["tool_calls"]) {
+                        Json toolUseBlock;
+                        toolUseBlock["type"] = "tool_use";
+                        toolUseBlock["id"] = tc.value("id", "call_0");
 
-                    if (tc.contains("function")) {
-                        toolUseBlock["name"] = tc["function"].value("name", "unknown");
-                        String args = tc["function"].value("arguments", "{}");
-                        // Parse arguments string to JSON object
-                        try {
-                            toolUseBlock["input"] = Json::parse(args);
-                        } catch (...) {
+                        if (tc.contains("function")) {
+                            toolUseBlock["name"] = tc["function"].value("name", "unknown");
+                            String args = tc["function"].value("arguments", "{}");
+                            try {
+                                toolUseBlock["input"] = Json::parse(args);
+                            } catch (...) {
+                                toolUseBlock["input"] = Json::object();
+                            }
+                        } else {
+                            toolUseBlock["name"] = "unknown";
                             toolUseBlock["input"] = Json::object();
                         }
-                    } else {
-                        toolUseBlock["name"] = "unknown";
-                        toolUseBlock["input"] = Json::object();
+
+                        contentBlocks.push_back(toolUseBlock);
                     }
-
-                    contentBlocks.push_back(toolUseBlock);
                 }
-            }
 
-            // If no content blocks at all, add empty text
-            if (contentBlocks.empty()) {
-                contentBlocks.push_back({{"type", "text"}, {"text", ""}});
-            }
+                // If no content blocks at all, add empty text
+                if (contentBlocks.empty()) {
+                    contentBlocks.push_back({{"type", "text"}, {"text", ""}});
+                }
 
-            Json assistantMsg;
-            assistantMsg["role"] = "assistant";
-            assistantMsg["content"] = contentBlocks;
-            convertedMessages.push_back(assistantMsg);
+                Json assistantMsg;
+                assistantMsg["role"] = "assistant";
+                assistantMsg["content"] = contentBlocks;
+                convertedMessages.push_back(assistantMsg);
+            }
         }
         else if (role == "tool") {
             // Convert OpenAI tool result to Anthropic tool_result content block
@@ -295,27 +345,31 @@ Json AnthropicClient::buildRequest(const Json& messages, const Json& tools) {
         convertedMessages.push_back(userMsg);
     }
 
+    // Repair tool_use/tool_result pairing before sending to API.
+    // Compaction (AutoCompact, MicroCompact, etc.) can create orphaned tool_use
+    // blocks without matching tool_result blocks, which the Anthropic API rejects
+    // with a 400 error. MessageRepair scans the entire history and inserts
+    // synthetic error tool_results for any unmatched tool_use blocks.
+    convertedMessages = MessageRepair::repair(convertedMessages);
+
     req["messages"] = convertedMessages;
 
     // Add message-level cache breakpoint for Anthropic prompt caching
-    // Rule: one cache_control marker per request, on the second-to-last message
-    // This enables cache hits on the prefix while the latest user message changes
-    if (promptCachingEnabled_ && regularMessages.size() >= 2) {
-        size_t markerIdx = regularMessages.size() - 2;
+    // Rule: one cache_control marker per request, on the second-to-last message.
+    // Use convertedMessages (final message array) for sizing, not regularMessages
+    // which may differ due to tool-result merging.
+    size_t finalCount = convertedMessages.size();
+    if (promptCachingEnabled_ && finalCount >= 2) {
+        size_t markerIdx = finalCount - 2;
         auto& markerMsg = req["messages"][markerIdx];
 
-        // Convert content to content-block format and add cache_control
         String contentType = markerMsg.value("role", "");
         if (contentType == "user" || contentType == "assistant") {
-            String textContent = markerMsg.value("content", "");
-            if (!textContent.empty()) {
-                Json contentBlocks = Json::array();
-                Json block;
-                block["type"] = "text";
-                block["text"] = textContent;
-                block["cache_control"] = {{"type", "ephemeral"}};
-                contentBlocks.push_back(block);
-                req["messages"][markerIdx]["content"] = contentBlocks;
+            auto& content = markerMsg["content"];
+            // Only add cache_control if content is already a content-block array
+            if (content.is_array() && !content.empty()) {
+                // Add cache_control to the last block (preserves existing blocks)
+                content[content.size() - 1]["cache_control"] = {{"type", "ephemeral"}};
             }
         }
     }
@@ -379,7 +433,7 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
     // Cache lookup (only for non-streaming calls with caching enabled)
     String cacheKey;
     if (cacheEnabled_) {
-        String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
+        String path = isCustomBaseUrl_ ? (basePath_ + "/messages") : "/v1/messages";
         cacheKey = apiCache_.makeKey(baseUrl_ + path, buildRequest(messages, tools).dump());
         auto cached = apiCache_.getCached(cacheKey);
         if (cached) {
@@ -395,7 +449,7 @@ std::expected<Json, String> AnthropicClient::call(const Json& messages, const Js
 
     httplib::Headers headers = buildHttpHeaders();
 
-    String path = isCustomBaseUrl_ ? "/messages" : "/v1/messages";
+    String path = isCustomBaseUrl_ ? (basePath_ + "/messages") : "/v1/messages";
 
     // Debug tracking
     auto callStart = std::chrono::steady_clock::now();
@@ -542,7 +596,7 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
             else if (blockType == "redacted_thinking") {
                 state.currentBlockType = "redacted_thinking";
                 state.accumulatedText.clear();
-                if (block.contains("data")) {
+                if (block.contains("data") && block["data"].is_string()) {
                     state.accumulatedText = block["data"].get<String>();
                 }
             }
@@ -579,7 +633,7 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
             }
         }
         else if (deltaType == "redacted_thinking_delta" && state.currentBlockType == "redacted_thinking") {
-            if (delta.contains("data")) {
+            if (delta.contains("data") && delta["data"].is_string()) {
                 state.accumulatedText += delta["data"].get<String>();
             }
         }
@@ -732,7 +786,7 @@ void AnthropicClient::processSseEvent(const Json& event, StreamingState& state) 
                     throw PromptTooLongException(
                         error.value("message", "Context window exceeded"), actual, max);
                 }
-                if (error.contains("message")) {
+                if (error.contains("message") && error["message"].is_string()) {
                     errMsg = error["message"].get<String>();
                 }
             } else if (event["error"].is_string()) {
@@ -895,6 +949,7 @@ void AnthropicClient::stream(
 
     if (result.isErr()) {
         spdlog::error("Stream failed (and fallback failed or disabled): {}", result.error());
+        throw std::runtime_error("Stream failed: " + result.error());
     }
 }
 
@@ -916,18 +971,20 @@ Result<StreamingState> AnthropicClient::streamWithState(
     // ---- Snapshot all config fields under shared_lock ----
     // The streaming lambdas outlive the lock, so they must use local copies
     // rather than reading this->apiKey_, this->model_, etc.
-    String apiKey, baseUrl, model;
+    String apiKey, baseUrl, model, basePath;
     int maxTokens;
     double temperature;
     bool thinkingEnabled, promptCachingEnabled, isCustomBaseUrl, cacheEnabled;
     int thinkingBudget, streamIdleTimeoutSec;
     std::vector<String> betaHeaders;
     std::shared_ptr<httplib::Client> httpClient;
+    ApiProtocol apiProtocol;
 
     {
         std::shared_lock lock(configMutex_);
         apiKey = apiKey_;
         baseUrl = baseUrl_;
+        basePath = basePath_;
         model = model_;
         maxTokens = maxTokens_;
         temperature = temperature_;
@@ -935,6 +992,7 @@ Result<StreamingState> AnthropicClient::streamWithState(
         thinkingBudget = thinkingBudget_;
         promptCachingEnabled = promptCachingEnabled_;
         isCustomBaseUrl = isCustomBaseUrl_;
+        apiProtocol = apiProtocol_;
         cacheEnabled = cacheEnabled_;
         streamIdleTimeoutSec = streamIdleTimeoutSec_;
         betaHeaders = betaHeaders_;
@@ -949,7 +1007,7 @@ Result<StreamingState> AnthropicClient::streamWithState(
     // For clarity, we build it under a second shared_lock acquisition.
     Json req;
     httplib::Headers headers;
-    String path = isCustomBaseUrl ? "/messages" : "/v1/messages";
+    String path = isCustomBaseUrl ? (basePath + "/messages") : "/v1/messages";
     {
         std::shared_lock lock(configMutex_);
         req = buildRequest(messages, tools);
@@ -961,6 +1019,124 @@ Result<StreamingState> AnthropicClient::streamWithState(
 
     spdlog::debug("Streaming to {}{} (model: {})", baseUrl, path, model);
     spdlog::debug("Request body size: {} bytes", body.size());
+
+    // ---- CLAUDE_CODE_DEBUG_PROMPT=1: prompt fingerprint summary ----
+    if (std::getenv("CLAUDE_CODE_DEBUG_PROMPT")) {
+        // Extract system text + location (used by both hash and summary)
+        String sysText;
+        String sysLocation = "none";
+        size_t sysChars = 0;
+        size_t sysBlocks = 0;
+        if (req.contains("system")) {
+            sysLocation = "top_level";
+            if (req["system"].is_array()) {
+                sysBlocks = req["system"].size();
+                for (auto& b : req["system"]) {
+                    if (b.contains("text")) sysChars += b["text"].get<String>().size();
+                    sysText += b.value("text", "");
+                }
+            } else {
+                sysText = req["system"].get<String>();
+                sysChars = sysText.size();
+            }
+        } else {
+            // Check if system is inside messages (OpenAI-compatible format)
+            for (auto& m : req["messages"]) {
+                if (m.contains("role") && m["role"] == "system") {
+                    sysLocation = "in_messages";
+                    if (m["content"].is_array()) {
+                        sysBlocks = m["content"].size();
+                        for (auto& b : m["content"]) {
+                            if (b.contains("text")) sysChars += b["text"].get<String>().size();
+                            sysText += b.value("text", "");
+                        }
+                    } else {
+                        sysText = m["content"].get<String>();
+                        sysChars = sysText.size();
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Compute stable hash for output-efficiency section (uses sysText from above)
+        auto oeHash = [&]() -> String {
+            auto pos = sysText.find("# Output efficiency");
+            if (pos == String::npos) return "none";
+            auto section = sysText.substr(pos, std::min(size_t(2048), sysText.size() - pos));
+            auto h = std::hash<String>{}(section);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "0x%016zx", h);
+            return buf;
+        };
+
+        // Check key v3 signatures
+        auto has = [&](const String& s) { return sysText.find(s) != String::npos; };
+        bool v3_critical = has("CRITICAL: Do NOT narrate your intent before tool calls");
+        bool v3_banned   = has("BANNED before/between tool calls");
+        bool v3_chinese  = has("继续读取");
+        bool v3_cleanup  = has("After your tool calls complete");
+        bool v3_final    = has("FINAL EXECUTION RULE");
+        bool v3_1_error  = has("ERROR CORRECTION RULE");
+
+        // Check conflicting instructions
+        bool conflict_launched = has("briefly tell the user what you launched");
+        bool conflict_updates  = has("give short updates");
+        bool conflict_explain  = has("explain your next step");
+        bool conflict_narrate  = has("narrate your progress");
+
+        size_t msgCount = 0;
+        String firstRole = "?";
+        if (req.contains("messages") && req["messages"].is_array()) {
+            msgCount = req["messages"].size();
+            if (msgCount > 0 && req["messages"][0].contains("role"))
+                firstRole = req["messages"][0]["role"].get<String>();
+        }
+
+        // Get binary path
+        String binaryPath = "?";
+        char exePath[1024] = {};
+#if defined(__APPLE__)
+        uint32_t size = sizeof(exePath);
+        if (_NSGetExecutablePath(exePath, &size) == 0) {
+            char resolved[1024];
+            if (realpath(exePath, resolved)) binaryPath = resolved;
+            else binaryPath = exePath;
+        }
+#elif defined(__linux__)
+        ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+        if (len > 0) { exePath[len] = '\0'; binaryPath = exePath; }
+#endif
+
+        fprintf(stderr, "\n══ PROMPT FINGERPRINT ══\n");
+        fprintf(stderr, "binary=%s\n", binaryPath.c_str());
+        fprintf(stderr, "provider=%s\n",
+                baseUrl.find("deepseek") != String::npos ? "deepseek" :
+                (baseUrl.find("anthropic") != String::npos ? "anthropic" : "other"));
+        fprintf(stderr, "model=%s\n", model.c_str());
+        fprintf(stderr, "is_custom_base_url=%s\n", isCustomBaseUrl ? "true" : "false");
+        fprintf(stderr, "api_protocol=%s\n",
+                apiProtocol == ApiProtocol::Anthropic ? "anthropic" : "openai-compatible");
+        fprintf(stderr, "prompt_version=v3.1\n");
+        fprintf(stderr, "has_system=%s\n", sysLocation != "none" ? "true" : "false");
+        fprintf(stderr, "system_location=%s\n", sysLocation.c_str());
+        fprintf(stderr, "system_blocks=%zu\n", sysBlocks);
+        fprintf(stderr, "system_chars=%zu\n", sysChars);
+        fprintf(stderr, "message_count=%zu\n", msgCount);
+        fprintf(stderr, "first_message_role=%s\n", firstRole.c_str());
+        fprintf(stderr, "oe_section_hash=%s\n", oeHash().c_str());
+        fprintf(stderr, "v3_critical=%s\n", v3_critical ? "true" : "false");
+        fprintf(stderr, "v3_banned=%s\n", v3_banned ? "true" : "false");
+        fprintf(stderr, "v3_chinese=%s\n", v3_chinese ? "true" : "false");
+        fprintf(stderr, "v3_cleanup=%s\n", v3_cleanup ? "true" : "false");
+        fprintf(stderr, "v3_final_execution_rule=%s\n", v3_final ? "true" : "false");
+        fprintf(stderr, "v3_1_error_correction=%s\n", v3_1_error ? "true" : "false");
+        fprintf(stderr, "conflict_launched=%s\n", conflict_launched ? "true" : "false");
+        fprintf(stderr, "conflict_updates=%s\n", conflict_updates ? "true" : "false");
+        fprintf(stderr, "conflict_explain=%s\n", conflict_explain ? "true" : "false");
+        fprintf(stderr, "conflict_narrate=%s\n", conflict_narrate ? "true" : "false");
+        fprintf(stderr, "══════════════════════\n\n");
+    }
 
     // Initialize streaming state
     StreamingState state;
@@ -1104,7 +1280,8 @@ Result<StreamingState> AnthropicClient::streamWithState(
                 else if (sseType == "error") {
                     String errMsg = "unknown streaming error";
                     if (json->contains("error")) {
-                        if ((*json)["error"].is_object() && (*json)["error"].contains("message")) {
+                        if ((*json)["error"].is_object() && (*json)["error"].contains("message")
+                            && (*json)["error"]["message"].is_string()) {
                             errMsg = (*json)["error"]["message"].get<String>();
                         } else if ((*json)["error"].is_string()) {
                             errMsg = (*json)["error"].get<String>();
@@ -1162,6 +1339,12 @@ Result<StreamingState> AnthropicClient::streamWithState(
                     // Reset the timer so we don't double-count
                     state.lastChunkTime = now;
                 }
+            }
+
+            // Check for user-requested abort (ESC / Ctrl+C)
+            if (aborted_.load(std::memory_order_acquire)) {
+                spdlog::debug("Anthropic stream aborted by user");
+                return false;
             }
 
             // Feed data to parser

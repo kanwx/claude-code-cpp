@@ -240,12 +240,15 @@ void OpenAIClient::stream(
         spdlog::debug("OpenAI stream completed successfully");
     } else {
         circuitBreaker_.recordFailure();
+        String errMsg;
         if (res) {
-            spdlog::error("OpenAI stream failed: HTTP {} body={}", res->status,
-                res->body.substr(0, 200));
+            errMsg = "HTTP " + std::to_string(res->status) + ": " + res->body.substr(0, 200);
+            spdlog::error("OpenAI stream failed: {}", errMsg);
         } else {
-            spdlog::error("OpenAI stream failed: {}", httplib::to_string(res.error()));
+            errMsg = httplib::to_string(res.error());
+            spdlog::error("OpenAI stream failed: {}", errMsg);
         }
+        throw std::runtime_error("OpenAI stream failed: " + errMsg);
     }
 }
 

@@ -192,6 +192,10 @@ add_executable(test_search_overlay test_search_overlay.cpp)
 target_link_libraries(test_search_overlay PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_search_overlay)
 
+add_executable(test_system_prompt_payload test_system_prompt_payload.cpp)
+target_link_libraries(test_system_prompt_payload PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_system_prompt_payload)
+
 add_executable(test_permission_renderer test_permission_renderer.cpp)
 target_link_libraries(test_permission_renderer PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_permission_renderer)

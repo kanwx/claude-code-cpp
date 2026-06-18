@@ -665,8 +665,9 @@ std::vector<String> SystemPromptBuilder::buildStaticSections() {
           << "You may use URLs provided by the user in their messages or local files.\n\n";
     sections.push_back(intro.str());
 
-    // System section
+    // System section (includes system reminders bullets)
     sections.push_back(getSystemSection());
+    sections.push_back(getSystemRemindersSection());
 
     // Doing tasks section (skip if output style says so)
     if (!outputStyle_.has_value() || outputStyle_->keepCodingInstructions) {
@@ -694,14 +695,26 @@ std::vector<String> SystemPromptBuilder::buildResolvedDynamicSections() {
     // managed by the section registry (cached or volatile).
     std::vector<SystemPromptSection> sections;
 
-    // Environment info (cached — changes rarely within a session)
-    sections.push_back(systemPromptSection("env_info", [this]() {
-        return getEnvironmentInfoSection(env_);
-    }));
+    // Dynamic sections in TS order (Phase 2.3):
+    // 1. session_guidance, 2. memory, 3. env_info, 4. language, 5. output_style,
+    // 6. mcp_instructions, 7. scratchpad, 8. frc, 9. summarize_tool_results, 10. proactive
 
     // Session guidance
     sections.push_back(systemPromptSection("session_guidance", [this]() {
         return getSessionGuidanceSection(buildContext());
+    }));
+
+    // Memory section — conditional on MEMORY.md existence
+    sections.push_back(DANGEROUS_uncachedSystemPromptSection("memory",
+        [this]() -> String {
+            if (memoryPath_.empty()) return "";
+            if (!std::filesystem::exists(memoryPath_)) return "";
+            return getMemorySection();
+        }, "memory file may change between turns"));
+
+    // Environment info (cached — changes rarely within a session)
+    sections.push_back(systemPromptSection("env_info", [this]() {
+        return getEnvironmentInfoSection(env_);
     }));
 
     // Language
@@ -723,24 +736,6 @@ std::vector<String> SystemPromptBuilder::buildResolvedDynamicSections() {
         "MCP servers connect/disconnect between turns"
     ));
 
-    // System reminders
-    sections.push_back(systemPromptSection("system_reminders", [this]() {
-        return getSystemRemindersSection();
-    }));
-
-    // Tool result summarization
-    sections.push_back(systemPromptSection("summarize_tool_results", [this]() {
-        return getToolResultSummarizationSection();
-    }));
-
-    // Memory section — conditional on MEMORY.md existence
-    sections.push_back(DANGEROUS_uncachedSystemPromptSection("memory",
-        [this]() -> String {
-            if (memoryPath_.empty()) return "";
-            if (!std::filesystem::exists(memoryPath_)) return "";
-            return getMemorySection();
-        }, "memory file may change between turns"));
-
     // Scratchpad section
     sections.push_back(systemPromptSection("scratchpad", [this]() -> String {
         return getScratchpadSection();
@@ -749,6 +744,11 @@ std::vector<String> SystemPromptBuilder::buildResolvedDynamicSections() {
     // FRC (function result clearing) section
     sections.push_back(systemPromptSection("frc", [this]() -> String {
         return getFrcSection();
+    }));
+
+    // Tool result summarization
+    sections.push_back(systemPromptSection("summarize_tool_results", [this]() {
+        return getToolResultSummarizationSection();
     }));
 
     // Proactive section (if active)

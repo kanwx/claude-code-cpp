@@ -27,6 +27,24 @@ struct ContentBlock {
 
     Type type = UserMessage;
 
+    static const char* typeName(Type t) {
+        switch (t) {
+            case UserMessage:     return "UserMessage";
+            case AnswerText:      return "AnswerText";
+            case ThinkingBlock:   return "ThinkingBlock";
+            case ToolProgress:    return "ToolProgress";
+            case ToolResult:      return "ToolResult";
+            case ToolGroup:       return "ToolGroup";
+            case AgentProgress:   return "AgentProgress";
+            case ErrorMessage:    return "ErrorMessage";
+            case SystemMessage:   return "SystemMessage";
+            case CompactBoundary: return "CompactBoundary";
+            case CollapsedGroup:  return "CollapsedGroup";
+            case TurnDuration:    return "TurnDuration";
+        }
+        return "Unknown";
+    }
+
     String text;           // Primary text content (for UserMessage, AnswerText, ThinkingBlock, ErrorMessage, SystemMessage)
     String detailText;     // Secondary detail (e.g. thinking signature, error context)
     String toolName;       // Tool name (for ToolProgress, ToolResult, ToolGroup, AgentProgress, CollapsedGroup)
