@@ -371,8 +371,14 @@ void setupCallbacks(AgentLoop& loop,
 
     auto postProcessor = std::make_shared<AnswerPostProcessor>();  // B4
 
+    // Track whether TextPartial already emitted text for the current paragraph
+    // in ANSI/headless mode.  TextParagraph carries the FULL paragraph text,
+    // so if we already printed TextPartial deltas we must not re-emit.
+    auto ansiPrintedPartial = std::make_shared<bool>(false);
+
     streamBuffer->setDisplayCallback(
-        [useFtxui, ftxuiRepl, postProcessor, headlessAccumulator, spinner](DisplayEvent&& event) {
+        [useFtxui, ftxuiRepl, postProcessor, headlessAccumulator, spinner,
+         ansiPrintedPartial](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
                 // B4: Route through AnswerPostProcessor for tool grouping/reordering.
                 // Reset processor on AnswerStart to clear stale state from
@@ -413,12 +419,26 @@ void setupCallbacks(AgentLoop& loop,
                             // AnswerText from appearing on the same line as the
                             // spinner frame.
                             if (spinner) spinner->stop();
+                            *ansiPrintedPartial = false;
                             std::cout << "\n" << std::flush;
                             break;
 
-                        case DisplayEventType::TextParagraph:
                         case DisplayEventType::TextPartial:
                             std::cout << event.text << std::flush;
+                            *ansiPrintedPartial = true;
+                            break;
+
+                        case DisplayEventType::TextParagraph:
+                            // TextParagraph carries the full paragraph text.
+                            // If TextPartial already emitted the content as
+                            // incremental deltas, skip re-emission to avoid
+                            // duplication.  Fallback: if no TextPartial fired
+                            // (short paragraph), emit the full text here.
+                            if (!*ansiPrintedPartial) {
+                                std::cout << event.text << std::flush;
+                            }
+                            std::cout << "\n" << std::flush;
+                            *ansiPrintedPartial = false;
                             break;
 
                         case DisplayEventType::ThinkingBlock:
