@@ -30,10 +30,9 @@ PermissionChoice FtxuiRepl::promptPermission(const String& toolName, const Strin
 
         // Set progress=Permission on the last matching tool_use message
         // so the UI shows "Waiting for permission…" while the prompt is active
-        for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-            if (it->type == DisplayMessage::Type::AssistantToolUse &&
-                it->toolUse.toolName == permissionToolName_) {
-                it->toolUse.progress = ToolProgress::Permission;
+        for (auto it = contentBlocks_.rbegin(); it != contentBlocks_.rend(); ++it) {
+            if (it->type == ContentBlock::ToolProgress &&
+                it->toolName == permissionToolName_) {
                 break;
             }
         }

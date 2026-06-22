@@ -49,6 +49,11 @@ public:
 
     bool shouldDefer() const override { return true; }
     String searchHint() const override { return "search the web for information"; }
+
+    bool isCollapsible() const override { return true; }
+    bool isSearchTool() const override { return true; }
+    ToolResultSummary renderToolResult(const String& result, bool isError,
+                            bool isCancelled, bool isRejected) const override;
 };
 
 } // namespace claude

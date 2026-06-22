@@ -7,7 +7,6 @@
 #include <claude/ui/components/AssistantTextComponent.hpp>
 #include <claude/ui/components/AssistantThinkingComponent.hpp>
 #include <claude/ui/components/ToolUseComponent.hpp>
-#include <claude/ui/components/ToolResultComponent.hpp>
 #include <claude/ui/components/SystemInfoComponent.hpp>
 #include <claude/ui/components/SystemErrorComponent.hpp>
 #include <claude/ui/components/TurnDurationComponent.hpp>
@@ -15,11 +14,6 @@
 #include <claude/ui/components/CollapsedReadSearchComponent.hpp>
 #include <claude/ui/components/GroupedToolUseComponent.hpp>
 #include <claude/ui/components/AgentProgressComponent.hpp>
-#include <claude/ui/components/UserToolSuccessComponent.hpp>
-#include <claude/ui/components/UserToolErrorComponent.hpp>
-#include <claude/ui/components/UserToolRejectedComponent.hpp>
-#include <claude/ui/components/UserToolCanceledComponent.hpp>
-#include <claude/ui/components/AssistantRedactedThinkingComponent.hpp>
 #include <claude/ui/ToolRendererRegistry.hpp>
 
 #include <ftxui/dom/elements.hpp>
@@ -92,10 +86,13 @@ ftxui::Element RenderMessageList(const std::vector<DisplayMessage>* messages,
                 ToolUseComponent c(msg, localCtx);
                 return c.OnRender();
             }
-            case DisplayMessage::Type::UserToolResult: {
-                ToolResultComponent c(msg, localCtx);
-                return c.OnRender();
-            }
+            case DisplayMessage::Type::UserToolSuccess:
+            case DisplayMessage::Type::UserToolError:
+            case DisplayMessage::Type::UserToolRejected:
+            case DisplayMessage::Type::UserToolCanceled:
+            case DisplayMessage::Type::UserToolResult:
+            case DisplayMessage::Type::AssistantRedactedThinking:
+                return paragraph(msg.text) | dim;
             case DisplayMessage::Type::SystemInfo: {
                 SystemInfoComponent c(msg, localCtx);
                 return c.OnRender();
@@ -122,26 +119,6 @@ ftxui::Element RenderMessageList(const std::vector<DisplayMessage>* messages,
             }
             case DisplayMessage::Type::AgentProgress: {
                 AgentProgressComponent c(msg, localCtx);
-                return c.OnRender();
-            }
-            case DisplayMessage::Type::UserToolSuccess: {
-                UserToolSuccessComponent c(msg, localCtx);
-                return c.OnRender();
-            }
-            case DisplayMessage::Type::UserToolError: {
-                UserToolErrorComponent c(msg, localCtx);
-                return c.OnRender();
-            }
-            case DisplayMessage::Type::UserToolRejected: {
-                UserToolRejectedComponent c(msg, localCtx);
-                return c.OnRender();
-            }
-            case DisplayMessage::Type::UserToolCanceled: {
-                UserToolCanceledComponent c(msg, localCtx);
-                return c.OnRender();
-            }
-            case DisplayMessage::Type::AssistantRedactedThinking: {
-                AssistantRedactedThinkingComponent c(msg, localCtx);
                 return c.OnRender();
             }
             case DisplayMessage::Type::PermissionPrompt:

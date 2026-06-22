@@ -76,25 +76,27 @@ void FtxuiRepl::refreshLoop() {
             }
 
             if (runningCount > 0 && !isStreaming_) {
-                for (auto& m : progressMsgs) {
-                    m.messageId = MessageIdGenerator::next();
-                }
                 screen_->Post([this, msgs = std::move(progressMsgs)]() {
-                    messages_.erase(
-                        std::remove_if(messages_.begin(), messages_.end(),
-                            [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
-                        messages_.end()
+                    // Remove stale AgentProgress blocks, push fresh ones
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                            [](const ContentBlock& b) { return b.type == ContentBlock::AgentProgress; }),
+                        contentBlocks_.end()
                     );
                     for (auto& m : msgs) {
-                        messages_.push_back(std::move(m));
+                        ContentBlock cb;
+                        cb.type = ContentBlock::AgentProgress;
+                        cb.toolName = m.permissionToolName;
+                        cb.text = m.text;
+                        contentBlocks_.push_back(std::move(cb));
                     }
                 });
             } else if (runningCount == 0) {
                 screen_->Post([this]() {
-                    messages_.erase(
-                        std::remove_if(messages_.begin(), messages_.end(),
-                            [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
-                        messages_.end()
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                            [](const ContentBlock& b) { return b.type == ContentBlock::AgentProgress; }),
+                        contentBlocks_.end()
                     );
                 });
             }
@@ -127,38 +129,23 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
         streamingText_.clear();
         streamingRenderer_.reset();
 
-        // If AnswerEnd didn't fire (error case), commit via pipeline's StreamEnd
-        if (isStreaming_) {
-            StreamEvent endEvent;
-            endEvent.type = StreamEvent::Type::StreamEnd;
-            endEvent.success = success;
-            endEvent.text = err;
-            if (messagePipeline_.processEvent(endEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-            }
-        }
-
-        if (!success && !err.empty() && !isStreaming_) {
-            StreamEvent errEvent;
-            errEvent.type = StreamEvent::Type::ErrorMessage;
-            errEvent.text = err;
-            if (messagePipeline_.processEvent(errEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-            }
-        }
-
         isStreaming_ = false;
         isThinking_ = false;
 
+        // Push stream-end markers as content blocks (old pipeline API)
+        if (!success && !err.empty()) {
+            ContentBlock cb;
+            cb.type = ContentBlock::ErrorMessage;
+            cb.text = err;
+            contentBlocks_.push_back(std::move(cb));
+        }
         if (success && durationMs > 2000) {
             int seconds = durationMs / 1000;
             String tmsg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-            StreamEvent durEvent;
-            durEvent.type = StreamEvent::Type::TurnDuration;
-            durEvent.text = std::move(tmsg);
-            if (messagePipeline_.processEvent(durEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-            }
+            ContentBlock cb;
+            cb.type = ContentBlock::TurnDuration;
+            cb.text = std::move(tmsg);
+            contentBlocks_.push_back(std::move(cb));
         }
 
         stopRefreshThread();

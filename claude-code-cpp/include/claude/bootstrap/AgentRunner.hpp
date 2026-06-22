@@ -22,6 +22,7 @@ class CommandRegistry;
 class McpManager;
 class Spinner;
 class FtxuiRepl;
+class HeadlessContentBlockAccumulator;
 
 namespace agent_runner {
 
@@ -77,6 +78,7 @@ void setupCallbacks(AgentLoop& loop,
                      bool useFtxui,
                      Spinner* spinner,
                      FtxuiRepl* ftxuiRepl,
+                     HeadlessContentBlockAccumulator* headlessAccumulator,
                      std::function<PermissionChoice(const PermissionRequest&)> permissionCallback);
 
 /// Resume the most recent session from ~/.claude/sessions/ into the given AgentLoop.
