@@ -19,7 +19,7 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
                 return String(AnsiStyle::DIM) + "Thinking...\n" + block.detailText +
                        "\nThinking" + AnsiStyle::RESET;
             }
-            return String(AnsiStyle::DIM) + "Thinking  (Ctrl+O to expand)" + AnsiStyle::RESET;
+            return String(AnsiStyle::DIM) + "Thinking" + AnsiStyle::RESET;
 
         case ContentBlock::ToolProgress:
             return String(AnsiStyle::DIM) + "  \xe2\x8e\xbf \xe2\x97\x8f " + block.activity + "..." + AnsiStyle::RESET;
@@ -47,21 +47,13 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
                 result += String(AnsiStyle::DIM) + displayText + AnsiStyle::RESET;
             }
 
-            if (!block.expanded && !dm.isError && !dm.isCancelled && !dm.isRejected) {
-                if (!dm.expandHint.empty()) {
-                    result += "  " + dm.expandHint;
-                } else {
-                    result += "  [Ctrl+O]";
-                }
-            }
+            // [Ctrl+O] hints are FTXUI-only; non-FTXUI renderers omit them.
             return result;
         }
 
         case ContentBlock::ToolGroup: {
             String result = "  \xe2\x8e\xbf " + String(AnsiStyle::DIM) + block.summary.primaryText + AnsiStyle::RESET;
-            if (!block.expanded) {
-                result += "  [Ctrl+O]";
-            } else {
+            if (block.expanded) {
                 for (auto& child : block.children) {
                     result += "\n    " + renderAnsi(child);
                 }
@@ -79,9 +71,7 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
         case ContentBlock::CollapsedGroup: {
             String result = "  \xe2\x8e\xbf " + String(AnsiStyle::DIM) +
                            block.summary.primaryText + AnsiStyle::RESET;
-            if (!block.expanded) {
-                result += "  [Ctrl+O]";
-            } else {
+            if (block.expanded) {
                 for (auto& child : block.children) {
                     result += "\n    \xe2\x94\x9c\xe2\x94\x80 " + renderAnsi(child);
                 }

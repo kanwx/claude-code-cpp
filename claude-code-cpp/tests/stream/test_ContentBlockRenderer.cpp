@@ -41,7 +41,8 @@ TEST_CASE("ContentBlockAnsi renders ToolGroup summary", "[renderer]") {
     };
     String rendered = ContentBlockRenderer::renderAnsi(group);
     CHECK(rendered.find("Read 3 files") != String::npos);
-    CHECK(rendered.find("Ctrl+O") != String::npos);
+    // [Ctrl+O] hints are FTXUI-only; non-FTXUI renderers omit them
+    CHECK(rendered.find("Ctrl+O") == String::npos);
 }
 
 TEST_CASE("ContentBlockAnsi renders ErrorMessage", "[renderer]") {
@@ -53,7 +54,61 @@ TEST_CASE("ContentBlockAnsi renders ErrorMessage", "[renderer]") {
 TEST_CASE("ContentBlock ToolResult with expand hint", "[renderer]") {
     ContentBlock block{.type = ContentBlock::ToolResult, .summary = ToolResultSummary::success("Read 42 lines")};
     String rendered = ContentBlockRenderer::renderAnsi(block);
-    CHECK(rendered.find("Ctrl+O") != String::npos);
+    // [Ctrl+O] hints are FTXUI-only; non-FTXUI renderers omit them even if expandHint is set
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+// ---- [Ctrl+O] hint leak prevention tests ----
+
+TEST_CASE("renderAnsi ThinkingBlock omits Ctrl+O", "[ctrl_o_leak]") {
+    ContentBlock block{.type = ContentBlock::ThinkingBlock, .detailText = "Deep thoughts"};
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+    CHECK(rendered.find("ctrl+o") == String::npos);
+}
+
+TEST_CASE("renderAnsi ToolResult omits Ctrl+O", "[ctrl_o_leak]") {
+    ContentBlock block{.type = ContentBlock::ToolResult, .summary = ToolResultSummary::success("Read 42 lines")};
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderAnsi ToolGroup omits Ctrl+O", "[ctrl_o_leak]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolGroup,
+        .summary = ToolResultSummary::success("Called 3 tools"),
+        .children = {}
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderAnsi CollapsedGroup omits Ctrl+O", "[ctrl_o_leak]") {
+    ContentBlock block{
+        .type = ContentBlock::CollapsedGroup,
+        .summary = ToolResultSummary::success("Searched 3 patterns")
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderPlain omits Ctrl+O", "[ctrl_o_leak]") {
+    ContentBlock block{.type = ContentBlock::ToolResult, .summary = ToolResultSummary::success("Read 42 lines")};
+    String rendered = ContentBlockRenderer::renderPlain(block);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderAnsi ignores expandHint with Ctrl+O", "[ctrl_o_leak]") {
+    // expandHint contains [Ctrl+O] but renderAnsi must not emit it
+    ContentBlock block{
+        .type = ContentBlock::ToolResult,
+        .summary = ToolResultSummary::success("Read 42 lines", true, "", "[Ctrl+O to expand]")
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Read 42 lines") != String::npos);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+    // expandHint must still be preserved on the block metadata for FTXUI use
+    CHECK(block.summary.expandHint == "[Ctrl+O to expand]");
 }
 
 // ---- ToolResultFormatter tests ----
