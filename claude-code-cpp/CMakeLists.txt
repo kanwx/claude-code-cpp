@@ -475,6 +475,7 @@ set(UI_SOURCES
     src/ui/FtxuiPermission.cpp
     src/ui/FtxuiRender.cpp
     src/ui/FtxuiMarkdown.cpp
+    src/ui/UiMessageTypes.cpp
     src/ui/VirtualScroll.cpp
     src/ui/OffscreenFreeze.cpp
     src/ui/components/StatusBarRenderer.cpp
