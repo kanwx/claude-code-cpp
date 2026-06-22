@@ -72,8 +72,12 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
             String result = "  \xe2\x8e\xbf " + String(AnsiStyle::DIM) +
                            block.summary.primaryText + AnsiStyle::RESET;
             if (block.expanded) {
-                for (auto& child : block.children) {
-                    result += "\n    \xe2\x94\x9c\xe2\x94\x80 " + renderAnsi(child);
+                for (size_t i = 0; i < block.children.size(); ++i) {
+                    bool last = (i == block.children.size() - 1);
+                    const char* connector = last
+                        ? "\n    \xe2\x94\x94\xe2\x94\x80 "
+                        : "\n    \xe2\x94\x9c\xe2\x94\x80 ";
+                    result += connector + renderAnsi(block.children[i]);
                 }
             }
             return result;

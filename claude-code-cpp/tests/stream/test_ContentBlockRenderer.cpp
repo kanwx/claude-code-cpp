@@ -164,3 +164,95 @@ TEST_CASE("ToolResultFormatter handles error state", "[ToolResultFormatter]") {
     REQUIRE(dm.isError);
     REQUIRE(dm.errorText == "Command failed: permission denied");
 }
+
+// ---- Tree connector tests (CollapsedGroup expanded) ----
+
+// UTF-8 bytes for box-drawing chars:
+//   ├─ = \xe2\x94\x9c\xe2\x94\x80
+//   └─ = \xe2\x94\x94\xe2\x94\x80
+
+TEST_CASE("renderAnsi CollapsedGroup single child uses └─ only", "[tree_connector]") {
+    ContentBlock block{
+        .type = ContentBlock::CollapsedGroup,
+        .summary = ToolResultSummary::success("Searched 1 file"),
+        .expanded = true,
+        .children = {
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("42 lines")},
+        }
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // Single child must use └─, not ├─
+    CHECK(rendered.find("\xe2\x94\x94\xe2\x94\x80") != String::npos);  // └─ present
+    CHECK(rendered.find("\xe2\x94\x9c\xe2\x94\x80") == String::npos);  // ├─ absent
+}
+
+TEST_CASE("renderAnsi CollapsedGroup two children correct connectors", "[tree_connector]") {
+    ContentBlock block{
+        .type = ContentBlock::CollapsedGroup,
+        .summary = ToolResultSummary::success("Searched 2 patterns"),
+        .expanded = true,
+        .children = {
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Grep", .summary = ToolResultSummary::success("14 matches")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("42 lines")},
+        }
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // Both connectors must appear
+    CHECK(rendered.find("\xe2\x94\x9c\xe2\x94\x80") != String::npos);  // ├─ for first child
+    CHECK(rendered.find("\xe2\x94\x94\xe2\x94\x80") != String::npos);  // └─ for last child
+}
+
+TEST_CASE("renderAnsi CollapsedGroup three children middle gets ├─", "[tree_connector]") {
+    ContentBlock block{
+        .type = ContentBlock::CollapsedGroup,
+        .summary = ToolResultSummary::success("Searched 3 patterns"),
+        .expanded = true,
+        .children = {
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Grep", .summary = ToolResultSummary::success("14 matches")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Grep", .summary = ToolResultSummary::success("3 matches")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("42 lines")},
+        }
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // ├─ appears twice (first two children), └─ once (last)
+    size_t branchPos = rendered.find("\xe2\x94\x9c\xe2\x94\x80");  // ├─
+    CHECK(branchPos != String::npos);
+    size_t secondBranch = rendered.find("\xe2\x94\x9c\xe2\x94\x80", branchPos + 3);
+    CHECK(secondBranch != String::npos);  // second ├─ for middle child
+    // └─ appears after the last ├─
+    CHECK(rendered.find("\xe2\x94\x94\xe2\x94\x80", secondBranch) != String::npos);
+}
+
+TEST_CASE("renderPlain CollapsedGroup preserves tree connectors sans Ctrl+O", "[tree_connector]") {
+    ContentBlock block{
+        .type = ContentBlock::CollapsedGroup,
+        .summary = ToolResultSummary::success("Searched 2 files"),
+        .expanded = true,
+        .children = {
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("42 lines")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Grep", .summary = ToolResultSummary::success("14 matches")},
+        }
+    };
+    String rendered = ContentBlockRenderer::renderPlain(block);
+    CHECK(rendered.find("\xe2\x94\x9c\xe2\x94\x80") != String::npos);  // ├─ present
+    CHECK(rendered.find("\xe2\x94\x94\xe2\x94\x80") != String::npos);  // └─ present
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderAnsi CollapsedGroup collapsed omits connectors", "[tree_connector]") {
+    ContentBlock block{
+        .type = ContentBlock::CollapsedGroup,
+        .summary = ToolResultSummary::success("Searched 3 patterns"),
+        .expanded = false,
+        .children = {
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Grep", .summary = ToolResultSummary::success("14 matches")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Grep", .summary = ToolResultSummary::success("3 matches")},
+            ContentBlock{.type = ContentBlock::ToolResult, .toolName = "Read", .summary = ToolResultSummary::success("42 lines")},
+        }
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // Collapsed: no tree connectors at all
+    CHECK(rendered.find("\xe2\x94\x9c\xe2\x94\x80") == String::npos);  // ├─ absent
+    CHECK(rendered.find("\xe2\x94\x94\xe2\x94\x80") == String::npos);  // └─ absent
+    CHECK(rendered.find("Searched 3 patterns") != String::npos);       // summary present
+}
