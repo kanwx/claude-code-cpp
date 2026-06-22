@@ -1,6 +1,7 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
 #include "claude/console/AnsiStyle.hpp"
+#include "claude/console/AnsiSuppress.hpp"
 #include <sstream>
 
 namespace claude {
@@ -105,6 +106,10 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
 
 String ContentBlockRenderer::renderFtxuiText(const ContentBlock& block) {
     return renderAnsi(block);
+}
+
+String ContentBlockRenderer::renderPlain(const ContentBlock& block) {
+    return stripAnsi(renderAnsi(block));
 }
 
 String ContentBlockRenderer::toolBadge(const String& toolName) {

@@ -18,6 +18,9 @@ target_link_libraries(test_tool PRIVATE claude_core Catch2::Catch2WithMain)
 add_executable(test_permission test_permission.cpp)
 target_link_libraries(test_permission PRIVATE claude_core Catch2::Catch2WithMain)
 
+add_executable(test_ansi_suppress test_ansi_suppress.cpp)
+target_link_libraries(test_ansi_suppress PRIVATE claude_core Catch2::Catch2WithMain)
+
 add_executable(test_agent_loop test_agent_loop.cpp)
 target_link_libraries(test_agent_loop PRIVATE claude_core Catch2::Catch2WithMain)
 
@@ -101,6 +104,7 @@ target_link_libraries(test_prompt_command PRIVATE claude_core Catch2::Catch2With
 include(Catch)
 catch_discover_tests(test_tool)
 catch_discover_tests(test_permission)
+catch_discover_tests(test_ansi_suppress)
 catch_discover_tests(test_agent_loop)
 catch_discover_tests(test_compact)
 catch_discover_tests(test_claude_md)

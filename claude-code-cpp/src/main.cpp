@@ -25,6 +25,7 @@
 #include <claude/config/AppConfig.hpp>
 #include <claude/console/Spinner.hpp>
 #include <claude/console/AnsiStyle.hpp>
+#include <claude/console/AnsiSuppress.hpp>
 #include <claude/console/TerminalCapabilities.hpp>
 #include <claude/console/ThemeSystem.hpp>
 #include <claude/console/PermissionPromptRenderer.hpp>
@@ -980,13 +981,21 @@ private:
 
         if (!result) {
             if (result.error() == "Cancelled by user") {
-                std::cout << "\n" << AnsiStyle::DIM << "Cancelled" << AnsiStyle::RESET << "\n";
+                if (supportsAnsiStdout()) {
+                    std::cout << "\n" << AnsiStyle::DIM << "Cancelled" << AnsiStyle::RESET << "\n";
+                } else {
+                    std::cout << "\nCancelled\n";
+                }
             } else {
                 // Error message with proper formatting
-                String errorMsg = String(AnsiStyle::RED) + "Error: " + result.error() + AnsiStyle::RESET;
-                std::cout << "\n"
-                          << MessageResponse::format(errorMsg)
-                          << "\n";
+                String errorMsg = supportsAnsiStdout()
+                    ? String(AnsiStyle::RED) + "Error: " + result.error() + AnsiStyle::RESET
+                    : "Error: " + result.error();
+                String formatted = MessageResponse::format(errorMsg);
+                if (!supportsAnsiStdout()) {
+                    formatted = stripAnsi(formatted);
+                }
+                std::cout << "\n" << formatted << "\n";
             }
         }
 
@@ -997,7 +1006,11 @@ private:
         auto turnEnd = std::chrono::steady_clock::now();
         double turnDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
             turnEnd - spinnerStart_).count() / 1000.0;
-        std::cout << TurnDurationRenderer::render(turnDuration, tracker.getTotalTokens()) << "\n";
+        String durationStr = TurnDurationRenderer::render(turnDuration, tracker.getTotalTokens());
+        if (!supportsAnsiStdout()) {
+            durationStr = stripAnsi(durationStr);
+        }
+        std::cout << durationStr << "\n";
 
         // Flush headless metrics before cleanup. std::_Exit() in main() skips
         // destructors, so we must write metrics explicitly at the end of each

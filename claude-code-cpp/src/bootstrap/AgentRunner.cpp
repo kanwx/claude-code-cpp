@@ -17,6 +17,7 @@
 #include <claude/permission/RuleEngine.hpp>
 #include <claude/permission/PermissionSettings.hpp>
 #include <claude/console/AnsiStyle.hpp>
+#include <claude/console/AnsiSuppress.hpp>
 #include <claude/console/MessageResponse.hpp>
 #include <claude/console/Spinner.hpp>
 #include <claude/context/ContextInjector.hpp>
@@ -336,12 +337,16 @@ void setupCallbacks(AgentLoop& loop,
     });
 
     // TAOR loop continue callback
-    loop.setOnLoopContinue([useFtxui](int iteration, int maxIterations) {
+    loop.setOnLoopContinue([useFtxui](int iteration, int /*maxIterations*/) {
         if (!useFtxui) {
-            std::cout << "\n\033[s"
-                      << AnsiStyle::DIM << "  ⟳ Continuing... (turn "
-                      << iteration << ")" << AnsiStyle::RESET
-                      << "\033[u" << std::flush;
+            if (supportsAnsiStdout()) {
+                std::cout << "\n\033[s"
+                          << AnsiStyle::DIM << "  ⟳ Continuing... (turn "
+                          << iteration << ")" << AnsiStyle::RESET
+                          << "\033[u" << std::flush;
+            } else {
+                std::cout << "\n  ⟳ Continuing... (turn " << iteration << ")\n" << std::flush;
+            }
         }
     });
 
@@ -357,8 +362,12 @@ void setupCallbacks(AgentLoop& loop,
         } else
 #endif
         {
-            std::cout << "\n" << AnsiStyle::YELLOW << "⚠ " << msg
-                      << AnsiStyle::RESET << "\n";
+            if (supportsAnsiStdout()) {
+                std::cout << "\n" << AnsiStyle::YELLOW << "⚠ " << msg
+                          << AnsiStyle::RESET << "\n";
+            } else {
+                std::cout << "\n⚠ " << msg << "\n";
+            }
         }
     });
 
@@ -457,8 +466,13 @@ void setupCallbacks(AgentLoop& loop,
                             cb.type = ContentBlock::ToolResult;
                             cb.toolName = event.toolName;
                             cb.summary = event.summary;
-                            std::cout << ContentBlockRenderer::renderAnsi(cb)
-                                      << "\n" << std::flush;
+                            if (supportsAnsiStdout()) {
+                                std::cout << ContentBlockRenderer::renderAnsi(cb)
+                                          << "\n" << std::flush;
+                            } else {
+                                std::cout << ContentBlockRenderer::renderPlain(cb)
+                                          << "\n" << std::flush;
+                            }
                             break;
                         }
                         case DisplayEventType::ToolGroup: {
@@ -466,15 +480,24 @@ void setupCallbacks(AgentLoop& loop,
                             cb.type = ContentBlock::ToolGroup;
                             cb.toolName = event.toolName;
                             cb.summary = event.summary;
-                            std::cout << ContentBlockRenderer::renderAnsi(cb)
-                                      << "\n" << std::flush;
+                            if (supportsAnsiStdout()) {
+                                std::cout << ContentBlockRenderer::renderAnsi(cb)
+                                          << "\n" << std::flush;
+                            } else {
+                                std::cout << ContentBlockRenderer::renderPlain(cb)
+                                          << "\n" << std::flush;
+                            }
                             break;
                         }
                         case DisplayEventType::Error:
                             if (spinner) spinner->stop();
-                            std::cout << "\n" << AnsiStyle::RED
-                                      << "✕ " << event.text
-                                      << AnsiStyle::RESET << "\n" << std::flush;
+                            if (supportsAnsiStdout()) {
+                                std::cout << "\n" << AnsiStyle::RED
+                                          << "✕ " << event.text
+                                          << AnsiStyle::RESET << "\n" << std::flush;
+                            } else {
+                                std::cout << "\n✕ " << event.text << "\n" << std::flush;
+                            }
                             break;
 
                         case DisplayEventType::AnswerEnd:
