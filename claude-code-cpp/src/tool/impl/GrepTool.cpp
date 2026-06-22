@@ -8,13 +8,41 @@
 namespace claude {
 
 String GrepTool::cachedRgPath_;
+bool GrepTool::forceUseFallbackForTest = false;
+String GrepTool::ripgrepPathOverride;
 
 String GrepTool::inputSchema() const {
     return R"schema({"type":"object","properties":{"pattern":{"type":"string","description":"The regular expression pattern to search for"},"path":{"type":"string","description":"The directory to search in"},"glob":{"type":"string","description":"Glob pattern to filter files"},"type":{"type":"string","description":"File type filter (e.g. js, py, rust, go, java)"},"output_mode":{"type":"string","enum":["content","files_with_matches","count"],"description":"Output format"},"head_limit":{"type":"integer","description":"Limit output to first N results (default 250)"}},"required":["pattern"]})schema";
 }
 
 bool GrepTool::hasRipgrep() {
+    if (forceUseFallbackForTest) return false;
+
+    if (!ripgrepPathOverride.empty()) {
+        if (std::filesystem::exists(ripgrepPathOverride)) {
+            cachedRgPath_ = ripgrepPathOverride;
+            spdlog::debug("Found ripgrep (override) at: {}", cachedRgPath_);
+            return true;
+        }
+        return false;
+    }
+
     if (!cachedRgPath_.empty()) return true;
+
+    // 尝试常见路径（按优先级）
+    static const char* commonPaths[] = {
+        "/opt/homebrew/bin/rg",       // Homebrew ARM Mac
+        "/usr/local/bin/rg",          // Homebrew Intel Mac / Linux
+        "/usr/bin/rg",                // Linux package
+        nullptr
+    };
+    for (const char** p = commonPaths; *p; ++p) {
+        if (std::filesystem::exists(*p)) {
+            cachedRgPath_ = *p;
+            spdlog::debug("Found ripgrep at: {}", cachedRgPath_);
+            return true;
+        }
+    }
 
     // 尝试 which/whereis
     {
@@ -27,25 +55,14 @@ bool GrepTool::hasRipgrep() {
                 while (!cachedRgPath_.empty() && (cachedRgPath_.back() == '\n' || cachedRgPath_.back() == '\r'))
                     cachedRgPath_.pop_back();
                 pclose(pipe);
-                spdlog::debug("Found ripgrep at: {}", cachedRgPath_);
-                return true;
+                if (std::filesystem::exists(cachedRgPath_)) {
+                    spdlog::debug("Found ripgrep at: {}", cachedRgPath_);
+                    return true;
+                }
+                cachedRgPath_.clear();
+            } else {
+                pclose(pipe);
             }
-            pclose(pipe);
-        }
-    }
-
-    // 尝试常见路径
-    static const char* commonPaths[] = {
-        "/usr/local/bin/rg",
-        "/usr/bin/rg",
-        "/opt/homebrew/bin/rg",
-        nullptr
-    };
-    for (const char** p = commonPaths; *p; ++p) {
-        if (std::filesystem::exists(*p)) {
-            cachedRgPath_ = *p;
-            spdlog::debug("Found ripgrep at: {}", cachedRgPath_);
-            return true;
         }
     }
 
@@ -147,6 +164,48 @@ String GrepTool::executeWithRipgrep(const Json& input, ToolContext& context) {
     return result;
 }
 
+bool GrepTool::isLiteralPattern(const String& pattern) {
+    for (char c : pattern) {
+        switch (c) {
+            case '^': case '$': case '\\': case '.': case '*': case '+':
+            case '?': case '(': case ')': case '[': case ']': case '{':
+            case '}': case '|':
+                return false;
+            default: break;
+        }
+    }
+    return true;
+}
+
+bool GrepTool::isRegexPatternSafe(const String& pattern) {
+    // 1. Length guard: excessively long patterns can cause issues
+    if (pattern.size() > 500) return false;
+
+    // 2. Detect nested quantifier groups: (.+)+, (.*)+, (a+)+, ([^x]+)+, etc.
+    //    Simple scan for ") +" or ") *" or ")+" or ")*" patterns
+    for (size_t i = 0; i + 1 < pattern.size(); ++i) {
+        if (pattern[i] == ')' && i + 1 < pattern.size()) {
+            char next = pattern[i + 1];
+            if (next == '+' || next == '*') return false;
+            // also check ")  +" with whitespace
+            size_t j = i + 1;
+            while (j < pattern.size() && pattern[j] == ' ') ++j;
+            if (j < pattern.size() && (pattern[j] == '+' || pattern[j] == '*')) return false;
+        }
+    }
+
+    // 3. Repeated wildcard: .*.* or .+.+
+    if (pattern.find(".*.*") != String::npos) return false;
+    if (pattern.find(".+.+") != String::npos) return false;
+
+    // 4. Excessive alternation branches can cause state explosion
+    int pipeCount = 0;
+    for (char c : pattern) if (c == '|') pipeCount++;
+    if (pipeCount > 50) return false;
+
+    return true;
+}
+
 String GrepTool::executeWithRegex(const Json& input, ToolContext& context) {
     String pattern = input["pattern"];
     String searchPath = input.value("path", context.workDir.string());
@@ -154,15 +213,58 @@ String GrepTool::executeWithRegex(const Json& input, ToolContext& context) {
     String outputMode = input.value("output_mode", "content");
     int headLimit = input.value("head_limit", 250);
 
+    // ---- Safety gate: reject dangerous patterns when rg is unavailable ----
+    if (!isRegexPatternSafe(pattern)) {
+        return "Grep pattern is too complex for the built-in fallback regex engine. "
+               "Please install ripgrep (`brew install ripgrep` / `apt install ripgrep`) "
+               "or simplify the search pattern (avoid nested quantifiers like (.+)+ "
+               "or .*.*).";
+    }
+
+    // ---- Literal fast path: avoid std::regex entirely ----
+    bool useLiteral = isLiteralPattern(pattern);
+
     std::filesystem::path basePath(searchPath);
-    std::regex re(pattern, std::regex::ECMAScript);
+    std::unique_ptr<std::regex> re;
+    if (!useLiteral) {
+        try {
+            re = std::make_unique<std::regex>(pattern, std::regex::ECMAScript);
+        } catch (const std::regex_error& e) {
+            return String("Regex error: ") + e.what() + "\n";
+        }
+    }
+
+    // ---- Input size limits ----
+    static constexpr size_t MAX_LINE_BYTES = 16 * 1024;      // 16KB per line
+    static constexpr int    MAX_FILES_SCANNED = 5000;
+    static constexpr size_t MAX_BYTES_SCANNED = 100 * 1024 * 1024; // 100MB
+    static constexpr double OVERALL_DEADLINE_SEC = 10.0;
+
+    auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::duration<double>(OVERALL_DEADLINE_SEC);
 
     std::stringstream output;
     int matchCount = 0;
     int fileCount = 0;
+    int filesScanned = 0;
+    size_t bytesScanned = 0;
+    bool deadlineExceeded = false;
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(basePath)) {
         if (!entry.is_regular_file()) continue;
+
+        // ---- File count limit ----
+        if (filesScanned >= MAX_FILES_SCANNED) {
+            output << "... (scanned " << filesScanned << " files, limit reached)\n";
+            break;
+        }
+
+        // ---- Overall deadline check (between files only) ----
+        if (std::chrono::steady_clock::now() > deadline) {
+            deadlineExceeded = true;
+            output << "... (search timeout after " << OVERALL_DEADLINE_SEC << "s)\n";
+            break;
+        }
 
         // 跳过隐藏文件和常见排除目录
         String pathStr = entry.path().string();
@@ -191,24 +293,41 @@ String GrepTool::executeWithRegex(const Json& input, ToolContext& context) {
         std::ifstream file(entry.path());
         if (!file) continue;
 
+        filesScanned++;
+
         String line;
         int lineNum = 0;
         bool fileHasMatch = false;
 
         while (std::getline(file, line)) {
             lineNum++;
+
+            // Skip lines that are too long (cannot safely regex-search)
+            if (line.size() > MAX_LINE_BYTES) continue;
+
+            bytesScanned += line.size();
+            if (bytesScanned > MAX_BYTES_SCANNED) {
+                output << "... (scanned ~" << (bytesScanned >> 20) << "MB, limit reached)\n";
+                goto done;
+            }
+
             try {
-                if (std::regex_search(line, re)) {
+                bool matched = useLiteral
+                    ? (line.find(pattern) != String::npos)
+                    : std::regex_search(line, *re);
+
+                if (matched) {
                     matchCount++;
                     if (!fileHasMatch) {
                         fileHasMatch = true;
                         fileCount++;
+                        if (outputMode == "files_with_matches") {
+                            output << entry.path().string() << "\n";
+                        }
                     }
 
                     if (outputMode == "content") {
                         output << entry.path().string() << ":" << lineNum << ": " << line << "\n";
-                    } else if (outputMode == "files_with_matches" && !fileHasMatch) {
-                        output << entry.path().string() << "\n";
                     }
 
                     if (matchCount >= headLimit) {
@@ -228,7 +347,7 @@ String GrepTool::executeWithRegex(const Json& input, ToolContext& context) {
         output << "Found " << matchCount << " matches in " << fileCount << " files.\n";
     }
 
-    if (matchCount == 0 && outputMode != "count") {
+    if (output.str().empty() && matchCount == 0 && !deadlineExceeded) {
         return "No matches found.\n";
     }
 
