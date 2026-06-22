@@ -318,3 +318,83 @@ TEST_CASE("renderPlain ToolResult omits Ctrl+O", "[tool_card]") {
     CHECK(rendered.find("Build complete") != String::npos);
     CHECK(rendered.find("Ctrl+O") == String::npos);
 }
+
+// ---- Tool→answer separator logic tests ----
+
+static ContentBlock toolResult() {
+    return {.type = ContentBlock::ToolResult, .toolName = "Bash", .summary = ToolResultSummary::success("Done")};
+}
+static ContentBlock answerText() {
+    return {.type = ContentBlock::AnswerText, .text = "Here is the result."};
+}
+static ContentBlock collapsedGroup() {
+    return {.type = ContentBlock::CollapsedGroup, .summary = ToolResultSummary::success("Searched")};
+}
+static ContentBlock toolGroup() {
+    return {.type = ContentBlock::ToolGroup, .summary = ToolResultSummary::success("Called 2 tools")};
+}
+
+TEST_CASE("findAnswerSeparatorIndices: ToolResult -> AnswerText inserts separator", "[separator]") {
+    std::vector<ContentBlock> blocks = {toolResult(), answerText()};
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.size() == 1);
+    REQUIRE(idx[0] == 1); // separator before answer at index 1
+}
+
+TEST_CASE("findAnswerSeparatorIndices: CollapsedGroup -> AnswerText inserts separator", "[separator]") {
+    std::vector<ContentBlock> blocks = {collapsedGroup(), answerText()};
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.size() == 1);
+    REQUIRE(idx[0] == 1);
+}
+
+TEST_CASE("findAnswerSeparatorIndices: ToolGroup -> AnswerText inserts separator", "[separator]") {
+    std::vector<ContentBlock> blocks = {toolGroup(), answerText()};
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.size() == 1);
+    REQUIRE(idx[0] == 1);
+}
+
+TEST_CASE("findAnswerSeparatorIndices: AnswerText only, no separator", "[separator]") {
+    std::vector<ContentBlock> blocks = {answerText()};
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.empty());
+}
+
+TEST_CASE("findAnswerSeparatorIndices: ToolResult -> ToolResult, no separator", "[separator]") {
+    std::vector<ContentBlock> blocks = {toolResult(), toolResult()};
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.empty());
+}
+
+TEST_CASE("findAnswerSeparatorIndices: interleaved, no separator on mid-chain answers", "[separator]") {
+    // AnswerText -> ToolResult -> AnswerText -> ToolResult (interleaved)
+    std::vector<ContentBlock> blocks = {
+        answerText(), toolResult(), answerText(), toolResult()
+    };
+    auto idx = findAnswerSeparatorIndices(blocks);
+    // The AnswerText at index 2 is followed by toolResult at index 3 → NOT final, no separator
+    REQUIRE(idx.empty());
+}
+
+TEST_CASE("findAnswerSeparatorIndices: last tool without answer, no separator", "[separator]") {
+    std::vector<ContentBlock> blocks = {toolResult(), toolResult()};
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.empty());
+}
+
+TEST_CASE("findAnswerSeparatorIndices: tool chain then answer, one separator", "[separator]") {
+    // Multiple tools → final answer
+    std::vector<ContentBlock> blocks = {
+        toolResult(), toolResult(), collapsedGroup(), answerText()
+    };
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.size() == 1);
+    REQUIRE(idx[0] == 3); // separator before answer at index 3
+}
+
+TEST_CASE("findAnswerSeparatorIndices: empty list, no separator", "[separator]") {
+    std::vector<ContentBlock> blocks;
+    auto idx = findAnswerSeparatorIndices(blocks);
+    REQUIRE(idx.empty());
+}

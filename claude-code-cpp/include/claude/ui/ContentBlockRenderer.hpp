@@ -20,11 +20,15 @@ public:
     static String formatGroupSummary(const std::vector<ContentBlock>& children);
 };
 
+bool isToolLikeBlock(const ContentBlock& block);
+std::vector<size_t> findAnswerSeparatorIndices(const std::vector<ContentBlock>& blocks);
+
 } // namespace claude
 
 #ifdef HAS_FTXUI
 #include <ftxui/dom/elements.hpp>
 namespace claude {
 ftxui::Element renderFtxuiElement(const ContentBlock& block);
+ftxui::Element renderAnswerSeparator();
 }
 #endif

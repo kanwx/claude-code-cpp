@@ -1,6 +1,44 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
 
+namespace claude {
+
+bool isToolLikeBlock(const ContentBlock& block) {
+    switch (block.type) {
+        case ContentBlock::ToolResult:
+        case ContentBlock::ToolGroup:
+        case ContentBlock::CollapsedGroup:
+        case ContentBlock::AgentProgress:
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::vector<size_t> findAnswerSeparatorIndices(const std::vector<ContentBlock>& blocks) {
+    std::vector<size_t> indices;
+    if (blocks.empty()) return indices;
+
+    for (size_t i = 1; i < blocks.size(); ++i) {
+        if (blocks[i].type != ContentBlock::AnswerText) continue;
+        if (!isToolLikeBlock(blocks[i - 1])) continue;
+
+        bool hasToolAfter = false;
+        for (size_t j = i + 1; j < blocks.size(); ++j) {
+            if (isToolLikeBlock(blocks[j])) {
+                hasToolAfter = true;
+                break;
+            }
+        }
+        if (!hasToolAfter) {
+            indices.push_back(i);
+        }
+    }
+    return indices;
+}
+
+} // namespace claude
+
 #ifdef HAS_FTXUI
 #include <ftxui/component/component.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -376,6 +414,12 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
         default:
             return text(block.text);
     }
+}
+
+ftxui::Element renderAnswerSeparator() {
+    return hbox({
+        text("  ─────────") | dim | color(MacShadow),
+    });
 }
 
 } // namespace claude
