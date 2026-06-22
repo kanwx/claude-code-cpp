@@ -205,7 +205,9 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                 detailText = dm.filePath;
             }
 
-            auto summaryEl = text(displayText) | dim;
+            // Bash: green tint for exit 0, other tools: dimmed summary
+            auto summaryStyle = (dm.toolName == "Bash") ? color(MacMint) : dim;
+            auto summaryEl = text(displayText) | summaryStyle;
             if (!detailText.empty()) {
                 summaryEl = vbox({
                     text(displayText) | dim,

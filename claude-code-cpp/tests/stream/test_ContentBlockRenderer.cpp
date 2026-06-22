@@ -256,3 +256,65 @@ TEST_CASE("renderAnsi CollapsedGroup collapsed omits connectors", "[tree_connect
     CHECK(rendered.find("\xe2\x94\x94\xe2\x94\x80") == String::npos);  // └─ absent
     CHECK(rendered.find("Searched 3 patterns") != String::npos);       // summary present
 }
+
+// ---- Tool card visual hierarchy tests ----
+
+TEST_CASE("renderAnsi Read ToolResult preserves tool name and summary", "[tool_card]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolResult,
+        .toolName = "Read",
+        .summary = ToolResultSummary::success("42 lines", false, " from src/main.cpp"),
+        .resultStatus = ToolResultStatus::Success,
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // Summary content preserved, no Ctrl+O leak
+    CHECK(rendered.find("src/main.cpp") != String::npos);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderAnsi Bash error ToolResult uses failure display", "[tool_card]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolResult,
+        .toolName = "Bash",
+        .summary = ToolResultSummary::error("Command failed: exit 1"),
+        .resultStatus = ToolResultStatus::Error,
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // Error text preserved, no Ctrl+O leak
+    CHECK(rendered.find("Command failed") != String::npos);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderAnsi ToolProgress preserves activity text", "[tool_card]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolProgress,
+        .toolName = "Bash",
+        .activity = "Running cmake --build .",
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    // Activity text preserved
+    CHECK(rendered.find("cmake") != String::npos);
+}
+
+TEST_CASE("renderAnsi ToolGroup collapsed preserves summary", "[tool_card]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolGroup,
+        .summary = ToolResultSummary::success("Read 2 files, Searched 1 pattern"),
+        .expanded = false,
+    };
+    String rendered = ContentBlockRenderer::renderAnsi(block);
+    CHECK(rendered.find("Read 2 files") != String::npos);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
+
+TEST_CASE("renderPlain ToolResult omits Ctrl+O", "[tool_card]") {
+    ContentBlock block{
+        .type = ContentBlock::ToolResult,
+        .toolName = "Bash",
+        .summary = ToolResultSummary::success("Build complete"),
+        .resultStatus = ToolResultStatus::Success,
+    };
+    String rendered = ContentBlockRenderer::renderPlain(block);
+    CHECK(rendered.find("Build complete") != String::npos);
+    CHECK(rendered.find("Ctrl+O") == String::npos);
+}
