@@ -296,7 +296,8 @@ void setupCallbacks(AgentLoop& loop,
                      Spinner* spinner,
                      FtxuiRepl* ftxuiRepl,
                      HeadlessContentBlockAccumulator* headlessAccumulator,
-                     std::function<PermissionChoice(const PermissionRequest&)> permissionCallback) {
+                     std::function<PermissionChoice(const PermissionRequest&)> permissionCallback,
+                     bool isPrintMode) {
     // Tool event callback — now handled by new 5-layer pipeline via StreamToolEvent.
     // Kept as minimal callback for spinner stop and debug logging only.
     loop.setOnToolEvent([spinner](const ToolEvent& event) {
@@ -337,8 +338,8 @@ void setupCallbacks(AgentLoop& loop,
     });
 
     // TAOR loop continue callback
-    loop.setOnLoopContinue([useFtxui](int iteration, int /*maxIterations*/) {
-        if (!useFtxui) {
+    loop.setOnLoopContinue([useFtxui, isPrintMode](int iteration, int /*maxIterations*/) {
+        if (!useFtxui && !isPrintMode) {
             if (supportsAnsiStdout()) {
                 std::cout << "\n\033[s"
                           << AnsiStyle::DIM << "  ⟳ Continuing... (turn "
@@ -387,7 +388,7 @@ void setupCallbacks(AgentLoop& loop,
 
     streamBuffer->setDisplayCallback(
         [useFtxui, ftxuiRepl, postProcessor, headlessAccumulator, spinner,
-         ansiPrintedPartial](DisplayEvent&& event) {
+         ansiPrintedPartial, isPrintMode](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
                 // B4: Route through AnswerPostProcessor for tool grouping/reordering.
                 // Reset processor on AnswerStart to clear stale state from
@@ -462,6 +463,9 @@ void setupCallbacks(AgentLoop& loop,
                             break;
 
                         case DisplayEventType::ToolResult: {
+                            // Suppressed in print mode: tool markers pollute
+                            // machine-consumable stdout for scripts/pipes.
+                            if (isPrintMode) break;
                             ContentBlock cb;
                             cb.type = ContentBlock::ToolResult;
                             cb.toolName = event.toolName;
@@ -476,6 +480,9 @@ void setupCallbacks(AgentLoop& loop,
                             break;
                         }
                         case DisplayEventType::ToolGroup: {
+                            // Suppressed in print mode: tool markers pollute
+                            // machine-consumable stdout for scripts/pipes.
+                            if (isPrintMode) break;
                             ContentBlock cb;
                             cb.type = ContentBlock::ToolGroup;
                             cb.toolName = event.toolName;

@@ -79,7 +79,8 @@ void setupCallbacks(AgentLoop& loop,
                      Spinner* spinner,
                      FtxuiRepl* ftxuiRepl,
                      HeadlessContentBlockAccumulator* headlessAccumulator,
-                     std::function<PermissionChoice(const PermissionRequest&)> permissionCallback);
+                     std::function<PermissionChoice(const PermissionRequest&)> permissionCallback,
+                     bool isPrintMode = false);
 
 /// Resume the most recent session from ~/.claude/sessions/ into the given AgentLoop.
 /// Returns true if a session was resumed, false otherwise.

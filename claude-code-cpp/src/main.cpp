@@ -703,7 +703,8 @@ private:
             headlessAccumulator_.get(),
             [this](const PermissionRequest& req) -> PermissionChoice {
                 return promptPermission(req);
-            });
+            },
+            /*isPrintMode=*/!interactive_);
     }
 
     void runRepl() {
