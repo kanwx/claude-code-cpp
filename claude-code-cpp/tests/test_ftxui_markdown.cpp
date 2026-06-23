@@ -165,26 +165,13 @@ TEST_CASE("FtxuiMarkdown CJK bullet items render", "[ftxui][list][cjk]") {
 // ===== Empty input =====
 
 TEST_CASE("FtxuiMarkdown empty input", "[ftxui][edge]") {
-    // Empty string returns a single empty paragraph element (not empty vector)
+    // Empty/whitespace input returns empty vector to avoid
+    // rendering a standalone "● " prefix with no content
     auto elements = FtxuiMarkdown::render("");
-    REQUIRE_FALSE(elements.empty());
-    // Should not crash when rendered to screen
-    auto doc = ftxui::vbox(std::move(elements));
-    auto screen = ftxui::Screen::Create(
-        ftxui::Dimension::Fixed(40),
-        ftxui::Dimension::Fixed(10)
-    );
-    REQUIRE_NOTHROW(ftxui::Render(screen, doc));
+    REQUIRE(elements.empty());
 }
 
 TEST_CASE("FtxuiMarkdown whitespace-only input", "[ftxui][edge]") {
     auto elements = FtxuiMarkdown::render("   \n  \n  ");
-    REQUIRE_FALSE(elements.empty());
-    // Should not crash when rendered to screen
-    auto doc = ftxui::vbox(std::move(elements));
-    auto screen = ftxui::Screen::Create(
-        ftxui::Dimension::Fixed(40),
-        ftxui::Dimension::Fixed(10)
-    );
-    REQUIRE_NOTHROW(ftxui::Render(screen, doc));
+    REQUIRE(elements.empty());
 }

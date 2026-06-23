@@ -309,11 +309,11 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     contentBlocks_.end()
                 );
 
+                isFirstAnswerBlock_ = (apiRoundIndex_ == 0);  // only first API round
                 apiRoundIndex_++;  // each AnswerStart = new API round within the user turn
 
                 isStreaming_ = true;
                 isThinking_ = true;
-                isFirstAnswerBlock_ = true;
                 streamingText_.clear();
                 streamingRenderer_.reset();
                 currentTurnStartIndex_ = contentBlocks_.size();    // preserve scrollback
@@ -323,17 +323,45 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 break;
 
             case DisplayEventType::AnswerEnd: {
-                // Commit any remaining streaming text
+                // Commit any remaining streaming text.
+                // Trim leading/trailing blank lines to avoid rendering a
+                // standalone "●" prefix with no visible content beneath it.
                 if (!streamingText_.empty()) {
-                    ContentBlock cb;
-                    cb.type = ContentBlock::AnswerText;
-                    cb.isFirst = isFirstAnswerBlock_;
-                    cb.text = std::move(streamingText_);
-                    isFirstAnswerBlock_ = false;
+                    // Trim leading blank lines (empty or whitespace-only)
+                    size_t textStart = 0;
+                    while (textStart < streamingText_.size()) {
+                        size_t nl = streamingText_.find('\n', textStart);
+                        size_t lineEnd = (nl == String::npos) ? streamingText_.size() : nl;
+                        if (streamingText_.find_first_not_of(" \t\r", textStart) < lineEnd) break;
+                        textStart = (nl == String::npos) ? streamingText_.size() : nl + 1;
+                    }
+
+                    if (textStart < streamingText_.size()) {
+                        // Trim trailing blank lines
+                        size_t textEnd = streamingText_.size();
+                        while (textEnd > textStart) {
+                            size_t prevNl = streamingText_.rfind('\n', textEnd - 1);
+                            size_t lineStart = (prevNl == String::npos) ? 0 : prevNl + 1;
+                            if (streamingText_.find_first_not_of(" \t\r", lineStart) < textEnd) break;
+                            textEnd = (lineStart > 0) ? lineStart - 1 : 0;
+                        }
+
+                        String trimmed = (textStart > 0 || textEnd < streamingText_.size())
+                            ? streamingText_.substr(textStart, textEnd - textStart)
+                            : std::move(streamingText_);
+
+                        if (trimmed.find_first_not_of(" \t\n\r") != String::npos) {
+                            ContentBlock cb;
+                            cb.type = ContentBlock::AnswerText;
+                            cb.isFirst = isFirstAnswerBlock_;
+                            cb.text = std::move(trimmed);
+                            isFirstAnswerBlock_ = false;
+                            cb.stableId = nextStableId_++;
+                            contentBlocks_.push_back(std::move(cb));
+                        }
+                    }
                     streamingText_.clear();
                     streamingRenderer_.reset();
-                    cb.stableId = nextStableId_++;
-                    contentBlocks_.push_back(std::move(cb));
                 }
                 // B5: Clean up orphaned ToolProgress blocks (tools that never completed)
                 for (auto& [callId, idx] : toolProgressIndices_) {

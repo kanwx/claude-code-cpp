@@ -745,7 +745,10 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
             continue;
         }
 
-        if (line.empty()) {
+        // Skip empty and whitespace-only lines.
+        // They still act as paragraph separators (break accumulation)
+        // but produce no visible element of their own.
+        if (line.empty() || line.find_first_not_of(" \t\r") == std::string::npos) {
             continue;
         }
 
@@ -1232,8 +1235,13 @@ bool FtxuiMarkdown::hasMarkdownSyntax(const std::string& text) {
 }
 
 std::vector<Element> FtxuiMarkdown::render(const std::string& markdown, const RenderOptions& options) {
-    // Fast path: skip the parser for plain text with no Markdown syntax
+    // Fast path: skip the parser for plain text with no Markdown syntax.
+    // Guard against all-whitespace input to avoid rendering a blank
+    // paragraph that still carries an "● " prefix in AnswerText.
     if (!hasMarkdownSyntax(markdown)) {
+        if (markdown.find_first_not_of(" \t\n\r") == std::string::npos) {
+            return {};
+        }
         auto elem = ftxui::paragraph(markdown);
         if (options.dimAll) {
             return {std::move(elem) | ftxui::dim};
