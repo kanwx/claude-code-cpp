@@ -5,6 +5,8 @@
 #include <fstream>
 #include <chrono>
 #include <filesystem>
+#include <unistd.h>
+#include <atomic>
 
 using namespace claude;
 
@@ -14,7 +16,12 @@ struct TestFixture {
     ToolContext ctx;
 
     TestFixture() {
-        tmpDir = std::filesystem::temp_directory_path() / ("grep_test_" + std::to_string(std::rand()));
+        // Use pid + atomic counter for unique dir per process/thread.
+        // std::rand() is not seeded per-process, so parallel ctest
+        // workers would collide on the same directory name.
+        static std::atomic<int> counter{0};
+        auto id = std::to_string(getpid()) + "_" + std::to_string(counter.fetch_add(1));
+        tmpDir = std::filesystem::temp_directory_path() / ("grep_test_" + id);
         std::filesystem::create_directories(tmpDir);
         ctx = ToolContext::create(tmpDir);
     }
