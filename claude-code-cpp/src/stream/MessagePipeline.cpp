@@ -185,6 +185,14 @@ std::vector<ContentBlock> MessagePipeline::groupConsecutiveToolUses(std::vector<
 // ========== Pass 4: collapseReadSearchGroups ==========
 
 bool MessagePipeline::isCollapsibleBlock(const ContentBlock& block) const {
+    // ToolGroups are collapsible if all their children are
+    if (block.type == ContentBlock::ToolGroup) {
+        if (block.children.empty()) return false;
+        for (const auto& child : block.children) {
+            if (!isCollapsibleBlock(child)) return false;
+        }
+        return true;
+    }
     if (block.type != ContentBlock::ToolResult) return false;
     if (block.summary.isError) return false;
     if (block.resultStatus == ToolResultStatus::Rejected ||
@@ -205,6 +213,10 @@ bool MessagePipeline::isCollapsibleBlock(const ContentBlock& block) const {
 }
 
 GroupAccumulator::Category MessagePipeline::categorizeBlock(const ContentBlock& block) const {
+    // For ToolGroups, delegate to first child
+    if (block.type == ContentBlock::ToolGroup && !block.children.empty()) {
+        return categorizeBlock(block.children[0]);
+    }
     if (toolClassifier_) {
         if (toolClassifier_(block.toolName, 1)) return GroupAccumulator::Search;
         if (toolClassifier_(block.toolName, 2)) return GroupAccumulator::FileRead;
@@ -244,6 +256,11 @@ bool MessagePipeline::isGroupBreaker(const ContentBlock& block) const {
         return true;
     }
 
+    // Non-collapsible ToolGroups break the group
+    if (block.type == ContentBlock::ToolGroup && !isCollapsibleBlock(block)) {
+        return true;
+    }
+
     // Non-collapsible tool progress breaks the group
     if (block.type == ContentBlock::ToolProgress) {
         if (toolClassifier_) {
@@ -269,10 +286,26 @@ bool MessagePipeline::hasContentAfterIndex(const std::vector<ContentBlock>& bloc
         if (b.type == ContentBlock::ThinkingBlock) continue;
         // Collapsible tool results don't count
         if (b.type == ContentBlock::ToolResult) {
-            // If it's a collapsible read/search tool, skip
             if (b.toolName == "Read" || b.toolName == "Grep" ||
                 b.toolName == "Glob" || b.toolName == "LS" ||
                 b.toolName == "WebSearch" || b.toolName == "WebFetch") continue;
+        }
+        // Collapsible ToolGroups (all children are read/search) don't count
+        if (b.type == ContentBlock::ToolGroup) {
+            bool allCollapsible = true;
+            for (const auto& child : b.children) {
+                if (child.type != ContentBlock::ToolResult) {
+                    allCollapsible = false; break;
+                }
+                if (child.toolName != "Read" && child.toolName != "Grep" &&
+                    child.toolName != "Glob" && child.toolName != "LS" &&
+                    child.toolName != "WebSearch" && child.toolName != "WebFetch" &&
+                    child.toolName != "Bash" && child.toolName != "TaskOutput" &&
+                    child.toolName != "SendMessage" && child.toolName != "AskUserQuestion") {
+                    allCollapsible = false; break;
+                }
+            }
+            if (allCollapsible && !b.children.empty()) continue;
         }
         // Error messages don't count
         if (b.type == ContentBlock::ErrorMessage) continue;
@@ -349,49 +382,57 @@ std::vector<ContentBlock> MessagePipeline::collapseReadSearchGroups(
             }
             acc.kind = gk;
 
-            switch (cat) {
-                case GroupAccumulator::Search:
-                    acc.searchCount++;
-                    break;
-                case GroupAccumulator::FileRead:
-                    acc.readOperationCount++;
-                    // Extract file path from result summary if possible
-                    if (!block.summary.primaryText.empty()) {
-                        // Parse "Read N lines from path" to extract path
-                        auto fromPos = block.summary.primaryText.find(" from ");
-                        if (fromPos != String::npos) {
-                            acc.readFilePaths.insert(
-                                block.summary.primaryText.substr(fromPos + 6));
+            // Helper to accumulate stats for a single block / child
+            auto accumulateStats = [&](const ContentBlock& b, GroupAccumulator::Category c) {
+                switch (c) {
+                    case GroupAccumulator::Search:
+                        acc.searchCount++;
+                        break;
+                    case GroupAccumulator::FileRead:
+                        acc.readOperationCount++;
+                        if (!b.summary.primaryText.empty()) {
+                            auto fromPos = b.summary.primaryText.find(" from ");
+                            if (fromPos != String::npos) {
+                                acc.readFilePaths.insert(
+                                    b.summary.primaryText.substr(fromPos + 6));
+                            }
                         }
-                    }
-                    break;
-                case GroupAccumulator::FileList:
-                    acc.listCount++;
-                    break;
-                case GroupAccumulator::Bash:
-                    acc.bashCount++;
-                    acc.bashCommands[block.toolCallId] = block.summary.primaryText;
-                    break;
-                case GroupAccumulator::WebSearch:
-                    acc.webSearchCount++;
-                    break;
-                case GroupAccumulator::WebFetch:
-                    acc.webFetchCount++;
-                    break;
-                case GroupAccumulator::MemorySearch:
-                    acc.memorySearchCount++;
-                    break;
-                case GroupAccumulator::MemoryWrite:
-                    acc.memoryWriteCount++;
-                    break;
-                case GroupAccumulator::MCP:
-                    acc.mcpTotalCount++;
-                    break;
-            }
+                        break;
+                    case GroupAccumulator::FileList:
+                        acc.listCount++;
+                        break;
+                    case GroupAccumulator::Bash:
+                        acc.bashCount++;
+                        acc.bashCommands[b.toolCallId] = b.summary.primaryText;
+                        break;
+                    case GroupAccumulator::WebSearch:
+                        acc.webSearchCount++;
+                        break;
+                    case GroupAccumulator::WebFetch:
+                        acc.webFetchCount++;
+                        break;
+                    case GroupAccumulator::MemorySearch:
+                        acc.memorySearchCount++;
+                        break;
+                    case GroupAccumulator::MemoryWrite:
+                        acc.memoryWriteCount++;
+                        break;
+                    case GroupAccumulator::MCP:
+                        acc.mcpTotalCount++;
+                        break;
+                }
+                if (!b.summary.primaryText.empty()) {
+                    acc.latestDisplayHint = b.summary.primaryText;
+                }
+            };
 
-            // Track the latest display hint
-            if (!block.summary.primaryText.empty()) {
-                acc.latestDisplayHint = block.summary.primaryText;
+            if (block.type == ContentBlock::ToolGroup) {
+                for (const auto& child : block.children) {
+                    acc.toolUseIds.insert(child.toolCallId);
+                    accumulateStats(child, categorizeBlock(child));
+                }
+            } else {
+                accumulateStats(block, cat);
             }
 
             i++;
