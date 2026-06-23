@@ -291,3 +291,7 @@ catch_discover_tests(test_ui_mode)
 add_executable(test_grep_safety test_grep_safety.cpp)
 target_link_libraries(test_grep_safety PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_grep_safety)
+
+add_executable(test_markdown test_markdown.cpp)
+target_link_libraries(test_markdown PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_markdown)

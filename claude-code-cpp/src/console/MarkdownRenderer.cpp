@@ -1,13 +1,84 @@
 #include <claude/console/MarkdownRenderer.hpp>
 #include <claude/console/AnsiStyle.hpp>
+#include <claude/console/AnsiSuppress.hpp>
 #include <claude/console/MessageResponse.hpp>
 #include <claude/ui/LanguageSyntax.hpp>
 #include <regex>
 #include <iomanip>
 #include <algorithm>
 #include <cstdlib>
+#include <cwchar>
 
 namespace claude {
+
+// ---------- CJK display-width helpers (ANSI/plain path only) ----------
+
+/// Decode a single UTF-8 codepoint, returning the Unicode codepoint value
+/// and advancing `i` past the sequence. Returns -1 on invalid.
+static int decodeUtf8Codepoint(const std::string& s, size_t& i) {
+    if (i >= s.size()) return -1;
+    unsigned char c = static_cast<unsigned char>(s[i]);
+    uint32_t cp;
+    int len;
+    if (c < 0x80) {
+        cp = c; len = 1;
+    } else if ((c & 0xE0) == 0xC0) {
+        cp = c & 0x1F; len = 2;
+    } else if ((c & 0xF0) == 0xE0) {
+        cp = c & 0x0F; len = 3;
+    } else if ((c & 0xF8) == 0xF0) {
+        cp = c & 0x07; len = 4;
+    } else {
+        i += 1; return -1;
+    }
+    for (int j = 1; j < len; ++j) {
+        if (i + j >= s.size()) { i += j; return -1; }
+        unsigned char cc = static_cast<unsigned char>(s[i + j]);
+        if ((cc & 0xC0) != 0x80) { i += j; return -1; }
+        cp = (cp << 6) | (cc & 0x3F);
+    }
+    i += len;
+    return static_cast<int>(cp);
+}
+
+/// Compute display width of a UTF-8 string using wcwidth.
+static int displayWidth(const std::string& s) {
+    int w = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        int cp = decodeUtf8Codepoint(s, i);
+        if (cp < 0) continue;
+        int cw = wcwidth(static_cast<wchar_t>(cp));
+        if (cw < 0) cw = 1;  // non-printable → width 1
+        w += cw;
+    }
+    return w;
+}
+
+/// Display width after stripping ANSI escape codes.
+static int visibleWidth(const std::string& formatted) {
+    return displayWidth(stripAnsi(formatted));
+}
+
+/// Truncate a UTF-8 string to fit within `maxWidth` display columns,
+/// appending "…" (U+2026, width 1) if truncation occurred.
+static std::string truncateToDisplayWidth(const std::string& s, int maxWidth) {
+    if (displayWidth(s) <= maxWidth) return s;
+    int target = maxWidth - 1;  // reserve 1 column for "…"
+    if (target <= 0) return "…";
+    int w = 0;
+    size_t cut = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        size_t prev = i;
+        int cp = decodeUtf8Codepoint(s, i);
+        if (cp < 0) continue;
+        int cw = wcwidth(static_cast<wchar_t>(cp));
+        if (cw < 0) cw = 1;
+        if (w + cw > target) break;
+        w += cw;
+        cut = i;
+    }
+    return s.substr(0, cut) + "\xe2\x80\xa6";
+}
 
 MarkdownRenderer::MarkdownRenderer(std::ostream& out, int terminalWidth)
     : out_(out), terminalWidth_(terminalWidth) {}
@@ -324,16 +395,20 @@ bool MarkdownRenderer::isTableSeparator(const String& line) const {
 }
 
 String MarkdownRenderer::padCell(const String& cell, int width, bool alignRight) {
-    String display = cell;
-    if (static_cast<int>(display.size()) > width) {
-        display = display.substr(0, width - 2) + "..";
+    // cell may contain ANSI codes; measure visible width only
+    int cellWidth = visibleWidth(cell);
+    if (cellWidth > width) {
+        // Truncate on codepoint boundaries (formatting is lost, but this is rare)
+        String plain = stripAnsi(cell);
+        String truncated = truncateToDisplayWidth(plain, width);
+        int pad = width - displayWidth(truncated);
+        if (alignRight) return String(pad, ' ') + truncated;
+        return truncated + String(pad, ' ');
     }
-    int pad = width - static_cast<int>(display.size());
-    if (pad < 0) pad = 0;
-    if (alignRight) {
-        return String(pad, ' ') + display;
-    }
-    return display + String(pad, ' ');
+    // Preserve ANSI formatting; pad based on visible width
+    int pad = width - cellWidth;
+    if (alignRight) return String(pad, ' ') + cell;
+    return cell + String(pad, ' ');
 }
 
 int MarkdownRenderer::lineNumberWidth(int maxLines) {
@@ -355,7 +430,7 @@ void MarkdownRenderer::renderTable(const std::vector<std::vector<String>>& rows,
     std::vector<int> colWidths(numCols, 0);
     for (const auto& row : rows) {
         for (size_t i = 0; i < row.size(); ++i) {
-            colWidths[i] = std::max(colWidths[i], static_cast<int>(applyInlineFormatting(row[i]).size()));
+            colWidths[i] = std::max(colWidths[i], visibleWidth(applyInlineFormatting(row[i])));
         }
     }
 
@@ -471,8 +546,8 @@ String MarkdownRenderer::applyInlineFormatting(const String& text) {
     result = std::regex_replace(result, std::regex(R"(\*\*(.+?)\*\*)"),
                                 String(AnsiStyle::BOLD) + "$1" + AnsiStyle::RESET);
 
-    // Italic: *text* (avoid matching **)
-    result = std::regex_replace(result, std::regex(R"((?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*))"),
+    // Italic: *text* (bold was already replaced, so ** no longer exists in the text)
+    result = std::regex_replace(result, std::regex(R"(\*([^*]+)\*)"),
                                 String(AnsiStyle::ITALIC) + "$1" + AnsiStyle::RESET);
 
     return result;
