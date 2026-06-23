@@ -295,3 +295,7 @@ catch_discover_tests(test_grep_safety)
 add_executable(test_markdown test_markdown.cpp)
 target_link_libraries(test_markdown PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_markdown)
+
+add_executable(test_ftxui_markdown test_ftxui_markdown.cpp)
+target_link_libraries(test_ftxui_markdown PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ftxui_markdown)

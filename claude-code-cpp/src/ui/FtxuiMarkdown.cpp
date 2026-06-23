@@ -1029,8 +1029,12 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
         case ParsedBlock::BulletList: {
             std::vector<Element> items;
             for (const auto& item : block.items) {
-                // Use paragraph with bullet prefix so text wraps naturally
-                items.push_back(ftxui::paragraph("  • " + item) | color(MdGold));
+                // hbox with fixed bullet prefix + flex paragraph gives hanging indent:
+                // wrapped continuation lines stay aligned with text after the bullet.
+                items.push_back(hbox({
+                    ftxui::text("  • ") | color(MdGold),
+                    ftxui::paragraph(item) | flex | color(MdGold),
+                }));
             }
             return vbox(std::move(items));
         }
@@ -1039,7 +1043,11 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
             std::vector<Element> items;
             int num = 1;
             for (const auto& item : block.items) {
-                items.push_back(ftxui::paragraph("  " + std::to_string(num) + ". " + item) | color(MdGold));
+                std::string prefix = "  " + std::to_string(num) + ". ";
+                items.push_back(hbox({
+                    ftxui::text(prefix) | color(MdGold),
+                    ftxui::paragraph(item) | flex | color(MdGold),
+                }));
                 num++;
             }
             return vbox(std::move(items));
@@ -1201,7 +1209,10 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
             for (const auto& item : block.items) {
                 int indent = block.indentLevel;
                 std::string prefix = std::string(indent * 2, ' ') + "  • ";
-                items.push_back(ftxui::paragraph(prefix + item) | color(MdGold));
+                items.push_back(hbox({
+                    ftxui::text(prefix) | color(MdGold),
+                    ftxui::paragraph(item) | flex | color(MdGold),
+                }));
             }
             return vbox(std::move(items));
         }
