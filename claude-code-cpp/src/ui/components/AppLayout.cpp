@@ -3,6 +3,7 @@
 #include <claude/ui/components/AppLayout.hpp>
 #include <claude/ui/components/ContentArea.hpp>
 #include <claude/ui/components/MessageList.hpp>
+#include <claude/ui/ContentBlockRenderer.hpp>
 #include <claude/ui/FtxuiMarkdown.hpp>
 #include <claude/ui/PromptInputFooter.hpp>
 #include <claude/console/AnsiStyle.hpp>
@@ -428,9 +429,15 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                 );
             }
 
-            // Message list
-            if (s->content.messages && !s->content.messages->empty()) {
-                contentEls.push_back(RenderMessageList(s->content.messages, ctxPtr, s->collapsibleFocusIndex));
+            // Committed content blocks (new pipeline)
+            if (s->content.contentBlocks && !s->content.contentBlocks->empty()) {
+                auto sepIndices = findAnswerSeparatorIndices(*s->content.contentBlocks);
+                for (size_t i = 0; i < s->content.contentBlocks->size(); ++i) {
+                    if (std::find(sepIndices.begin(), sepIndices.end(), i) != sepIndices.end()) {
+                        contentEls.push_back(renderAnswerSeparator());
+                    }
+                    contentEls.push_back(renderFtxuiElement((*s->content.contentBlocks)[i]));
+                }
             }
 
             // Streaming text — use cached elements from StreamingRenderer when available
