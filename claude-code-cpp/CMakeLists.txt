@@ -519,6 +519,7 @@ set(UI_SOURCES
     src/ui/renderers/WebSearchToolRenderer.cpp
     src/ui/renderers/AgentToolRenderer.cpp
     src/ui/ToolResultFormatter.cpp
+    src/ui/PathDisplay.cpp
     src/ui/SearchOverlay.cpp
     src/ui/PermissionRendererRegistry.cpp
     src/ui/ToolRendererRegistry.cpp

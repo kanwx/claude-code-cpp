@@ -1,4 +1,5 @@
 #include "claude/ui/ToolResultFormatter.hpp"
+#include "claude/ui/PathDisplay.hpp"
 #include "claude/stream/ContentBlock.hpp"
 #include <sstream>
 #include <string>
@@ -119,7 +120,7 @@ String ToolDisplayModel::toDisplayText() const {
     if (toolName == "Read" && lineCount > 0) {
         return filePath.empty()
             ? "Read " + std::to_string(lineCount) + " lines"
-            : filePath + " (" + std::to_string(lineCount) + " lines)";
+            : truncatePathForDisplay(filePath) + " (" + std::to_string(lineCount) + " lines)";
     }
     if (toolName == "Grep" && matchCount > 0) {
         return "Found " + std::to_string(matchCount) + " matches";

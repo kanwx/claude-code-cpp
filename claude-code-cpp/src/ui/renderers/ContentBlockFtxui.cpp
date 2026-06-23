@@ -1,5 +1,6 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
+#include "claude/ui/PathDisplay.hpp"
 
 namespace claude {
 
@@ -240,7 +241,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             String detailText;
             // FTXUI-specific: show file path on second line for Edit/Write
             if ((dm.toolName == "Edit" || dm.toolName == "Write") && !dm.filePath.empty()) {
-                detailText = dm.filePath;
+                detailText = truncatePathForDisplay(dm.filePath);
             }
 
             // Bash: green tint for exit 0, other tools: dimmed summary

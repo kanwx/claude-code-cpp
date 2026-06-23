@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
+#include "claude/ui/PathDisplay.hpp"
 #include "claude/stream/ContentBlock.hpp"
 
 using namespace claude;
@@ -397,4 +398,70 @@ TEST_CASE("findAnswerSeparatorIndices: empty list, no separator", "[separator]")
     std::vector<ContentBlock> blocks;
     auto idx = findAnswerSeparatorIndices(blocks);
     REQUIRE(idx.empty());
+}
+
+// ---- Path truncation tests ----
+
+TEST_CASE("truncatePathForDisplay: short path unchanged", "[path_truncation]") {
+    CHECK(truncatePathForDisplay("src/main.cpp") == "src/main.cpp");
+    CHECK(truncatePathForDisplay("file.txt") == "file.txt");
+    CHECK(truncatePathForDisplay("") == "");
+    CHECK(truncatePathForDisplay("/a/b.cpp") == "/a/b.cpp");
+}
+
+TEST_CASE("truncatePathForDisplay: long absolute path preserves root and filename", "[path_truncation]") {
+    String result = truncatePathForDisplay(
+        "/Users/kankan/claude-code/claude-code-cpp/src/ui/renderers/ContentBlockFtxui.cpp");
+    // Must contain filename
+    CHECK(result.find("ContentBlockFtxui.cpp") != String::npos);
+    // Must contain root component
+    CHECK(result.find("Users") != String::npos);
+    // Must contain ellipsis
+    CHECK(result.find("\xe2\x80\xa6") != String::npos); // …
+    // Must be shorter than original
+    CHECK(result.size() <= 42);
+}
+
+TEST_CASE("truncatePathForDisplay: long relative path preserves root and filename", "[path_truncation]") {
+    String result = truncatePathForDisplay(
+        "very/deep/path/to/src/tool/impl/GrepTool.cpp");
+    CHECK(result.find("GrepTool.cpp") != String::npos);
+    CHECK(result.find("\xe2\x80\xa6") != String::npos);
+    CHECK(result.size() <= 42);
+    // First component should be preserved
+    CHECK(result.find("very") != String::npos);
+}
+
+TEST_CASE("truncatePathForDisplay: preserves last directory level", "[path_truncation]") {
+    String result = truncatePathForDisplay(
+        "/Users/kankan/claude-code/claude-code-cpp/src/ui/renderers/ContentBlockFtxui.cpp");
+    // Parent dir should be preserved
+    CHECK(result.find("renderers") != String::npos);
+}
+
+TEST_CASE("truncatePathForDisplay: small maxWidth does not crash", "[path_truncation]") {
+    // Very small maxWidth: must not crash, must return something
+    String result = truncatePathForDisplay(
+        "/some/very/long/path/to/important_config.yaml", 15);
+    CHECK(!result.empty());
+    CHECK(result.size() <= 25);  // allow slight overshoot for extension
+}
+
+TEST_CASE("truncatePathForDisplay: does not modify original, only returns new string", "[path_truncation]") {
+    String original = "/Users/kankan/claude-code/claude-code-cpp/src/main.cpp";
+    String result = truncatePathForDisplay(original);
+    // Original must be unchanged
+    CHECK(original == "/Users/kankan/claude-code/claude-code-cpp/src/main.cpp");
+    // Result must be different (shorter)
+    CHECK(result.size() < original.size());
+}
+
+TEST_CASE("truncatePathForDisplay: edge cases", "[path_truncation]") {
+    // Two-component paths don't need truncation
+    CHECK(truncatePathForDisplay("src/main.cpp") == "src/main.cpp");
+    CHECK(truncatePathForDisplay("/tmp/file.txt") == "/tmp/file.txt");
+
+    // Path exactly at maxWidth is preserved
+    String exact(42, 'x');
+    CHECK(truncatePathForDisplay(exact) == exact);
 }
