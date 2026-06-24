@@ -299,13 +299,15 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::AnswerStart:
-                // Remove ALL stale TurnDuration blocks from previous API calls
-                // within the same user turn. Each AnswerEnd appends a TurnDuration,
-                // but tool results can arrive between AnswerEnd and the next
-                // AnswerStart, so we must scan the entire list, not just pop_back().
+                // Remove stale TurnDuration and ThinkingBlock from previous
+                // API rounds within the same user turn. Both are per-round
+                // artifacts that must not persist into the next round.
                 contentBlocks_.erase(
                     std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
-                        [](const ContentBlock& b) { return b.type == ContentBlock::TurnDuration; }),
+                        [](const ContentBlock& b) {
+                            return b.type == ContentBlock::TurnDuration ||
+                                   b.type == ContentBlock::ThinkingBlock;
+                        }),
                     contentBlocks_.end()
                 );
 
@@ -418,39 +420,12 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
 
-                // Insert or update collapsed ThinkingBlock after pipeline (before turn duration).
-                // If the model emitted thinking content, show it as a collapsed block
-                // at the start of the assistant response. When multiple continuation API
-                // calls each produce thinking (e.g., DeepSeek), merge into a single block.
-                if (!thinkingText_.empty()) {
-                    // Check if a ThinkingBlock already exists from a previous continuation
-                    auto existingThink = std::find_if(contentBlocks_.begin(), contentBlocks_.end(),
-                        [](const ContentBlock& b) { return b.type == ContentBlock::ThinkingBlock; });
-
-                    if (existingThink != contentBlocks_.end()) {
-                        // Merge: append new thinking text to existing block
-                        existingThink->detailText += "\n\n" + thinkingText_;
-                        // Keep expanded state of existing block
-                    } else {
-                        ContentBlock thinkBlock;
-                        thinkBlock.type = ContentBlock::ThinkingBlock;
-                        thinkBlock.detailText = std::move(thinkingText_);
-                        thinkBlock.expanded = false;
-                        thinkBlock.text = thinkingSummary_.empty()
-                            ? "Thinking..." : thinkingSummary_;
-                        thinkBlock.stableId = nextStableId_++;
-                        // Insert after the user message (at position 0) but before first response block
-                        auto it = contentBlocks_.begin();
-                        while (it != contentBlocks_.end() &&
-                               (it->type == ContentBlock::UserMessage ||
-                                it->type == ContentBlock::ThinkingBlock)) {
-                            ++it;
-                        }
-                        contentBlocks_.insert(it, std::move(thinkBlock));
-                    }
-                    thinkingSummary_.clear();
-                    thinkingText_.clear();
-                }
+                // Thinking is rendered by the AppLayout streaming overlay
+                // (s->content.thinking.active).  We do not persist a
+                // ThinkingBlock ContentBlock — TS compact mode hides
+                // thinking in the final frame.
+                thinkingSummary_.clear();
+                thinkingText_.clear();
 
                 // Insert turn duration block after all response content
                 {
