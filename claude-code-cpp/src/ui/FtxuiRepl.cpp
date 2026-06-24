@@ -143,7 +143,39 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     : std::move(ev.text);
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                // Guard: skip empty or whitespace-only paragraphs
+
+                // Trim leading/trailing blank lines (same logic as AnswerEnd).
+                // Without this, a leading "\n" in the flushed paragraph produces
+                // an empty first element in the markdown renderer, which causes
+                // the "⏺" prefix to render standalone on its own line.
+                if (!committed.empty()) {
+                    size_t textStart = 0;
+                    while (textStart < committed.size()) {
+                        size_t nl = committed.find('\n', textStart);
+                        size_t lineEnd = (nl == String::npos) ? committed.size() : nl;
+                        if (committed.find_first_not_of(" \t\r", textStart) < lineEnd) break;
+                        textStart = (nl == String::npos) ? committed.size() : nl + 1;
+                    }
+                    if (textStart > 0 && textStart < committed.size()) {
+                        committed = committed.substr(textStart);
+                    } else if (textStart >= committed.size()) {
+                        committed.clear();
+                    }
+                    // Trim trailing blank lines
+                    if (!committed.empty()) {
+                        size_t textEnd = committed.size();
+                        while (textEnd > 0) {
+                            size_t prevNl = committed.rfind('\n', textEnd - 1);
+                            size_t lineStart = (prevNl == String::npos) ? 0 : prevNl + 1;
+                            if (committed.find_first_not_of(" \t\r", lineStart) < textEnd) break;
+                            textEnd = (lineStart > 0) ? lineStart - 1 : 0;
+                        }
+                        if (textEnd < committed.size()) {
+                            committed.resize(textEnd);
+                        }
+                    }
+                }
+
                 if (!committed.empty() &&
                     committed.find_first_not_of(" \t\n\r") != String::npos) {
                     ContentBlock cb;
