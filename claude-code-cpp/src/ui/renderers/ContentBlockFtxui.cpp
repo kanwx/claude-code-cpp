@@ -404,10 +404,8 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
 
         // ===== Turn Duration =====
         case ContentBlock::TurnDuration: {
-            String verb = console::CreativeVerbs::randomCreativeVerb();
             return hbox({
-                text("  ● ") | color(MacSky),
-                text(verb + "  ") | dim,
+                text("  ✻ "),
                 text(block.text) | dim,
             });
         }

@@ -427,26 +427,29 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 thinkingSummary_.clear();
                 thinkingText_.clear();
 
-                // Insert turn duration block after all response content
+                // Insert turn duration block after all response content.
+                // Match TS format: "✻ Worked for 2s" with wall-clock duration
+                // and the same 8-verb list from constants/turnCompletionVerbs.ts.
                 {
-                    auto& meta = newPipelineStatusMetadata_;
-                    if (!meta.durationStr.empty() || meta.outputTokens > 0) {
+                    // Compute wall-clock duration from startTime_
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - startTime_).count();
+                    if (elapsedMs > 0) {
+                        int seconds = static_cast<int>(elapsedMs / 1000);
                         ContentBlock td;
                         td.type = ContentBlock::TurnDuration;
-                        td.text = meta.durationStr;
                         td.stableId = nextStableId_++;
-                        if (meta.outputTokens > 0) {
-                            auto fmtK = [](int64_t n) -> String {
-                                if (n >= 1'000) return std::to_string(n / 100) + "." +
-                                    std::to_string((n % 100) / 10) + "K";
-                                return std::to_string(n);
-                            };
-                            if (!td.text.empty()) td.text += " · ";
-                            td.text += fmtK(meta.outputTokens) + " tokens";
-                        }
-                        if (!meta.costStr.empty()) {
-                            td.text += " · " + meta.costStr;
-                        }
+
+                        static const std::vector<String> kTurnVerbs = {
+                            "Baked", "Brewed", "Churned", "Cogitated",
+                            "Cooked", "Crunched", "Sauteed", "Worked",
+                        };
+                        static size_t verbIdx = 0;
+                        String verb = kTurnVerbs[verbIdx % kTurnVerbs.size()];
+                        verbIdx++;
+
+                        td.text = verb + " for " + formatElapsed(seconds);
                         contentBlocks_.push_back(std::move(td));
                     }
                 }
