@@ -144,6 +144,7 @@ private:
     bool isFirstAnswerBlock_ = true;
     String thinkingSummary_;
     String thinkingText_;
+    String thinkingVerb_;           // running verb per turn, e.g. "Wandering"
     String modelInfo_;
     long contextUsedTokens_ = 0;
     long contextMaxTokens_ = 0;

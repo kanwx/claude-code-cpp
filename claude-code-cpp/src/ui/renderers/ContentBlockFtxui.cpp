@@ -149,15 +149,38 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             if (block.dimmed) {
                 return text(block.text) | dim | color(MacCream);
             }
+            if (block.text.find_first_not_of(" \t\n\r") == String::npos) {
+                return text("");
+            }
+
+            // Prefix: "⏺ " for first answer block, "  " for continuation.
+            // Marker is at column 0 — no leading gutter spaces.
+            String prefix = block.isFirst ? "⏺ " : "  ";
+
+            // Single-paragraph plain text: embed the prefix directly in the
+            // paragraph so marker and content are guaranteed to render on the
+            // same visual line.  hbox-based layout can split them when the
+            // markdown renderer produces block-level elements.
+            if (block.text.find('\n') == String::npos &&
+                block.text.find("```") == String::npos &&
+                block.text.find('*') == String::npos &&
+                block.text.find('#') == String::npos &&
+                block.text.find('`') == String::npos &&
+                block.text.find('|') == String::npos &&
+                block.text.find('>') == String::npos &&
+                block.text.find('[') == String::npos) {
+                return paragraph(prefix + block.text);
+            }
+
+            // Complex markdown: use full renderer, wrapped lines get "  " gutter.
             auto elements = FtxuiMarkdown::render(block.text);
             if (elements.empty()) return text("");
             Elements result;
-            String firstPrefix = block.isFirst ? "⏺ " : "  ";
             bool first = true;
             for (auto& el : elements) {
                 if (first) {
                     result.push_back(hbox({
-                        text(firstPrefix),
+                        text(prefix),
                         std::move(el) | flex,
                     }));
                     first = false;
@@ -407,7 +430,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             return vbox({
                 text(""),
                 hbox({
-                    text("  ✻ "),
+                    text("✻ "),
                     text(block.text) | dim,
                 }),
             });

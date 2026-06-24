@@ -400,10 +400,18 @@ void setupCallbacks(AgentLoop& loop,
                     // Phase 1: process the AnswerEnd event itself
                     auto proc = postProcessor->process(std::move(event));
                     ftxuiRepl->handleDisplayEvent(std::move(proc));
-                    // Phase 2: finalize — group tools, reorder traces, emit tombstones
+                    // Phase 2: finalize — group tools, reorder traces, emit tombstones.
+                    // Only dispatch NEW event types (Tombstone, ToolGroup) produced by
+                    // finalize().  All other types were already dispatched individually
+                    // during streaming.  Replaying them causes duplicate AnswerText
+                    // blocks (TextParagraph ×2) and extra AnswerStart/AnswerEnd cycles
+                    // that erase historical TurnDuration blocks.
                     auto finalEvents = postProcessor->finalize();
                     for (auto& fe : finalEvents) {
-                        ftxuiRepl->handleDisplayEvent(std::move(fe));
+                        if (fe.type == DisplayEventType::Tombstone ||
+                            fe.type == DisplayEventType::ToolGroup) {
+                            ftxuiRepl->handleDisplayEvent(std::move(fe));
+                        }
                     }
                     postProcessor->reset();
                 } else {

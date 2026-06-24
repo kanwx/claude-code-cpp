@@ -18,6 +18,24 @@ namespace claude {
 
 using namespace ftxui_colors;
 
+// Running-status verb list — curated subset from TS spinnerVerbs.ts.
+// One verb is randomly selected per user turn and displayed during the
+// thinking/streaming phase.  Completely independent from the final
+// turn-completion verbs (Baked/Brewed/Churned/… in kTurnVerbs).
+namespace {
+static const std::vector<String> kRunningVerbs = {
+    "Calculating",   "Cerebrating",   "Choreographing",
+    "Cogitating",    "Composing",     "Computing",
+    "Concocting",    "Considering",   "Contemplating",
+    "Crafting",      "Crunching",     "Deciphering",
+    "Deliberating",  "Elucidating",   "Generating",
+    "Ideating",      "Inferring",     "Marinating",
+    "Orchestrating", "Percolating",   "Perusing",
+    "Pondering",     "Processing",    "Ruminating",
+    "Synthesizing",  "Tinkering",     "Wandering",
+};
+} // anonymous namespace
+
 // ========== ContentBlock-based display event handler ==========
 
 void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
@@ -331,17 +349,28 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::AnswerStart:
-                // Remove stale TurnDuration and ThinkingBlock from previous
-                // API rounds within the same user turn. Both are per-round
-                // artifacts that must not persist into the next round.
-                contentBlocks_.erase(
-                    std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
-                        [](const ContentBlock& b) {
-                            return b.type == ContentBlock::TurnDuration ||
-                                   b.type == ContentBlock::ThinkingBlock;
-                        }),
-                    contentBlocks_.end()
-                );
+                // Remove stale TurnDuration and ThinkingBlock within the
+                // CURRENT user turn only (after the last UserMessage).
+                // Must not touch blocks from earlier turns — those are
+                // historical content that must persist across turns.
+                {
+                    size_t lastUserMsg = contentBlocks_.size();
+                    for (size_t i = contentBlocks_.size(); i > 0; --i) {
+                        if (contentBlocks_[i - 1].type == ContentBlock::UserMessage) {
+                            lastUserMsg = i - 1;
+                            break;
+                        }
+                    }
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin() + static_cast<long>(lastUserMsg),
+                                       contentBlocks_.end(),
+                            [](const ContentBlock& b) {
+                                return b.type == ContentBlock::TurnDuration ||
+                                       b.type == ContentBlock::ThinkingBlock;
+                            }),
+                        contentBlocks_.end()
+                    );
+                }
 
                 isFirstAnswerBlock_ = (apiRoundIndex_ == 0);  // only first API round
                 apiRoundIndex_++;  // each AnswerStart = new API round within the user turn
@@ -484,6 +513,38 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                         td.text = verb + " for " + formatElapsed(seconds);
                         contentBlocks_.push_back(std::move(td));
                     }
+                }
+
+                // [DIAGNOSTIC] contentBlocks_ final dump — always fires
+                {
+                    fprintf(stderr, "\n=== CONTENT_BLOCKS_DUMP (turn=%d, apiRound=%d, total=%zu) ===\n",
+                            userTurnIndex_, apiRoundIndex_, contentBlocks_.size());
+                    static const char* kTypeNames[] = {
+                        "UserMessage","AnswerText","ThinkingBlock","ToolProgress",
+                        "ToolResult","ToolGroup","AgentProgress","ErrorMessage",
+                        "SystemMessage","CompactBoundary","CollapsedGroup","TurnDuration"
+                    };
+                    for (size_t bi = 0; bi < contentBlocks_.size(); ++bi) {
+                        const auto& b = contentBlocks_[bi];
+                        int t = static_cast<int>(b.type);
+                        const char* tn = (t >= 0 && t < 12) ? kTypeNames[t] : "?";
+                        // Show text first 120 chars in escaped/hex form
+                        String preview;
+                        for (size_t ci = 0; ci < b.text.size() && ci < 120; ++ci) {
+                            unsigned char c = static_cast<unsigned char>(b.text[ci]);
+                            if (c == '\n') preview += "\\n";
+                            else if (c == '\r') preview += "\\r";
+                            else if (c == '\t') preview += "\\t";
+                            else if (c < 0x20) { char buf[8]; snprintf(buf, sizeof(buf), "\\x%02x", c); preview += buf; }
+                            else preview += static_cast<char>(c);
+                        }
+                        fprintf(stderr, "  [%zu] %-15s text.size=%4zu text=\"%s\"%s%s isFirst=%d\n",
+                                bi, tn, b.text.size(), preview.c_str(),
+                                b.text.size() > 120 ? "..." : "",
+                                t == 11 ? " <<<TURN_DURATION" : "",  // type 11 = TurnDuration
+                                b.isFirst ? 1 : 0);
+                    }
+                    fprintf(stderr, "=== END CONTENT_BLOCKS_DUMP ===\n\n");
                 }
 
                 // [METRICS] Turn-level metrics collection (read-only, no side effects)
@@ -752,6 +813,26 @@ void FtxuiRepl::syncLayoutState() {
     ls.content.thinking.summary = thinkingSummary_;
     ls.content.thinking.stalled = false; // will be computed from lastOutputTime_
     ls.content.thinking.tickCounter = ls.tickCounter;
+
+    // Running-status fields: elapsed time, token estimate, running verb.
+    if (isThinking_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - startTime_).count();
+        ls.content.thinking.elapsedSeconds = static_cast<int>(elapsedMs / 1000);
+        ls.content.thinking.tokenEstimate = static_cast<int>(streamingText_.size() / 4);
+        if (thinkingVerb_.empty()) {
+            // Pick a random verb per turn — stable for the duration.
+            static size_t runningVerbIdx = 0;
+            thinkingVerb_ = kRunningVerbs[runningVerbIdx % kRunningVerbs.size()];
+            runningVerbIdx++;
+        }
+        ls.content.thinking.runningVerb = thinkingVerb_;
+    } else {
+        ls.content.thinking.elapsedSeconds = 0;
+        ls.content.thinking.tokenEstimate = 0;
+        ls.content.thinking.runningVerb.clear();
+    }
     ls.content.messagesAbove = static_cast<int>(virtualScroll_.firstVisibleIndex());
     ls.content.autoScroll = ls.autoScroll;
     ls.content.scrollRatio = ls.scrollRatio;
@@ -1537,6 +1618,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 r->streamingText_.clear();
                 r->streamingRenderer_.reset();
                 r->thinkingSummary_.clear();
+                r->thinkingVerb_.clear();     // fresh verb per user turn
                 r->startTime_ = std::chrono::steady_clock::now();
                 ls->autoScroll = true;
                 ls->scrollRatio = 1.0f;

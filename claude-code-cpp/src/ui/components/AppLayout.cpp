@@ -472,32 +472,66 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                 }));
             }
 
-            // Thinking indicator
+            // Thinking indicator — transient running status line.
+            // Matches TS SpinnerAnimationRow format:
+            //   · Wandering… (11s · ↑ 70 tokens · thinking)
             if (s->content.thinking.active) {
                 if (!contentEls.empty()) contentEls.push_back(text(""));
 
-                Color thinkColor = s->content.thinking.stalled ? MacRose : MacLavender;
-                bool glimmerPhase = (s->content.thinking.tickCounter % 20) < 10;
-
+                Color thinkColor = MacLavender;
                 std::vector<Element> thinkingElems;
-                thinkingElems.push_back(spinner(1, s->content.thinking.tickCounter) | color(thinkColor));
-                thinkingElems.push_back(
-                    text(s->content.thinking.stalled ? " Thinking (stalled)" : " Thinking")
-                    | bold | color(thinkColor)
-                );
+
+                // · + verb…
+                if (!s->content.thinking.runningVerb.empty()) {
+                    thinkingElems.push_back(
+                        text("· " + s->content.thinking.runningVerb + "…")
+                        | color(thinkColor)
+                    );
+                } else {
+                    thinkingElems.push_back(
+                        text("· Thinking…") | color(thinkColor)
+                    );
+                }
+
+                // (Xs · ↑ N tokens · thinking)
+                std::string suffix;
+                if (s->content.thinking.elapsedSeconds > 0) {
+                    int secs = s->content.thinking.elapsedSeconds;
+                    if (secs >= 60) {
+                        suffix += std::to_string(secs / 60) + "m " +
+                                  std::to_string(secs % 60) + "s";
+                    } else {
+                        suffix += std::to_string(secs) + "s";
+                    }
+                }
+                if (s->content.thinking.tokenEstimate > 0) {
+                    // Format token estimate compactly (matching TS formatNumber)
+                    int n = s->content.thinking.tokenEstimate;
+                    std::string tokStr;
+                    if (n >= 1000) {
+                        char buf[16];
+                        snprintf(buf, sizeof(buf), "%d.%dk", n / 1000,
+                                 (n % 1000) / 100);
+                        tokStr = buf;
+                    } else {
+                        tokStr = std::to_string(n);
+                    }
+                    if (!suffix.empty()) suffix += " · ";
+                    suffix += "↑ " + tokStr + " tokens";
+                }
+                if (!suffix.empty()) suffix += " · ";
+                suffix += "thinking";
+
+                if (!suffix.empty()) {
+                    thinkingElems.push_back(text("  ") | dim);
+                    thinkingElems.push_back(text("(" + suffix + ")") | dim | color(thinkColor));
+                }
+
+                // Glimmer dot
+                bool glimmerPhase = (s->content.thinking.tickCounter % 20) < 10;
                 if (glimmerPhase) {
                     thinkingElems.push_back(text(" ●") | color(thinkColor) | dim);
                 }
-                if (!s->content.thinking.summary.empty()) {
-                    thinkingElems.push_back(text("  ") | dim);
-                    std::string summary = s->content.thinking.summary;
-                    if (summary.size() > 60) {
-                        summary = "..." + summary.substr(summary.size() - 57);
-                    }
-                    thinkingElems.push_back(text(summary) | dim | color(MacCream));
-                }
-                // No [Ctrl+O] hint — thinking is a transient status,
-                // not a collapsible block (matching TS spinner behavior).
 
                 contentEls.push_back(hbox(std::move(thinkingElems)));
             }
