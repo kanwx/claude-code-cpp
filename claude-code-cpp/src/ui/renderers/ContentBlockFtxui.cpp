@@ -152,21 +152,11 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             auto elements = FtxuiMarkdown::render(block.text);
             if (elements.empty()) return text("");
             Elements result;
-            String prefix = block.isFirst ? "● " : "  ";
-            bool first = true;
             for (auto& el : elements) {
-                if (first) {
-                    result.push_back(hbox({
-                        text(prefix) | color(MacSky),
-                        std::move(el) | flex,
-                    }));
-                    first = false;
-                } else {
-                    result.push_back(hbox({
-                        text("  "),
-                        std::move(el) | flex,
-                    }));
-                }
+                result.push_back(hbox({
+                    text("  "),
+                    std::move(el) | flex,
+                }));
             }
             return vbox(std::move(result));
         }
