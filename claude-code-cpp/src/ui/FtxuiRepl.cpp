@@ -372,7 +372,6 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     );
                 }
 
-                isFirstAnswerBlock_ = (apiRoundIndex_ == 0);  // only first API round
                 apiRoundIndex_++;  // each AnswerStart = new API round within the user turn
 
                 isStreaming_ = true;
@@ -945,6 +944,7 @@ void FtxuiRepl::addUserMessage(const String& content) {
         }
         metricsTurnStartIndex_ = contentBlocks_.size();  // user turn starts at this UserMessage
         apiRoundIndex_ = 0;
+        isFirstAnswerBlock_ = true;  // fresh per user turn; survives tool-only API rounds
         userTurnIndex_++;
         contentBlocks_.push_back(std::move(cb));
     });
@@ -1611,6 +1611,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 }
                 r->metricsTurnStartIndex_ = r->contentBlocks_.size();  // user turn starts here
                 r->apiRoundIndex_ = 0;
+                r->isFirstAnswerBlock_ = true;  // fresh per user turn
                 r->userTurnIndex_++;
                 r->contentBlocks_.push_back(std::move(userCb));
                 r->isStreaming_ = true;
