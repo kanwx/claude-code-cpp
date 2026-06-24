@@ -496,7 +496,8 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
                     }
                     thinkingElems.push_back(text(summary) | dim | color(MacCream));
                 }
-                thinkingElems.push_back(text(" (ctrl+o)") | dim | color(MacShadow));
+                // No [Ctrl+O] hint — thinking is a transient status,
+                // not a collapsible block (matching TS spinner behavior).
 
                 contentEls.push_back(hbox(std::move(thinkingElems)));
             }
