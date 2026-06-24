@@ -3,8 +3,6 @@
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/core/UnifiedTaskStore.hpp"
 #include "claude/ui/FtxuiMarkdown.hpp"
-#include "claude/ui/ThinkingFilter.hpp"
-#include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -118,13 +116,7 @@ void FtxuiRepl::appendStreamText(const String& chunk) {
 void FtxuiRepl::finishStream(bool success, const String& error) {
     if (!screen_) return;
 
-    int durationMs = 0;
-    if (startTime_.time_since_epoch().count() > 0) {
-        durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - startTime_).count();
-    }
-
-    screen_->Post([this, success, err = String(error), durationMs]() {
+    screen_->Post([this, success, err = String(error)]() {
         // Clear streaming text — pipeline commits it via StreamEnd
         streamingText_.clear();
         streamingRenderer_.reset();
@@ -139,14 +131,10 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
             cb.text = err;
             contentBlocks_.push_back(std::move(cb));
         }
-        if (success && durationMs > 2000) {
-            int seconds = durationMs / 1000;
-            String tmsg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-            ContentBlock cb;
-            cb.type = ContentBlock::TurnDuration;
-            cb.text = std::move(tmsg);
-            contentBlocks_.push_back(std::move(cb));
-        }
+        // TurnDuration is now emitted by the DisplayEvent AnswerEnd path
+        // (FtxuiRepl::handleDisplayEvent).  finishStream must not append a
+        // second TurnDuration — doing so creates duplicate turn-duration
+        // blocks in the final frame and a double-verb rendering artifact.
 
         stopRefreshThread();
     });
