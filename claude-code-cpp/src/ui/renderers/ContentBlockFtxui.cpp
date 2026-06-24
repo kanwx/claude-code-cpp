@@ -404,9 +404,12 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
 
         // ===== Turn Duration =====
         case ContentBlock::TurnDuration: {
-            return hbox({
-                text("  ✻ "),
-                text(block.text) | dim,
+            return vbox({
+                text(""),
+                hbox({
+                    text("  ✻ "),
+                    text(block.text) | dim,
+                }),
             });
         }
 
