@@ -141,6 +141,8 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                 filler(),
                 text("─╯") | color(borderColor),
             }));
+            // Spacing to next AnswerText
+            els.push_back(text(""));
             return vbox(std::move(els));
         }
 
@@ -153,9 +155,9 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                 return text("");
             }
 
-            // Prefix: "⏺ " for first answer block, "  " for continuation.
-            // Marker is at column 0 — no leading gutter spaces.
-            String prefix = block.isFirst ? "⏺ " : "  ";
+            // Prefix: " ⏺ " for first answer block, "   " for continuation.
+            // One-space gutter aligns with UserMessage box left edge.
+            String prefix = block.isFirst ? " ⏺ " : "   ";
 
             // Single-paragraph plain text: embed the prefix directly in the
             // paragraph so marker and content are guaranteed to render on the
@@ -172,7 +174,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                 return paragraph(prefix + block.text);
             }
 
-            // Complex markdown: use full renderer, wrapped lines get "  " gutter.
+            // Complex markdown: use full renderer, wrapped lines get "   " gutter.
             auto elements = FtxuiMarkdown::render(block.text);
             if (elements.empty()) return text("");
             Elements result;
@@ -186,7 +188,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                     first = false;
                 } else {
                     result.push_back(hbox({
-                        text("  "),
+                        text("   "),
                         std::move(el) | flex,
                     }));
                 }
@@ -430,9 +432,10 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             return vbox({
                 text(""),
                 hbox({
-                    text("✻ "),
+                    text(" ✻ "),
                     text(block.text) | dim,
                 }),
+                text(""),
             });
         }
 
