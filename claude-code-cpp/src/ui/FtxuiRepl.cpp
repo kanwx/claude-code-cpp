@@ -514,36 +514,40 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
 
-                // [DIAGNOSTIC] contentBlocks_ final dump — always fires
+                // [DIAGNOSTIC] contentBlocks_ final dump — gated by CLAUDE_CODE_DEBUG_METRICS
                 {
-                    fprintf(stderr, "\n=== CONTENT_BLOCKS_DUMP (turn=%d, apiRound=%d, total=%zu) ===\n",
-                            userTurnIndex_, apiRoundIndex_, contentBlocks_.size());
-                    static const char* kTypeNames[] = {
-                        "UserMessage","AnswerText","ThinkingBlock","ToolProgress",
-                        "ToolResult","ToolGroup","AgentProgress","ErrorMessage",
-                        "SystemMessage","CompactBoundary","CollapsedGroup","TurnDuration"
-                    };
-                    for (size_t bi = 0; bi < contentBlocks_.size(); ++bi) {
-                        const auto& b = contentBlocks_[bi];
-                        int t = static_cast<int>(b.type);
-                        const char* tn = (t >= 0 && t < 12) ? kTypeNames[t] : "?";
-                        // Show text first 120 chars in escaped/hex form
-                        String preview;
-                        for (size_t ci = 0; ci < b.text.size() && ci < 120; ++ci) {
-                            unsigned char c = static_cast<unsigned char>(b.text[ci]);
-                            if (c == '\n') preview += "\\n";
-                            else if (c == '\r') preview += "\\r";
-                            else if (c == '\t') preview += "\\t";
-                            else if (c < 0x20) { char buf[8]; snprintf(buf, sizeof(buf), "\\x%02x", c); preview += buf; }
-                            else preview += static_cast<char>(c);
+                    const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+                    if (debugMetrics) {
+                        fprintf(stderr, "\n=== CONTENT_BLOCKS_DUMP (turn=%d, apiRound=%d, total=%zu) ===\n",
+                                userTurnIndex_, apiRoundIndex_, contentBlocks_.size());
+                        static const char* kTypeNames[] = {
+                            "UserMessage","AnswerText","ThinkingBlock","ToolProgress",
+                            "ToolResult","ToolGroup","AgentProgress","ErrorMessage",
+                            "SystemMessage","CompactBoundary","CollapsedGroup","TurnDuration"
+                        };
+                        for (size_t bi = 0; bi < contentBlocks_.size(); ++bi) {
+                            const auto& b = contentBlocks_[bi];
+                            int t = static_cast<int>(b.type);
+                            const char* tn = (t >= 0 && t < 12) ? kTypeNames[t] : "?";
+                            String preview;
+                            for (size_t ci = 0; ci < b.text.size() && ci < 120; ++ci) {
+                                unsigned char c = static_cast<unsigned char>(b.text[ci]);
+                                if (c == '\n') preview += "\\n";
+                                else if (c == '\r') preview += "\\r";
+                                else if (c == '\t') preview += "\\t";
+                                else if (c < 0x20) { char buf[8]; snprintf(buf, sizeof(buf), "\\x%02x", c); preview += buf; }
+                                else preview += static_cast<char>(c);
+                            }
+                            fprintf(stderr, "  [%zu] %-15s text.size=%4zu text=\"%s\"%s%s isFirst=%d\n",
+                                    bi, tn, b.text.size(), preview.c_str(),
+                                    b.text.size() > 120 ? "..." : "",
+                                    t == 11 ? " <<<TURN_DURATION" : "",  // type 11 = TurnDuration
+                                    b.isFirst ? 1 : 0);
                         }
-                        fprintf(stderr, "  [%zu] %-15s text.size=%4zu text=\"%s\"%s%s isFirst=%d\n",
-                                bi, tn, b.text.size(), preview.c_str(),
-                                b.text.size() > 120 ? "..." : "",
-                                t == 11 ? " <<<TURN_DURATION" : "",  // type 11 = TurnDuration
-                                b.isFirst ? 1 : 0);
+                        fprintf(stderr, "=== END CONTENT_BLOCKS_DUMP ===\n\n");
                     }
-                    fprintf(stderr, "=== END CONTENT_BLOCKS_DUMP ===\n\n");
                 }
 
                 // [METRICS] Turn-level metrics collection (read-only, no side effects)
