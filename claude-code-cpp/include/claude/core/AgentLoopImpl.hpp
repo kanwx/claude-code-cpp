@@ -87,6 +87,10 @@ struct AgentLoop::Impl {
     // Interleaved execution
     bool interleaveToolExecution = false;
 
+    // Diagnostic: tracks whether compaction ran since last API request dump
+    bool compactionRecentlyRan = false;
+    int apiRequestCounter = 0;
+
     // Current user input
     String currentUserInput;
 

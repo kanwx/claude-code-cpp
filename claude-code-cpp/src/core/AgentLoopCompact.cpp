@@ -71,6 +71,8 @@ bool AgentLoop::applyAutoCompact() {
         }
         auto newHistory = impl_->autoCompact->compact(historySnapshot);
         if (newHistory) {
+            impl_->compactionRecentlyRan = true;
+
             // Post-compact cleanup
             compact::PostCompactCleanup::cleanup(*newHistory);
 
@@ -216,6 +218,7 @@ bool AgentLoop::applyAutoCompact() {
     }
 
     // Post-compact cleanup on the new history
+    impl_->compactionRecentlyRan = true;
     compact::PostCompactCleanup::cleanup(newHistory);
 
     {
@@ -259,6 +262,7 @@ bool AgentLoop::attemptReactiveCompact(long tokenGap) {
         }
         auto newHistory = impl_->autoCompact->compact(historySnapshot);
         if (newHistory) {
+            impl_->compactionRecentlyRan = true;
             compact::PostCompactCleanup::cleanup(*newHistory);
             std::lock_guard lock(impl_->historyMutex);
             impl_->messageHistory = std::move(*newHistory);

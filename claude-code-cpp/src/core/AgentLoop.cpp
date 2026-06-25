@@ -4,6 +4,7 @@
 #include <claude/api/RetryableClient.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <iostream>
 
 namespace claude {
 
@@ -734,6 +735,131 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 // API request building
 // ============================================================================
 
+namespace {
+
+// Escape newlines/tabs for single-line preview output
+String escapePreview(const String& s) {
+    String out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '\n') out += "\\n";
+        else if (c == '\t') out += "\\t";
+        else if (c == '\r') out += "\\r";
+        else out += c;
+    }
+    return out;
+}
+
+void dumpApiMessagesDiagnostic(
+    const std::vector<Message>& legacyHistory,
+    const Json& apiMessages,
+    int requestIndex,
+    bool compactionRecentlyRan,
+    double contextUsagePercent
+) {
+    const char* env = std::getenv("CLAUDE_CODE_DEBUG_API_MESSAGES");
+    if (!env || env[0] != '1' || env[1] != '\0') return;
+
+    std::ostream& out = std::cerr;
+    out << "\n=== API_REQUEST_MESSAGES_DUMP ===\n";
+    out << "request_index: " << requestIndex << "\n";
+    out << "compaction_recently_ran: " << (compactionRecentlyRan ? "true" : "false") << "\n";
+    out << "context_usage_percent: " << static_cast<int>(contextUsagePercent * 100) << "%\n";
+    out << "legacy_message_count: " << legacyHistory.size() << "\n";
+    out << "api_message_count: " << (apiMessages.is_array() ? apiMessages.size() : 0) << "\n";
+
+    // --- Legacy history (internal Message structs) ---
+    out << "\n--- LEGACY MESSAGE HISTORY ---\n";
+    for (size_t i = 0; i < legacyHistory.size(); ++i) {
+        const auto& msg = legacyHistory[i];
+        const char* roleStr = "unknown";
+        switch (msg.role) {
+            case MessageRole::System:    roleStr = "system"; break;
+            case MessageRole::User:      roleStr = "user"; break;
+            case MessageRole::Assistant: roleStr = "assistant"; break;
+            case MessageRole::ToolResult: roleStr = "tool_result"; break;
+        }
+        out << "  [" << i << "] role=" << roleStr;
+        if (!msg.toolCalls.empty()) {
+            out << " toolCalls=" << msg.toolCalls.size() << " ids=[";
+            for (size_t j = 0; j < msg.toolCalls.size(); ++j) {
+                if (j) out << ", ";
+                out << msg.toolCalls[j].id;
+            }
+            out << "]";
+        }
+        if (!msg.toolResults.empty()) {
+            out << " toolResults=" << msg.toolResults.size() << " ids=[";
+            for (size_t j = 0; j < msg.toolResults.size(); ++j) {
+                if (j) out << ", ";
+                out << msg.toolResults[j].callId;
+            }
+            out << "]";
+        }
+        // Preview of text content (first 120 chars, escaped)
+        String preview;
+        if (!msg.content.empty()) {
+            preview = msg.content.size() > 120 ? msg.content.substr(0, 120) + "..." : msg.content;
+        }
+        // Also check toolResults content
+        if (preview.empty() && !msg.toolResults.empty()) {
+            for (const auto& tr : msg.toolResults) {
+                if (!tr.content.empty()) {
+                    preview = tr.content.size() > 120 ? tr.content.substr(0, 120) + "..." : tr.content;
+                    break;
+                }
+            }
+        }
+        if (!preview.empty()) {
+            out << " content_preview=\"" << escapePreview(preview) << "\"";
+        }
+        out << "\n";
+    }
+
+    // --- API messages (serialized) ---
+    out << "\n--- API MESSAGES ---\n";
+    if (!apiMessages.is_array()) {
+        out << "  (not an array)\n";
+    } else {
+        for (size_t i = 0; i < apiMessages.size(); ++i) {
+            const auto& m = apiMessages[i];
+            String role = m.value("role", "?");
+            out << "  [" << i << "] role=" << role;
+            if (m.contains("content") && m["content"].is_array()) {
+                out << " content_blocks=" << m["content"].size() << "\n";
+                for (const auto& block : m["content"]) {
+                    String type = block.value("type", "?");
+                    out << "      - type=" << type;
+                    if (type == "text") {
+                        String text = block.value("text", "");
+                        String preview = text.size() > 120 ? text.substr(0, 120) + "..." : text;
+                        out << " len=" << text.size()
+                            << " preview=\"" << escapePreview(preview) << "\"";
+                    } else if (type == "tool_use") {
+                        out << " id=" << block.value("id", "?")
+                            << " name=" << block.value("name", "?");
+                    } else if (type == "tool_result") {
+                        out << " tool_use_id=" << block.value("tool_use_id", "?")
+                            << " is_error=" << (block.value("is_error", false) ? "true" : "false");
+                    } else if (type == "thinking") {
+                        String thinking = block.value("thinking", "");
+                        out << " len=" << thinking.size();
+                    } else if (type == "redacted_thinking") {
+                        out << " data_len=" << block.value("data", "").size();
+                    }
+                    out << "\n";
+                }
+            } else {
+                out << "\n";
+            }
+        }
+    }
+
+    out << "=== END API_REQUEST_MESSAGES_DUMP ===\n" << std::endl;
+}
+
+} // anonymous namespace
+
 Json AgentLoop::buildApiRequest() {
     // Convert legacy messages to ContentMessage, then serialize via
     // provider-specific functions. The internal messageHistory stays as
@@ -775,8 +901,10 @@ Json AgentLoop::buildApiRequest() {
 
     // Build messages using provider-specific serialization
     auto provider = impl_->apiClient.getProviderName();
+    Json apiMessages;
     if (provider == "anthropic") {
-        request["messages"] = buildAnthropicApiMessages(contentHistory);
+        apiMessages = buildAnthropicApiMessages(contentHistory);
+        request["messages"] = apiMessages;
     } else {
         // OpenAI: serialize each ContentMessage, expand tool results to separate messages
         Json messages = Json::array();
@@ -797,7 +925,29 @@ Json AgentLoop::buildApiRequest() {
                 messages.push_back(serializeContentMessageForOpenAI(msg));
             }
         }
+        apiMessages = messages;
         request["messages"] = messages;
+    }
+
+    // --- Diagnostic dump (gated by CLAUDE_CODE_DEBUG_API_MESSAGES=1) ---
+    {
+        impl_->apiRequestCounter++;
+        int reqIdx = impl_->apiRequestCounter;
+        bool compactRan = impl_->compactionRecentlyRan;
+        double usagePct = impl_->tokenTracker.getUsagePercentage();
+
+        // Snapshot legacy history under lock for the dump
+        std::vector<Message> legacySnapshot;
+        {
+            std::lock_guard lock(impl_->historyMutex);
+            legacySnapshot = impl_->messageHistory;
+        }
+
+        dumpApiMessagesDiagnostic(legacySnapshot, apiMessages, reqIdx, compactRan, usagePct);
+
+        // Reset compaction flag after dump so it only shows true for
+        // the request immediately following a compaction
+        impl_->compactionRecentlyRan = false;
     }
 
     // Convert tool definitions to JSON array (per provider format)
