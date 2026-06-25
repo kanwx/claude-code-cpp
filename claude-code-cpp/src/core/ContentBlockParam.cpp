@@ -147,7 +147,20 @@ ContentMessage convertLegacyMessage(const Message& old) {
             *old.thinking, old.signature.value_or("")));
     }
 
-    if (!old.content.empty()) {
+    // When the legacy message carries toolResults, skip emitting msg.content as
+    // a text block. Otherwise the text block lands before tool_result blocks in
+    // the API message, violating the Anthropic constraint that a user message
+    // after assistant tool_use must have tool_result blocks first.
+    //
+    // Two paths produce non-empty msg.content on tool-result-carrying messages:
+    // 1. MicroCompact writes "[Old tool result content cleared...]" to both
+    //    msg.content and each ToolResponse.content.
+    // 2. PostCompactCleanup::enforceAlternation merges a regular User message
+    //    with a ToolResult message, copying ToolResult's content.
+    //
+    // In both cases the tool_result blocks carry the essential information;
+    // the text block is redundant at best, protocol-violating at worst.
+    if (!old.content.empty() && old.toolResults.empty()) {
         result.content.push_back(ContentBlockParam::makeText(old.content));
     }
 

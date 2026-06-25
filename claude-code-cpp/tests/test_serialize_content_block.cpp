@@ -242,3 +242,100 @@ TEST_CASE("convertLegacyMessage preserves block order", "[serialize][legacy]") {
     REQUIRE(result.content[1].type == ContentBlockParam::Text);
     REQUIRE(result.content[2].type == ContentBlockParam::ToolUse);
 }
+
+// ========== Regression: text block must not precede tool_result blocks ==========
+
+TEST_CASE("convertLegacyMessage toolResult with non-empty content must not emit text block",
+          "[serialize][legacy][regression]") {
+    // Bug scenario: MicroCompact writes "[Old tool result content cleared...]"
+    // to BOTH msg.content AND each ToolResponse.content. convertLegacyMessage
+    // then emits a Text block from msg.content BEFORE the ToolResult blocks.
+    // Anthropic API rejects this because tool_result blocks must come first
+    // in the user message that follows an assistant with tool_use.
+    //
+    // Construct: assistant tool_use call_A → user tool_result call_A
+    // The user ToolResult message has non-empty msg.content (from MicroCompact).
+    Message old;
+    old.role = MessageRole::ToolResult;
+    old.content = "[Old tool result content cleared — original size: 123 chars]";
+    ToolResponse tr;
+    tr.callId = "call_A";
+    tr.toolName = "Read";
+    tr.content = "actual result";
+    old.toolResults.push_back(tr);
+
+    auto result = convertLegacyMessage(old);
+
+    // Must NOT emit a Text block when toolResults are present.
+    // All content blocks should be ToolResult blocks.
+    for (size_t i = 0; i < result.content.size(); ++i) {
+        INFO("Block " << i << " has type " << result.content[i].type
+             << " (expected all ToolResult=" << ContentBlockParam::ToolResult << ")");
+        REQUIRE(result.content[i].type == ContentBlockParam::ToolResult);
+    }
+    REQUIRE(result.content.size() == old.toolResults.size());
+    REQUIRE(result.content[0].toolUseId == "call_A");
+    REQUIRE(result.content[0].resultContent == "actual result");
+}
+
+TEST_CASE("convertLegacyMessage toolResult with multiple toolResults must not emit text block",
+          "[serialize][legacy][regression]") {
+    // Multiple toolResults (assistant had tool_use call_A, call_B, call_C)
+    // with non-empty msg.content (from MicroCompact).
+    Message old;
+    old.role = MessageRole::ToolResult;
+    old.content = "[Old tool result content cleared — original size: 10788 chars]";
+
+    for (int i = 0; i < 3; ++i) {
+        ToolResponse tr;
+        tr.callId = "call_0" + std::to_string(i);
+        tr.toolName = "Read";
+        tr.content = "result " + std::to_string(i);
+        old.toolResults.push_back(tr);
+    }
+
+    auto result = convertLegacyMessage(old);
+
+    // All 3 blocks must be ToolResult, no Text block
+    REQUIRE(result.content.size() == 3);
+    for (size_t i = 0; i < result.content.size(); ++i) {
+        INFO("Block " << i << " type=" << result.content[i].type);
+        REQUIRE(result.content[i].type == ContentBlockParam::ToolResult);
+        REQUIRE(result.content[i].toolUseId == "call_0" + std::to_string(i));
+    }
+}
+
+TEST_CASE("PostCompactCleanup merged message must not emit text before tool_results",
+          "[compact][regression]") {
+    // Simulate PostCompactCleanup::enforceAlternation merging a User message
+    // with a ToolResult message (both have effective role User).
+    // After merge, the message has both msg.content (user text) AND toolResults.
+    // The API serialization must NOT emit the text block before tool_result blocks.
+    Message merged;
+    merged.role = MessageRole::User;
+    merged.content = "some user text\n\n[Old tool result content cleared — original size: 123 chars]";
+    ToolResponse tr;
+    tr.callId = "call_X";
+    tr.toolName = "Read";
+    tr.content = "file content";
+    merged.toolResults.push_back(tr);
+
+    auto cm = convertLegacyMessage(merged);
+
+    // Must NOT have a Text block before ToolResult blocks.
+    // The first non-ToolResult block (if any) must come after all ToolResult blocks.
+    bool foundTextBeforeToolResult = false;
+    int toolResultCount = 0;
+    for (auto& block : cm.content) {
+        if (block.type == ContentBlockParam::ToolResult) {
+            toolResultCount++;
+        } else if (block.type == ContentBlockParam::Text) {
+            if (toolResultCount < static_cast<int>(merged.toolResults.size())) {
+                foundTextBeforeToolResult = true;
+            }
+        }
+    }
+
+    REQUIRE(toolResultCount == 1);
+    REQUIRE_FALSE(foundTextBeforeToolResult);
+}
