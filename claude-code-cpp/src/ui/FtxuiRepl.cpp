@@ -915,6 +915,9 @@ void FtxuiRepl::syncLayoutState() {
         ls.collapsibleFocusIndex = -1;
     }
 
+    // Footer nav hint
+    ls.footer.collapsibleNavActive = (ls.collapsibleCount > 0 && !isStreaming_);
+
     // Text selection
     ls.selectionActive = selectionActive_;
     ls.selectionStartY = selectionHighlightStartY_;

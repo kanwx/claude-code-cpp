@@ -396,6 +396,7 @@ ftxui::Element renderFooterBar(const FooterState& state) {
     footerState.modeHintDismissed = state.modeHintDismissed;
     footerState.isAuthenticated = state.authenticated;
     footerState.isStreaming = state.isStreaming;
+    footerState.collapsibleNavActive = state.collapsibleNavActive;
     // The footer renderer handles the rest
     return ftxui_footer::renderFooter(footerState);
 }
@@ -432,11 +433,21 @@ ftxui::Component AppLayoutComponent(AppLayoutState& state, const RenderContext& 
             // Committed content blocks (new pipeline)
             if (s->content.contentBlocks && !s->content.contentBlocks->empty()) {
                 auto sepIndices = findAnswerSeparatorIndices(*s->content.contentBlocks);
+                int focusSeq = 0;
+                int collapsibleCount = s->collapsibleCount;
+                int focusIndex = s->collapsibleFocusIndex;
                 for (size_t i = 0; i < s->content.contentBlocks->size(); ++i) {
                     if (std::find(sepIndices.begin(), sepIndices.end(), i) != sepIndices.end()) {
                         contentEls.push_back(renderAnswerSeparator());
                     }
-                    contentEls.push_back(renderFtxuiElement((*s->content.contentBlocks)[i]));
+                    const auto& block = (*s->content.contentBlocks)[i];
+                    BlockRenderOptions opts;
+                    if (collapsibleCount > 0 &&
+                        isCollapsibleFocusTarget(block)) {
+                        opts.isFocusedCollapsible = (focusSeq == focusIndex);
+                        focusSeq++;
+                    }
+                    contentEls.push_back(renderFtxuiElement(block, opts));
                 }
             }
 

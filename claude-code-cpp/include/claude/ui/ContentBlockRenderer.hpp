@@ -28,7 +28,18 @@ std::vector<size_t> findAnswerSeparatorIndices(const std::vector<ContentBlock>& 
 #ifdef HAS_FTXUI
 #include <ftxui/dom/elements.hpp>
 namespace claude {
-ftxui::Element renderFtxuiElement(const ContentBlock& block);
+
+struct BlockRenderOptions {
+    bool isFocusedCollapsible = false;
+};
+
+ftxui::Element renderFtxuiElement(const ContentBlock& block,
+                                  const BlockRenderOptions& opts = {});
 ftxui::Element renderAnswerSeparator();
-}
+
+/// Check whether a ContentBlock is a collapsible focus target
+/// (matches the collapsible tracking in FtxuiRepl::syncLayoutState).
+bool isCollapsibleFocusTarget(const ContentBlock& block);
+
+} // namespace claude
 #endif

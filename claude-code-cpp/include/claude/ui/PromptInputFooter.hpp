@@ -15,6 +15,7 @@ struct FooterState {
     int contextPct = 0;
     double costUsd = 0.0;
     bool isStreaming = false;
+    bool collapsibleNavActive = false;
     String cwd;
     String gitBranch;
 };

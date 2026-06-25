@@ -38,7 +38,7 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
                 if (std::find(sepIndices.begin(), sepIndices.end(), i) != sepIndices.end()) {
                     contentEls.push_back(renderAnswerSeparator());
                 }
-                contentEls.push_back(renderFtxuiElement((*st->contentBlocks)[i]));
+                contentEls.push_back(renderFtxuiElement((*st->contentBlocks)[i], {}));
             }
         }
 
@@ -58,7 +58,7 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
             streamingCb.isFirst = st->contentBlocks &&
                 std::none_of(st->contentBlocks->begin(), st->contentBlocks->end(),
                     [](const ContentBlock& b) { return b.type == ContentBlock::AnswerText; });
-            contentEls.push_back(renderFtxuiElement(streamingCb));
+            contentEls.push_back(renderFtxuiElement(streamingCb, {}));
 
             // Blinking cursor after streaming text
             bool cursorVisible = (st->streaming.tickCounter % 4) < 2;

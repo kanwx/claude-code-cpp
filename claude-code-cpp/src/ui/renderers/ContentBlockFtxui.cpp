@@ -1,6 +1,7 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
 #include "claude/ui/PathDisplay.hpp"
+#include "claude/stream/AnswerPostProcessor.hpp"
 
 namespace claude {
 
@@ -14,6 +15,15 @@ bool isToolLikeBlock(const ContentBlock& block) {
         default:
             return false;
     }
+}
+
+bool isCollapsibleFocusTarget(const ContentBlock& block) {
+    if (block.type == ContentBlock::ToolResult &&
+        AnswerPostProcessor::isCollapsibleTool(block.toolName)) {
+        return true;
+    }
+    return block.type == ContentBlock::ToolGroup ||
+           block.type == ContentBlock::CollapsedGroup;
 }
 
 std::vector<size_t> findAnswerSeparatorIndices(const std::vector<ContentBlock>& blocks) {
@@ -87,14 +97,23 @@ Element renderToolBadge(const String& toolName, bool dimmed = false) {
     return badge;
 }
 
-/// Render the Ctrl+O hint
-Element ctrlOHint() {
-    return text(" [Ctrl+O]") | dim | color(MacShadow);
+/// Render the Ctrl+O hint — only shown for the focused collapsible item.
+Element ctrlOHint(bool focused, bool expanded) {
+    if (!focused) return text("");
+    return text(expanded ? " [Ctrl+O collapse]" : " [Ctrl+O expand]")
+        | color(MacSky) | bold;
+}
+
+/// Render a focus marker (› prefix) for the focused collapsible item.
+Element focusMarker(bool focused) {
+    if (!focused) return text("  ");
+    return text("› ") | color(MacSky) | bold;
 }
 
 } // anonymous namespace
 
-ftxui::Element renderFtxuiElement(const ContentBlock& block) {
+ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOptions& opts) {
+    bool focused = opts.isFocusedCollapsible;
     switch (block.type) {
         // ===== User Message =====
         case ContentBlock::UserMessage: {
@@ -244,7 +263,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             if (dm.isError) {
                 String errDisplay = dm.errorText.empty() ? "Error" : dm.errorText;
                 return hbox({
-                    text("  ⎿ "),
+                    focusMarker(focused),
                     renderToolBadge(dm.toolName),
                     text(" "),
                     text(errDisplay) | color(MacRose),
@@ -254,7 +273,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             if (dm.isCancelled || dm.isRejected) {
                 String label = dm.isRejected ? "Rejected" : "Interrupted";
                 return hbox({
-                    text("  ⊘ ") | dim,
+                    focusMarker(focused),
                     renderToolBadge(dm.toolName, /*dimmed=*/true),
                     text(" "),
                     text(label) | dim,
@@ -271,6 +290,8 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
 
             // Bash: green tint for exit 0, other tools: dimmed summary
             auto summaryStyle = (dm.toolName == "Bash") ? color(MacMint) : dim;
+            // Focused items get bold summary
+            if (focused) summaryStyle = bold;
             auto summaryEl = text(displayText) | summaryStyle;
             if (!detailText.empty()) {
                 summaryEl = vbox({
@@ -281,18 +302,19 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
 
             if (!block.expanded) {
                 return hbox({
-                    text("  ⎿ "),
+                    focusMarker(focused),
                     renderToolBadge(dm.toolName),
                     text(" "),
                     summaryEl,
-                    ctrlOHint(),
+                    ctrlOHint(focused, block.expanded),
                 });
             }
             return hbox({
-                text("  ⎿ "),
+                focusMarker(focused),
                 renderToolBadge(dm.toolName),
                 text(" "),
                 summaryEl,
+                ctrlOHint(focused, block.expanded),
             });
         }
 
@@ -300,20 +322,21 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
         case ContentBlock::ToolGroup: {
             if (!block.expanded) {
                 return hbox({
-                    text("  ⎿ "),
-                    text(block.summary.primaryText) | dim,
-                    ctrlOHint(),
+                    focusMarker(focused),
+                    text(block.summary.primaryText) | (focused ? bold : dim),
+                    ctrlOHint(focused, block.expanded),
                 });
             }
             Elements childrenEls;
             childrenEls.push_back(hbox({
-                text("  ⎿ "),
+                focusMarker(focused),
                 text(block.summary.primaryText) | dim,
+                ctrlOHint(focused, block.expanded),
             }));
             for (auto& child : block.children) {
                 childrenEls.push_back(hbox({
                     text("    "),
-                    renderFtxuiElement(child),
+                    renderFtxuiElement(child, {}),
                 }));
             }
             return vbox(std::move(childrenEls));
@@ -345,25 +368,26 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                     dotColor = MacRose;
                 }
                 return hbox({
-                    text("  "),
+                    focusMarker(focused),
                     text("⏺ ") | color(dotColor),
-                    text(block.summary.primaryText) | dim,
-                    ctrlOHint(),
+                    text(block.summary.primaryText) | (focused ? bold : dim),
+                    ctrlOHint(focused, block.expanded),
                 });
             }
             // Expanded: header + indented children with tree connectors
             Elements cel;
             cel.push_back(hbox({
-                text("  "),
+                focusMarker(focused),
                 text("⏺ ") | color(MacMint),
                 text(block.summary.primaryText) | dim,
+                ctrlOHint(focused, block.expanded),
             }));
             for (size_t i = 0; i < block.children.size(); i++) {
                 bool last = (i == block.children.size() - 1);
                 String connector = last ? "  └─ " : "  ├─ ";
                 cel.push_back(hbox({
                     text(connector) | dim | color(MacShadow),
-                    renderFtxuiElement(block.children[i]),
+                    renderFtxuiElement(block.children[i], {}),
                 }));
             }
             return vbox(std::move(cel));
