@@ -174,14 +174,18 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 return text("");
             }
 
-            // Prefix: " ⏺ " for first answer block, "   " for continuation.
+            // Prefix: " ⏺ " for every committed AnswerText block.
             // One-space gutter aligns with UserMessage box left edge.
-            String prefix = block.isFirst ? " ⏺ " : "   ";
+            // All assistant narration (initial, intermediate, final) uses ⏺;
+            // the "only first" distinction was causing bare continuation lines
+            // to appear at column 0 without a marker or gutter.
+            String prefix = " ⏺ ";
 
-            // Single-paragraph plain text: embed the prefix directly in the
-            // paragraph so marker and content are guaranteed to render on the
-            // same visual line.  hbox-based layout can split them when the
-            // markdown renderer produces block-level elements.
+            // Single-paragraph plain text: use hbox so the prefix gutter is
+            // preserved.  Embedding the prefix inside paragraph() causes FTXUI
+            // to strip leading whitespace, making intermediate AnswerText
+            // (isFirst=false, prefix="   ") appear at column 0 instead of
+            // aligning with tool group summaries.
             if (block.text.find('\n') == String::npos &&
                 block.text.find("```") == String::npos &&
                 block.text.find('*') == String::npos &&
@@ -190,7 +194,10 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 block.text.find('|') == String::npos &&
                 block.text.find('>') == String::npos &&
                 block.text.find('[') == String::npos) {
-                return paragraph(prefix + block.text);
+                return hbox({
+                    text(prefix),
+                    paragraph(block.text),
+                });
             }
 
             // Complex markdown: use full renderer, wrapped lines get "   " gutter.
