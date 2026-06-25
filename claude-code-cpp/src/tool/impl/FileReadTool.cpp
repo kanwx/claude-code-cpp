@@ -285,7 +285,30 @@ ToolResultSummary FileReadTool::renderToolResult(const String& result, bool isEr
     for (char c : result) { if (c == '\n') lines++; }
     if (!result.empty() && result.back() != '\n') lines++;
     if (lines == 0) lines = 1;
-    return ToolResultSummary::success("Read " + std::to_string(lines) + " lines", /*bold=*/true);
+
+    // Thread-safe: extract file path from result string, not from shared member.
+    // Result starts with "Contents of <path>:\n\n" for text files,
+    // "[IMAGE: <path> | ..." for images.
+    // Downstream formatToolResult expects primaryText = "N lines" (number first)
+    // and secondaryText = " from <path>" (with " from " prefix for cleanFilePath).
+    String secondary;
+    const String contentsPrefix = "Contents of ";
+    if (result.size() > contentsPrefix.size() &&
+        result.compare(0, contentsPrefix.size(), contentsPrefix) == 0) {
+        auto colon = result.find(":\n", contentsPrefix.size());
+        if (colon != String::npos) {
+            secondary = " from " + result.substr(contentsPrefix.size(),
+                                                  colon - contentsPrefix.size());
+        }
+    } else if (result.size() > 8 && result.compare(0, 8, "[IMAGE: ") == 0) {
+        auto pipePos = result.find(" |", 8);
+        if (pipePos != String::npos) {
+            secondary = " from " + result.substr(8, pipePos - 8);
+        }
+    }
+
+    return ToolResultSummary::success(std::to_string(lines) + " lines", /*bold=*/true,
+                                      /*secondary=*/secondary);
 }
 
 } // namespace claude
