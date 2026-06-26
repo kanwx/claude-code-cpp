@@ -63,6 +63,9 @@ target_link_libraries(test_beta_headers PRIVATE claude_core Catch2::Catch2WithMa
 add_executable(test_agent_loop_recovery test_agent_loop_recovery.cpp)
 target_link_libraries(test_agent_loop_recovery PRIVATE claude_core Catch2::Catch2WithMain)
 
+add_executable(test_history_repair test_history_repair.cpp)
+target_link_libraries(test_history_repair PRIVATE claude_core Catch2::Catch2WithMain)
+
 add_executable(test_autocompact_circuit test_autocompact_circuit.cpp)
 target_link_libraries(test_autocompact_circuit PRIVATE claude_core Catch2::Catch2WithMain)
 
@@ -119,6 +122,7 @@ catch_discover_tests(test_e2e)
 catch_discover_tests(test_bridge)
 catch_discover_tests(test_beta_headers)
 catch_discover_tests(test_agent_loop_recovery)
+catch_discover_tests(test_history_repair)
 catch_discover_tests(test_autocompact_circuit)
 catch_discover_tests(test_retryable_client)
 catch_discover_tests(test_retry_policy_413)

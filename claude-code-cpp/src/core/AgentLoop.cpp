@@ -617,6 +617,12 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         // Check cancellation after tool execution
         if (impl_->cancelled.load(std::memory_order_acquire)) {
             spdlog::debug("AgentLoop: cancelled after tool execution at iteration {}", iteration);
+            // Write tool results into messageHistory before returning.
+            // Without this, the assistant tool_use blocks in history lack
+            // matching tool_results, forcing P0's API-copy repair to synthesize
+            // [Error: tool execution was interrupted] placeholders.
+            insertOrMergeToolResultsAfterAssistant(
+                result.message.toolCalls, toolResponses, "Interrupted");
             {
                 auto cb = [&] {
                     std::lock_guard lock(impl_->callbackMutex);

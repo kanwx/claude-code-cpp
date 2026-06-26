@@ -323,6 +323,23 @@ private:
     /// in the last assistant message that lack matching tool_results.
     void addMissingToolResults();
 
+    /// Insert or merge tool results immediately after the matching assistant
+    /// message in messageHistory.  Used when the agent loop is cancelled after
+    /// tool execution — the assistant message is already in history but the
+    /// tool_result was not written yet.  This ensures messageHistory itself
+    /// is a valid transcript without relying on P0's API-copy repair.
+    ///
+    /// Algorithm: scans backwards through history to find the assistant
+    /// message whose tool_use IDs match expectedToolCallIds.  Collects
+    /// existing late tool_results, moves them to immediately after the
+    /// assistant, and fills in missing results from actualResults or
+    /// synthetic error fallback.
+    void insertOrMergeToolResultsAfterAssistant(
+        const std::vector<ToolCall>& expected,
+        std::vector<ToolResponse>& actual,
+        const String& fallbackErrorText = "Interrupted"
+    );
+
     /// Strip thinking/signature/redacted_thinking from message history.
     /// Called before retrying with a fallback model to prevent 400 errors.
     void stripThinkingFromHistory();
@@ -367,5 +384,31 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+} // namespace claude
+
+// ============================================================================
+// P2: Free functions for history-layer tool_result repair.
+// Exposed for unit testing; AgentLoop methods delegate to these.
+// ============================================================================
+
+namespace claude {
+
+/// Insert or merge tool results into a message history vector at the correct
+/// position — immediately after the matching assistant tool_use message,
+/// before any subsequently-inserted user/system messages.
+///
+/// Handles race conditions: if a new prompt created a different assistant
+/// after our assistant, this function still finds the correct one by ID.
+void insertToolResultsIntoHistory(
+    std::vector<Message>& history,
+    const std::vector<ToolCall>& expected,
+    std::vector<ToolResponse>& actual,
+    const String& fallbackErrorText
+);
+
+/// Validate history after repair: every assistant with tool_use must have
+/// an immediately-following tool_result message covering all tool_use IDs.
+bool validateHistoryAfterRepair(const std::vector<Message>& history);
 
 } // namespace claude

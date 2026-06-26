@@ -1,6 +1,7 @@
 #include <claude/core/AgentLoopImpl.hpp>
 #include <claude/tool/ResultTruncation.hpp>
 #include <spdlog/spdlog.h>
+#include <set>
 
 namespace claude {
 
@@ -276,6 +277,206 @@ void AgentLoop::addMissingToolResults() {
             spdlog::debug("Added {} synthetic error tool_results for unmatched tool_uses", errorResults.size());
         }
     }
+}
+
+// ============================================================================
+// P2: Ordered history-layer tool_result insert/merge
+// ============================================================================
+
+void insertToolResultsIntoHistory(
+    std::vector<Message>& history,
+    const std::vector<ToolCall>& expected,
+    std::vector<ToolResponse>& actual,
+    const String& fallbackErrorText
+) {
+    if (expected.empty()) return;
+
+    // Build expected ID set
+    std::set<String> expectedIds;
+    for (auto& tc : expected) {
+        expectedIds.insert(tc.id);
+    }
+
+    // === Step 1: Find the matching assistant message ===
+    // Scan backwards through history to find the assistant message whose
+    // tool_use IDs match the expected set.  Must not stop at the last
+    // assistant — a newer prompt may have inserted a different assistant
+    // after the one we're looking for.
+    int assistantIdx = -1;
+    for (int i = static_cast<int>(history.size()) - 1; i >= 0; --i) {
+        auto& msg = history[i];
+        if (msg.role != MessageRole::Assistant) continue;
+        if (!msg.hasToolCalls()) continue;
+
+        // Check if this assistant's tool_use IDs are a subset of expectedIds
+        bool allMatch = true;
+        for (auto& tc : msg.toolCalls) {
+            if (!expectedIds.count(tc.id)) { allMatch = false; break; }
+        }
+        if (allMatch) {
+            assistantIdx = i;
+            break;
+        }
+    }
+
+    if (assistantIdx < 0) {
+        spdlog::debug("insertOrMergeToolResults: no matching assistant found for {} tool_use IDs",
+                      expectedIds.size());
+        return;
+    }
+
+    // === Step 2: Collect existing late tool_results for these IDs ===
+    // These are tool_result messages after the assistant that belong to
+    // our tool_use IDs.  We'll remove them from their current positions
+    // and merge them into the result we place after the assistant.
+    std::map<String, ToolResponse> existingResults;
+    std::vector<size_t> indicesToRemove;  // right-to-left for safe removal
+
+    for (size_t i = assistantIdx + 1; i < history.size(); ++i) {
+        auto& msg = history[i];
+        if (msg.role != MessageRole::ToolResult) continue;
+        for (auto& tr : msg.toolResults) {
+            if (expectedIds.count(tr.callId)) {
+                // Deduplicate: keep only the first occurrence
+                if (!existingResults.count(tr.callId)) {
+                    existingResults[tr.callId] = tr;
+                }
+            }
+        }
+        // If ALL tool_results in this message belong to our IDs, mark for removal
+        bool allBelong = true;
+        for (auto& tr : msg.toolResults) {
+            if (!expectedIds.count(tr.callId)) { allBelong = false; break; }
+        }
+        if (allBelong && !msg.toolResults.empty()) {
+            indicesToRemove.push_back(i);
+        }
+    }
+
+    // Remove marked tool_result messages (right-to-left for index stability)
+    for (auto it = indicesToRemove.rbegin(); it != indicesToRemove.rend(); ++it) {
+        history.erase(history.begin() + static_cast<long>(*it));
+    }
+
+    // === Step 3: Build deduplicated result list ===
+    // Priority: actual (fresh) > existing (late/stale) > synthetic (error)
+    std::vector<ToolResponse> results;
+    std::set<String> seenIds;
+
+    // Actual results from executeToolCalls (highest priority)
+    for (auto& ar : actual) {
+        if (!expectedIds.count(ar.callId)) continue;
+        if (seenIds.count(ar.callId)) continue;
+        seenIds.insert(ar.callId);  // must capture before std::move
+        results.push_back(std::move(ar));
+    }
+
+    // Existing late results (lower priority, fill gaps)
+    for (auto& tc : expected) {
+        if (seenIds.count(tc.id)) continue;
+        auto it = existingResults.find(tc.id);
+        if (it != existingResults.end()) {
+            results.push_back(it->second);
+            seenIds.insert(tc.id);
+        }
+    }
+
+    // Synthesize error results for remaining missing IDs
+    for (auto& tc : expected) {
+        if (seenIds.count(tc.id)) continue;
+        ToolResponse synth;
+        synth.callId = tc.id;
+        synth.toolName = tc.name;
+        synth.content = fallbackErrorText;
+        synth.isError = true;
+        synth.isCancelled = true;
+        results.push_back(std::move(synth));
+        seenIds.insert(tc.id);
+    }
+
+    // === Step 4: Insert at the correct position ===
+    // Check what immediately follows the assistant
+    bool hasExistingToolResult = false;
+    size_t insertPos = static_cast<size_t>(assistantIdx) + 1;
+    if (insertPos < history.size() && history[insertPos].role == MessageRole::ToolResult) {
+        // Replace the existing tool_result message at this position
+        hasExistingToolResult = true;
+    }
+
+    auto toolMsg = Message::toolResult(std::move(results));
+    toolMsg.apiRound = history[assistantIdx].apiRound;
+
+    if (hasExistingToolResult) {
+        // Merge: keep any non-our results in the existing tool_result message
+        auto& existingMsg = history[insertPos];
+        for (auto& tr : existingMsg.toolResults) {
+            if (!expectedIds.count(tr.callId)) {
+                toolMsg.toolResults.push_back(std::move(tr));
+            }
+        }
+        history[insertPos] = std::move(toolMsg);
+    } else {
+        // Insert: place tool_result immediately after assistant,
+        // before any user/system text that was already inserted
+        history.insert(history.begin() + static_cast<long>(insertPos),
+                       std::move(toolMsg));
+    }
+
+    spdlog::debug("insertOrMergeToolResults: assistantIdx={}, insertPos={}, "
+                  "results={}, existingLate={}, synthetic={}",
+                  assistantIdx, insertPos, actual.size(),
+                  existingResults.size(),
+                  seenIds.size() - existingResults.size() - actual.size());
+}
+
+void AgentLoop::insertOrMergeToolResultsAfterAssistant(
+    const std::vector<ToolCall>& expected,
+    std::vector<ToolResponse>& actual,
+    const String& fallbackErrorText
+) {
+    std::lock_guard lock(impl_->historyMutex);
+    insertToolResultsIntoHistory(impl_->messageHistory, expected, actual, fallbackErrorText);
+}
+
+// ============================================================================
+// P2: History-level validation (sanity-check after repair)
+// ============================================================================
+
+bool validateHistoryAfterRepair(const std::vector<Message>& history) {
+    for (size_t i = 0; i < history.size(); ++i) {
+        auto& msg = history[i];
+        if (msg.role != MessageRole::Assistant || !msg.hasToolCalls()) continue;
+
+        // The next message must exist and be a tool_result containing
+        // all the tool_use IDs from this assistant message.
+        if (i + 1 >= history.size()) {
+            spdlog::error("validateHistoryAfterRepair: assistant at {} has tool_use "
+                          "but no following message", i);
+            return false;
+        }
+
+        auto& next = history[i + 1];
+        if (next.role != MessageRole::ToolResult) {
+            spdlog::error("validateHistoryAfterRepair: assistant at {} has tool_use "
+                          "but next message is not tool_result (role={})",
+                          i, static_cast<int>(next.role));
+            return false;
+        }
+
+        // Check that every tool_use ID is covered
+        std::set<String> resultIds;
+        for (auto& tr : next.toolResults) {
+            resultIds.insert(tr.callId);
+        }
+        for (auto& tc : msg.toolCalls) {
+            if (!resultIds.count(tc.id)) {
+                spdlog::error("validateHistoryAfterRepair: assistant at {} tool_use "
+                              "id={} has no matching tool_result", i, tc.id);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 // ============================================================================
