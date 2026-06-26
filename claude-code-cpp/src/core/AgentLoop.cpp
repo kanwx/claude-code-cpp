@@ -873,6 +873,28 @@ Json AgentLoop::buildApiRequest() {
         }
     }
 
+    // ===== Protocol safety net: inject synthetic tool_results for orphaned tool_uses =====
+    // If a previous turn was cancelled or interrupted before tool_results were
+    // committed to history, orphan tool_use blocks would cause 400 errors from
+    // the Anthropic API.  Repair the local copy by injecting/moving tool_results
+    // to the correct positions, then validate the result.
+    int syntheticResults = injectMissingToolResults(contentHistory);
+    if (syntheticResults > 0) {
+        fprintf(stderr, "[WARN] buildApiRequest: repaired %d synthetic tool_result(s) "
+                "for orphaned tool_use blocks\n", syntheticResults);
+    }
+
+    // Hard validation: after repair, verify protocol invariants.
+    // If still invalid, reject the request locally rather than sending a
+    // guaranteed 400 to the API.
+    if (!validateToolResultOrdering(contentHistory)) {
+        fprintf(stderr, "[ERROR] buildApiRequest: protocol validation FAILED "
+                "after repair — rejecting request\n");
+        throw std::runtime_error(
+            "Cannot send request: pending tool result not finalized. "
+            "Wait for the current tool to complete or press ESC to cancel.");
+    }
+
     // Strip thinking from assistant messages (ContentMessage view).
     // RedactedThinking blocks are preserved — they must be sent verbatim.
     for (auto& msg : contentHistory) {

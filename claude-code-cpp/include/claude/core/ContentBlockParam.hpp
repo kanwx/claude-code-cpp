@@ -142,11 +142,31 @@ Json serializeContentMessageForAnthropic(const ContentMessage& msg);
 Json buildAnthropicApiMessages(const std::vector<ContentMessage>& history);
 Json serializeContentMessageForOpenAI(const ContentMessage& msg);
 
-// Legacy Message -> ContentMessage conversion
+// Legay Message -> ContentMessage conversion
 ContentMessage convertLegacyMessage(const Message& old);
 
 // Migrate old-format session JSON (flat content string + top-level tool_calls/etc.)
 // to ContentBlock array format in-place.
 void migrateLegacySession(Json& msg);
+
+// ========== Protocol invariant enforcement ==========
+
+/// Detect orphaned tool_use blocks in a ContentMessage sequence.
+/// Returns tool_use IDs that have no matching tool_result in any subsequent
+/// message before the next assistant message.
+std::vector<String> findOrphanedToolUses(const std::vector<ContentMessage>& messages);
+
+/// Inject synthetic tool_result messages for orphaned tool_use blocks.
+/// This is a protocol safety net: if a turn was cancelled or interrupted
+/// before tool_results were written to history, we synthesize error
+/// tool_results to prevent 400 errors from the Anthropic API.
+///
+/// Returns the number of synthetic results injected.
+int injectMissingToolResults(std::vector<ContentMessage>& messages);
+
+/// Hard validator: ensure every assistant tool_use is immediately followed
+/// by a user message whose first blocks are matching tool_results.
+/// Returns true if the protocol ordering is valid.
+bool validateToolResultOrdering(const std::vector<ContentMessage>& messages);
 
 } // namespace claude

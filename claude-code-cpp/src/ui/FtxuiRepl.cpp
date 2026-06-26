@@ -632,9 +632,13 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
 
-                isStreaming_ = false;
+                // Keep isStreaming_ true until finishStream() — the turn is not
+                // complete until runStreaming() returns and main.cpp calls
+                // finishStream().  Setting isStreaming_=false here allowed the
+                // Return handler to accept new user input while tools were still
+                // executing in the background, producing orphan tool_use blocks
+                // and 400 errors from the API (E8 bug).
                 isThinking_ = false;
-                stopRefreshThread();
 
                 // B6: Record turn boundary
                 turnBoundaries_.push_back(contentBlocks_.size());
@@ -1594,6 +1598,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 }
 
                 r->stopRefreshThread();
+                return true;
+            }
+            // Explicitly block Enter/Return during streaming to prevent
+            // new user prompt submission while a turn is active.
+            // Text input (character events) still passes through to the
+            // Input component so the user can type, but submitting is
+            // gated here until finishStream() runs.
+            if (event == Event::Return) {
                 return true;
             }
             return false;
