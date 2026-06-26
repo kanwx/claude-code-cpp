@@ -490,11 +490,27 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             break;
         }
 
-        // Check cancellation after API call returns
-        // If cancelled mid-stream, the partial message may have incomplete content.
-        // Don't add it to history — just return what we have.
-        if (impl_->cancelled.load(std::memory_order_acquire)) {
+        // Check cancellation after API call returns.
+        // If cancelled mid-stream, the streaming code has already pushed the
+        // assistant message (with tool_use blocks) to history.  We must write
+        // synthetic tool_results here — otherwise P0's API-copy repair has to
+        // synthesize placeholders for every orphan tool_use.
+        if (result.wasAborted || impl_->cancelled.load(std::memory_order_acquire)) {
             spdlog::debug("AgentLoop: cancelled after API iteration {}", iteration);
+            if (result.message.hasToolCalls()) {
+                std::vector<ToolResponse> cancelledResults;
+                for (auto& tc : result.message.toolCalls) {
+                    ToolResponse resp;
+                    resp.callId = tc.id;
+                    resp.toolName = tc.name;
+                    resp.content = "Interrupted: tool execution was cancelled";
+                    resp.isError = true;
+                    resp.isCancelled = true;
+                    cancelledResults.push_back(std::move(resp));
+                }
+                insertOrMergeToolResultsAfterAssistant(
+                    result.message.toolCalls, cancelledResults, "Interrupted");
+            }
             {
                 auto cb = [&] {
                     std::lock_guard lock(impl_->callbackMutex);
@@ -509,10 +525,13 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // Add assistant message to history
+        // Save toolCalls before move — needed later for ordered
+        // insertOrMergeToolResultsAfterAssistant placement.
+        auto savedToolCalls = result.message.toolCalls;
         result.message.apiRound = iteration;
         {
             std::lock_guard lock(impl_->historyMutex);
-            impl_->messageHistory.push_back(result.message);
+            impl_->messageHistory.push_back(std::move(result.message));
         }
 
         // ========== Stop Hook ==========
@@ -594,7 +613,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // No tool calls → end
-        if (!result.message.hasToolCalls() && result.interleavedToolResults.empty()) {
+        if (savedToolCalls.empty() && result.interleavedToolResults.empty()) {
             break;
         }
 
@@ -607,22 +626,27 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // Execute any remaining tool calls (not interleaved)
-        if (result.message.hasToolCalls()) {
-            auto batchResponses = executeToolCalls(result.message.toolCalls);
+        if (!savedToolCalls.empty()) {
+            auto batchResponses = executeToolCalls(savedToolCalls);
             toolResponses.insert(toolResponses.end(),
                 std::make_move_iterator(batchResponses.begin()),
                 std::make_move_iterator(batchResponses.end()));
         }
 
+        // Check whether any tool was cancelled — per-result local state
+        // that survives resetCancel() in a new thread.
+        const bool toolWasCancelled = std::any_of(toolResponses.begin(), toolResponses.end(),
+            [](const ToolResponse& r) { return r.isCancelled; });
+
         // Check cancellation after tool execution
-        if (impl_->cancelled.load(std::memory_order_acquire)) {
+        if (impl_->cancelled.load(std::memory_order_acquire) || toolWasCancelled) {
             spdlog::debug("AgentLoop: cancelled after tool execution at iteration {}", iteration);
             // Write tool results into messageHistory before returning.
             // Without this, the assistant tool_use blocks in history lack
             // matching tool_results, forcing P0's API-copy repair to synthesize
             // [Error: tool execution was interrupted] placeholders.
             insertOrMergeToolResultsAfterAssistant(
-                result.message.toolCalls, toolResponses, "Interrupted");
+                savedToolCalls, toolResponses, "Interrupted");
             {
                 auto cb = [&] {
                     std::lock_guard lock(impl_->callbackMutex);
@@ -681,8 +705,15 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                 pendingSkillModel, pendingSkillTools.size(), pendingSkillPrompt.size());
         }
 
-        // Add tool results to history
-        {
+        // Add tool results to history — use ordered insert so
+        // tool_results land immediately after the assistant message
+        // even when an old (detached) thread runs after a new prompt
+        // has already pushed user messages.
+        if (!savedToolCalls.empty()) {
+            insertOrMergeToolResultsAfterAssistant(
+                savedToolCalls, toolResponses, "Interrupted");
+        } else if (!toolResponses.empty()) {
+            // Interleaved-only: no toolCalls in the message itself
             auto toolMsg = Message::toolResult(std::move(toolResponses));
             toolMsg.apiRound = iteration;
             std::lock_guard lock(impl_->historyMutex);

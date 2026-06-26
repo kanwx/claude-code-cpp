@@ -409,3 +409,245 @@ TEST_CASE("P2: Match old assistant by tool_use ID when it is not the last assist
     // Both assistants now have valid tool_results
     REQUIRE(validateHistoryAfterRepair(history));
 }
+
+// ============================================================================
+// P3 Tests: ESC cancel lifecycle — history and idempotency
+// ============================================================================
+
+// ============================================================================
+// P3 Test 1: Cancelled tool result attributes are preserved
+// ============================================================================
+TEST_CASE("P3: Cancelled tool result preserves isCancelled/isError in history",
+          "[p3][history_repair]") {
+    // When ESC fires during tool execution, the tool returns isCancelled=true.
+    // insertToolResultsIntoHistory must preserve these flags so the UI can
+    // render "Interrupted" instead of showing a normal success result.
+
+    std::vector<Message> history;
+    history.push_back(Message::user("Run sleep 30"));
+
+    auto tc = makeTc("call-1", "Bash");
+    history.push_back(Message::assistant("Running sleep.", {tc}));
+
+    std::vector<ToolCall> expected = {tc};
+    std::vector<ToolResponse> actual;
+    ToolResponse cancelledResp;
+    cancelledResp.callId = "call-1";
+    cancelledResp.toolName = "Bash";
+    cancelledResp.content = "Slept for 30 seconds.";
+    cancelledResp.isError = false;
+    cancelledResp.isCancelled = true;  // ESC was pressed
+    actual.push_back(cancelledResp);
+
+    insertToolResultsIntoHistory(history, expected, actual, "Interrupted");
+
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[2].toolResults.size() == 1);
+    CHECK(history[2].toolResults[0].callId == "call-1");
+    CHECK(history[2].toolResults[0].isCancelled == true);
+    // Content is preserved even though cancelled (tool actually finished)
+    CHECK(history[2].toolResults[0].content == "Slept for 30 seconds.");
+    CHECK_FALSE(history[2].toolResults[0].isError);
+
+    REQUIRE(validateHistoryAfterRepair(history));
+}
+
+// ============================================================================
+// P3 Test 2: Idempotent — repeated inserts don't duplicate
+// ============================================================================
+TEST_CASE("P3: Repeated insertToolResultsIntoHistory calls are idempotent",
+          "[p3][history_repair]") {
+    // The ESC handler fires once, but finishStream + stale thread callbacks
+    // could theoretically trigger a second insert attempt. The function
+    // must be idempotent: no duplicate tool_result messages, no duplicate
+    // tool responses within a message.
+
+    std::vector<Message> history;
+    history.push_back(Message::user("Run command"));
+
+    auto tc = makeTc("call-1", "Bash");
+    history.push_back(Message::assistant("Running.", {tc}));
+
+    std::vector<ToolCall> expected = {tc};
+    std::vector<ToolResponse> actual;
+    actual.push_back(makeTr("call-1", "Bash", "result"));
+
+    // First insert
+    insertToolResultsIntoHistory(history, expected, actual, "Interrupted");
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[2].toolResults.size() == 1);
+
+    // Second insert — must be idempotent (no-op on same data)
+    std::vector<ToolResponse> actual2;
+    actual2.push_back(makeTr("call-1", "Bash", "result"));
+    insertToolResultsIntoHistory(history, expected, actual2, "Interrupted");
+
+    // No duplicate tool_result message inserted
+    REQUIRE(history.size() == 3);
+
+    // No duplicate tool response within the message
+    REQUIRE(history[2].toolResults.size() == 1);
+    CHECK(history[2].toolResults[0].callId == "call-1");
+
+    REQUIRE(validateHistoryAfterRepair(history));
+}
+
+// ============================================================================
+// P3 Test 3: All-tools-cancelled path produces valid history
+// ============================================================================
+TEST_CASE("P3: All tools cancelled — every ID gets synthetic error",
+          "[p3][history_repair]") {
+    // ESC fires before any tool starts executing. The tool executor
+    // cancels all pending tools, returning synthetic cancelled results.
+    // insertToolResultsIntoHistory must fill in all tool_use IDs.
+
+    std::vector<Message> history;
+    history.push_back(Message::user("Run three commands"));
+
+    auto tc1 = makeTc("call-1", "Bash");
+    auto tc2 = makeTc("call-2", "Read");
+    auto tc3 = makeTc("call-3", "Write");
+    history.push_back(Message::assistant("Running all three.", {tc1, tc2, tc3}));
+
+    std::vector<ToolCall> expected = {tc1, tc2, tc3};
+    // Simulate: ESC cancelled all tools, no actual results
+    std::vector<ToolResponse> actual;  // empty — all cancelled
+
+    insertToolResultsIntoHistory(history, expected, actual, "Interrupted");
+
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[2].toolResults.size() == 3);
+
+    // All three must be synthetic error results
+    for (int i = 0; i < 3; i++) {
+        CHECK(history[2].toolResults[i].isError == true);
+        CHECK(history[2].toolResults[i].isCancelled == true);
+        CHECK(history[2].toolResults[i].content == "Interrupted");
+    }
+
+    // IDs must match expected order
+    CHECK(history[2].toolResults[0].callId == "call-1");
+    CHECK(history[2].toolResults[1].callId == "call-2");
+    CHECK(history[2].toolResults[2].callId == "call-3");
+
+    REQUIRE(validateHistoryAfterRepair(history));
+}
+
+// ============================================================================
+// P3 Test 4: ESC + new prompt race with cancelled late result
+// ============================================================================
+TEST_CASE("P3: ESC cancel — late cancelled result inserted before new prompt",
+          "[p3][history_repair][regression]") {
+    // Real ESC scenario:
+    // 1. User submits "Run sleep 30"
+    // 2. Tool starts running
+    // 3. User presses ESC → cancel flag set
+    // 4. User immediately submits "你好"
+    // 5. Sleep finishes, result marked isCancelled=true
+    // 6. insertToolResultsIntoHistory must place result BEFORE "你好"
+
+    std::vector<Message> history;
+    history.push_back(Message::user("Run sleep 30"));
+
+    auto sleepTc = makeTc("sleep-call", "Bash");
+    history.push_back(Message::assistant("Running sleep.", {sleepTc}));
+
+    // New prompt submitted while sleep was still running
+    history.push_back(Message::user("你好"));
+
+    // Sleep finishes, marked cancelled
+    std::vector<ToolCall> expected = {sleepTc};
+    std::vector<ToolResponse> actual;
+    ToolResponse cancelledResp;
+    cancelledResp.callId = "sleep-call";
+    cancelledResp.toolName = "Bash";
+    cancelledResp.content = "Slept for 30 seconds.";
+    cancelledResp.isCancelled = true;
+    actual.push_back(cancelledResp);
+
+    insertToolResultsIntoHistory(history, expected, actual, "Interrupted");
+
+    // After repair:
+    // [0] User "Run sleep 30"
+    // [1] Assistant ← sleep tool_use
+    // [2] ToolResult ← cancelled sleep result INSERTED HERE
+    // [3] User "你好"
+    REQUIRE(history.size() == 4);
+
+    CHECK(history[0].role == MessageRole::User);
+    CHECK(history[0].content == "Run sleep 30");
+
+    CHECK(history[1].role == MessageRole::Assistant);
+    REQUIRE(history[1].toolCalls.size() == 1);
+    CHECK(history[1].toolCalls[0].id == "sleep-call");
+
+    // Cancelled tool result must be between assistant and new user, not after
+    CHECK(history[2].role == MessageRole::ToolResult);
+    REQUIRE(history[2].toolResults.size() == 1);
+    CHECK(history[2].toolResults[0].callId == "sleep-call");
+    CHECK(history[2].toolResults[0].isCancelled == true);
+
+    // New user message is untouched at the end
+    CHECK(history[3].role == MessageRole::User);
+    CHECK(history[3].content == "你好");
+
+    // History must be valid — no tool_use followed by user text
+    REQUIRE(validateHistoryAfterRepair(history));
+}
+
+// ============================================================================
+// P3 Test 5: Partially cancelled batch — some succeed, some cancelled
+// ============================================================================
+TEST_CASE("P3: Partially cancelled batch — mixed success and cancelled results",
+          "[p3][history_repair]") {
+    // ESC fires mid-batch: tool 1 already completed (success), tools 2 & 3
+    // were cancelled before they could start. The ToolResponse array has
+    // mix of success and cancelled.
+
+    std::vector<Message> history;
+    history.push_back(Message::user("Run three tools"));
+
+    auto tc1 = makeTc("call-1", "Read");
+    auto tc2 = makeTc("call-2", "Bash");
+    auto tc3 = makeTc("call-3", "Glob");
+    history.push_back(Message::assistant("Running tools.", {tc1, tc2, tc3}));
+
+    std::vector<ToolCall> expected = {tc1, tc2, tc3};
+    std::vector<ToolResponse> actual;
+    // Tool 1 succeeded before ESC
+    actual.push_back(makeTr("call-1", "Read", "file contents"));
+    // Tools 2 & 3 were cancelled (ESC fired during batch)
+    ToolResponse cancelled2;
+    cancelled2.callId = "call-2";
+    cancelled2.toolName = "Bash";
+    cancelled2.content = "Cancelled by user";
+    cancelled2.isCancelled = true;
+    actual.push_back(cancelled2);
+    ToolResponse cancelled3;
+    cancelled3.callId = "call-3";
+    cancelled3.toolName = "Glob";
+    cancelled3.content = "Cancelled by user";
+    cancelled3.isCancelled = true;
+    actual.push_back(cancelled3);
+
+    insertToolResultsIntoHistory(history, expected, actual, "Interrupted");
+
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[2].toolResults.size() == 3);
+
+    // Tool 1: success
+    CHECK(history[2].toolResults[0].callId == "call-1");
+    CHECK(history[2].toolResults[0].content == "file contents");
+    CHECK_FALSE(history[2].toolResults[0].isCancelled);
+    CHECK_FALSE(history[2].toolResults[0].isError);
+
+    // Tool 2: cancelled
+    CHECK(history[2].toolResults[1].callId == "call-2");
+    CHECK(history[2].toolResults[1].isCancelled == true);
+
+    // Tool 3: cancelled
+    CHECK(history[2].toolResults[2].callId == "call-3");
+    CHECK(history[2].toolResults[2].isCancelled == true);
+
+    REQUIRE(validateHistoryAfterRepair(history));
+}

@@ -644,7 +644,8 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
 
     // If cancelled during streaming and no valid tool calls remain,
     // treat as end of turn rather than tool_use
-    if (impl_->cancelled.load(std::memory_order_acquire) && toolCalls.empty()) {
+    bool wasAborted = impl_->cancelled.load(std::memory_order_acquire);
+    if (wasAborted && toolCalls.empty()) {
         stopReason = "end_turn";
     }
 
@@ -670,7 +671,7 @@ AgentLoop::IterationResult AgentLoop::streamingIteration(const Json& request, On
             std::make_move_iterator(syntheticErrorResults.end()));
     }
 
-    return {msg, usage, stopReason, std::move(interleavedToolResponses)};
+    return {msg, usage, stopReason, std::move(interleavedToolResponses), wasAborted};
 }
 
 } // namespace claude

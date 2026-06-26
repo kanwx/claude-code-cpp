@@ -286,6 +286,9 @@ private:
         String stopReason;  // "end_turn", "max_tokens", "tool_use", etc.
         // Interleaved tool results (already executed during streaming)
         std::vector<ToolResponse> interleavedToolResults;
+        // Set when the API stream was aborted mid-flight.
+        // Survives resetCancel() because it's per-result, not shared state.
+        bool wasAborted = false;
     };
     IterationResult blockingIteration(const Json& prompt);
 
