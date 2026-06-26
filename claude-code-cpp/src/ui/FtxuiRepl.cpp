@@ -374,6 +374,15 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
 
                 apiRoundIndex_++;  // each AnswerStart = new API round within the user turn
 
+                // P1: Only set startTime_ on the first AnswerStart of a user turn.
+                // Subsequent TAOR iterations must not reset the clock so
+                // finishStream can compute the full turn duration.
+                if (!turnStarted_) {
+                    startTime_ = std::chrono::steady_clock::now();
+                    turnStarted_ = true;
+                    turnDurationEmitted_ = false;
+                }
+
                 isStreaming_ = true;
                 isThinking_ = true;
                 streamingText_.clear();
@@ -487,32 +496,12 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 thinkingSummary_.clear();
                 thinkingText_.clear();
 
-                // Insert turn duration block after all response content.
-                // Match TS format: "✻ Worked for 2s" with wall-clock duration
-                // and the same 8-verb list from constants/turnCompletionVerbs.ts.
-                {
-                    // Compute wall-clock duration from startTime_
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now - startTime_).count();
-                    if (elapsedMs > 0) {
-                        int seconds = static_cast<int>(elapsedMs / 1000);
-                        ContentBlock td;
-                        td.type = ContentBlock::TurnDuration;
-                        td.stableId = nextStableId_++;
-
-                        static const std::vector<String> kTurnVerbs = {
-                            "Baked", "Brewed", "Churned", "Cogitated",
-                            "Cooked", "Crunched", "Sauteed", "Worked",
-                        };
-                        static size_t verbIdx = 0;
-                        String verb = kTurnVerbs[verbIdx % kTurnVerbs.size()];
-                        verbIdx++;
-
-                        td.text = verb + " for " + formatElapsed(seconds);
-                        contentBlocks_.push_back(std::move(td));
-                    }
-                }
+                // TurnDuration is deferred to finishStream().
+                // AnswerEnd = API stream end ≠ whole turn end.
+                // The turn is not complete until tool execution finishes
+                // and executeLoop returns.  Creating TurnDuration here
+                // would show a premature duration (e.g. "Baked for 1s"
+                // while sleep 30 is still running).
 
                 // [DIAGNOSTIC] contentBlocks_ final dump — gated by CLAUDE_CODE_DEBUG_METRICS
                 {
@@ -1579,6 +1568,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
 
                 r->isStreaming_ = false;
                 r->isThinking_ = false;
+                r->turnStarted_ = false;  // P1: close turn so next prompt gets fresh startTime_
 
                 String partial = std::move(r->streamingText_);
                 r->streamingText_.clear();

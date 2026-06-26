@@ -131,10 +131,40 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
             cb.text = err;
             contentBlocks_.push_back(std::move(cb));
         }
-        // TurnDuration is now emitted by the DisplayEvent AnswerEnd path
-        // (FtxuiRepl::handleDisplayEvent).  finishStream must not append a
-        // second TurnDuration — doing so creates duplicate turn-duration
-        // blocks in the final frame and a double-verb rendering artifact.
+        // P1: TurnDuration is deferred from AnswerEnd to here.
+        // AnswerEnd fires at API stream end (StreamBuffer::StreamEnd),
+        // but the turn is not complete until tool execution finishes
+        // and runStreaming() returns.  finishStream is called after
+        // runStreaming() returns, so the wall-clock duration is correct.
+        //
+        // Guards: only create TurnDuration if a turn actually started
+        // (turnStarted_) and hasn't already been emitted (turnDurationEmitted_).
+        // This prevents: (a) TurnDuration for /clear and other non-turn
+        // finishStream calls, (b) duplicate TurnDuration from late finalize
+        // or repeated finishStream calls.
+        if (turnStarted_ && !turnDurationEmitted_) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - startTime_).count();
+            if (elapsedMs > 0) {
+                int seconds = static_cast<int>(elapsedMs / 1000);
+                ContentBlock td;
+                td.type = ContentBlock::TurnDuration;
+                td.stableId = nextStableId_++;
+
+                static const std::vector<String> kTurnVerbs = {
+                    "Baked", "Brewed", "Churned", "Cogitated",
+                    "Cooked", "Crunched", "Sauteed", "Worked",
+                };
+                size_t idx = turnVerbIndex_.fetch_add(1, std::memory_order_relaxed);
+                String verb = kTurnVerbs[idx % kTurnVerbs.size()];
+
+                td.text = verb + " for " + formatElapsed(seconds);
+                contentBlocks_.push_back(std::move(td));
+            }
+            turnDurationEmitted_ = true;
+            turnStarted_ = false;
+        }
 
         stopRefreshThread();
     });

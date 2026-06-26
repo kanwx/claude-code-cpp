@@ -152,6 +152,8 @@ private:
     int inputTokens_ = 0;
     int outputTokens_ = 0;
     std::chrono::steady_clock::time_point startTime_{};
+    bool turnStarted_ = false;           // Set on first AnswerStart, cleared at finishStream
+    bool turnDurationEmitted_ = false;   // Guard against duplicate TurnDuration
 
     VirtualScroll virtualScroll_;
     bool verboseTools_ = false;
