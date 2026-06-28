@@ -303,3 +303,7 @@ catch_discover_tests(test_markdown)
 add_executable(test_ftxui_markdown test_ftxui_markdown.cpp)
 target_link_libraries(test_ftxui_markdown PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ftxui_markdown)
+
+add_executable(test_ctrlc_doublepress test_ctrlc_doublepress.cpp)
+target_link_libraries(test_ctrlc_doublepress PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ctrlc_doublepress)

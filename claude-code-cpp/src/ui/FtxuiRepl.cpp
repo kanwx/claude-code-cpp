@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <termios.h>
 #include <algorithm>
 
@@ -1139,8 +1140,12 @@ void FtxuiRepl::run() {
     spdlog::debug("FTXUI: Creating screen...");
     auto screen = ScreenInteractive::Fullscreen();
     screen_ = &screen;
+    // Let Ctrl+C pass through to our CatchEvent handler instead of
+    // FTXUI intercepting it and exiting the loop immediately.
+    screen.ForceHandleCtrlC(false);
     spdlog::debug("FTXUI: Enabling mouse tracking...");
     screen.TrackMouse();
+
     spdlog::debug("FTXUI: Starting loop...");
 
     try {
@@ -1160,6 +1165,32 @@ void FtxuiRepl::exit() {
     if (screen_) {
         screen_->Exit();
     }
+}
+
+bool FtxuiRepl::handleCtrlC(std::chrono::steady_clock::time_point now, int timeoutMs) {
+    if (ctrlCPending_) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastCtrlC_).count();
+        if (elapsed < timeoutMs) {
+            exit();
+            return true;
+        }
+        // Timeout expired — fall through to treat as first press
+    }
+    ctrlCPending_ = true;
+    lastCtrlC_ = now;
+
+    // Dedup: don't push another hint if the last block is already one
+    static constexpr const char* kCtrlCHint = "Press Ctrl+C again to exit.";
+    if (contentBlocks_.empty() ||
+        contentBlocks_.back().text != kCtrlCHint) {
+        ContentBlock cb;
+        cb.type = ContentBlock::AnswerText;
+        cb.text = kCtrlCHint;
+        cb.dimmed = true;
+        contentBlocks_.push_back(std::move(cb));
+    }
+    return true;
 }
 
 // ========== BuildMainComponent — creates AppLayout + event handler ==========
@@ -1560,8 +1591,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             return true;
         }
 
+        // --- Ctrl+C: unified double-press exit (idle and streaming) ---
+        // ESC is for cancel; Ctrl+C is ONLY for exit confirmation.
+        if (event == Event::CtrlC) {
+            return r->handleCtrlC(std::chrono::steady_clock::now());
+        }
+
         if (r->isStreaming_) {
-            if (event == Event::Escape || event == Event::CtrlC) {
+            if (event == Event::Escape) {
                 if (r->onCancel_) {
                     r->onCancel_();
                 }
@@ -1813,27 +1850,6 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 ls->completionIndex = 0;
                 ls->lastCompletionInput.clear();
                 return true;
-            }
-            return true;
-        }
-        if (event == Event::CtrlC) {
-            auto now = std::chrono::steady_clock::now();
-            if (r->ctrlCPending_) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - r->lastCtrlC_).count();
-                if (elapsed < 800) {
-                    r->exit();
-                    return true;
-                }
-            }
-            r->ctrlCPending_ = true;
-            r->lastCtrlC_ = now;
-            {
-                ContentBlock cb;
-                cb.type = ContentBlock::AnswerText;
-                cb.text = "Press Ctrl+C again to exit";
-                cb.dimmed = true;
-                r->contentBlocks_.push_back(std::move(cb));
             }
             return true;
         }

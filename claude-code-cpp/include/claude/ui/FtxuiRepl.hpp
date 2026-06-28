@@ -84,6 +84,13 @@ public:
     void exit();
     bool isRunning() const { return running_; }
 
+    /// Handle Ctrl+C double-press exit: first press shows hint, second within
+    /// timeout exits. Callable from tests to simulate the event handler.
+    /// @param now Current steady_clock time (injected for test determinism)
+    /// @param timeoutMs Double-press window (2000ms default)
+    /// @return true if the event was handled (hint shown or exit triggered)
+    bool handleCtrlC(std::chrono::steady_clock::time_point now, int timeoutMs = 2000);
+
     /// Enable turn-level metrics collection (for prompt A/B testing).
     /// @param outputPath Path to JSONL file for metrics output.
     void enableMetricsCollection(const std::string& outputPath);
