@@ -59,6 +59,20 @@ TEST_CASE("Anthropic serializes toolResult with isError", "[serialize][anthropic
     REQUIRE(j["content"][0]["is_error"] == true);
 }
 
+TEST_CASE("Anthropic serializes empty toolResult content as placeholder", "[serialize][anthropic]") {
+    ContentMessage msg;
+    msg.role = MessageRole::ToolResult;
+    msg.content.push_back(ContentBlockParam::makeToolResult("toolu_999", ""));  // empty output
+    auto j = serializeContentMessageForAnthropic(msg);
+
+    REQUIRE(j["role"] == "user");
+    REQUIRE(j["content"][0]["type"] == "tool_result");
+    REQUIRE(j["content"][0]["tool_use_id"] == "toolu_999");
+    REQUIRE(j["content"][0]["content"] == "(no output)");
+    // is_error must NOT be set — tool succeeded, just produced no output
+    REQUIRE_FALSE(j["content"][0].contains("is_error"));
+}
+
 TEST_CASE("Anthropic serializes thinking blocks", "[serialize][anthropic]") {
     ContentMessage msg;
     msg.role = MessageRole::Assistant;
@@ -567,22 +581,26 @@ TEST_CASE("E8: injectMissingToolResults inserts synthetic tool_result for orphan
     auto orphansAfter = findOrphanedToolUses(history);
     REQUIRE(orphansAfter.empty());
 
-    // Verify synthetic tool_result was inserted between assistant and user
-    // Order should be: user → assistant(tool_use call_X1) → tool_result(call_X1) → user("你好")
-    REQUIRE(history.size() == 4);
+    // Verify synthetic tool_result was merged into the next user message
+    // Order: user → assistant(tool_use call_X1) → user(tool_result(call_X1) + text("你好"))
+    // The merge avoids consecutive user messages in the serialized JSON.
+    REQUIRE(history.size() == 3);
     REQUIRE(history[0].role == MessageRole::User);       // original user
     REQUIRE(history[1].role == MessageRole::Assistant);   // assistant with tool_use
-    REQUIRE(history[2].role == MessageRole::ToolResult);  // SYNTHETIC tool_result
-    REQUIRE(history[3].role == MessageRole::User);        // new user input
+    REQUIRE(history[2].role == MessageRole::User);        // merged user: tool_result + text
 
-    // Verify synthetic tool_result content
-    bool foundSynthetic = false;
+    // Verify synthetic tool_result content — must be first block in message
+    bool foundSynthetic = false, foundText = false;
     for (const auto& block : history[2].content) {
         if (block.type == ContentBlockParam::ToolResult &&
             block.toolUseId == "call_X1") {
             foundSynthetic = true;
+            REQUIRE_FALSE(foundText);  // tool_result must come before text
             REQUIRE(block.isError == true);
             REQUIRE(block.resultContent.find("Interrupted") != String::npos);
+        } else if (block.type == ContentBlockParam::Text && !block.text.empty()) {
+            foundText = true;
+            REQUIRE(foundSynthetic);  // text only after tool_result
         }
     }
     REQUIRE(foundSynthetic);
@@ -615,7 +633,9 @@ TEST_CASE("E8: injectMissingToolResults handles multiple orphaned tool_uses",
 
 TEST_CASE("E8: injectMissingToolResults is no-op when all tool_uses have results",
           "[serialize][e8][regression]") {
-    // Normal flow: every tool_use has a matching tool_result — no injection needed
+    // Normal flow: every tool_use has a matching tool_result — no injection needed.
+    // However, standalone ToolResult messages are merged into the next User message
+    // to prevent consecutive user roles in the serialized API JSON.
     std::vector<ContentMessage> history;
     history.push_back(ContentMessage::user("read a file"));
 
@@ -625,7 +645,7 @@ TEST_CASE("E8: injectMissingToolResults is no-op when all tool_uses have results
     });
     history.push_back(assistant);
 
-    // Tool result IS present
+    // Tool result IS present but in a standalone ToolResult message
     ContentMessage result;
     result.role = MessageRole::ToolResult;
     result.content.push_back(ContentBlockParam::makeToolResult("call_R1", "file content"));
@@ -635,7 +655,25 @@ TEST_CASE("E8: injectMissingToolResults is no-op when all tool_uses have results
 
     int injected = injectMissingToolResults(history);
     REQUIRE(injected == 0);
-    REQUIRE(history.size() == 4);  // no extra messages
+
+    // Standalone ToolResult merged into next User to avoid consecutive users
+    // user → assistant(tool_use) → user(tool_result + text)
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[0].role == MessageRole::User);       // "read a file"
+    REQUIRE(history[1].role == MessageRole::Assistant);   // tool_use call_R1
+    REQUIRE(history[2].role == MessageRole::User);        // merged: tool_result + text
+    REQUIRE(history[2].content[0].type == ContentBlockParam::ToolResult);
+    REQUIRE(history[2].content[1].type == ContentBlockParam::Text);
+
+    // All validators pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    Json fullReq;
+    fullReq["model"] = "claude-sonnet-4-6";
+    fullReq["max_tokens"] = 4096;
+    fullReq["messages"] = request;
+    REQUIRE(validateSerializedApiJson(fullReq));
 }
 
 // ============================================================================
@@ -676,21 +714,29 @@ TEST_CASE("E8-P0: repair inserts tool_result BEFORE user text, not after",
     // After repair: validator MUST pass
     REQUIRE(validateToolResultOrdering(history));
 
-    // Order must be: user → assistant(tool_use) → tool_result → user(text only)
+    // Order must be: user → assistant(tool_use) → user(tool_result + text)
+    // The repaired tool_results are merged into the existing user message
+    // to avoid consecutive user messages in the serialized JSON.
     REQUIRE(history.size() >= 3);
     REQUIRE(history[0].role == MessageRole::User);
     REQUIRE(history[1].role == MessageRole::Assistant);
-    REQUIRE(history[2].role == MessageRole::ToolResult);
+    REQUIRE(history[2].role == MessageRole::User);  // merged, not standalone ToolResult
 
-    // Verify tool_result is in the message immediately after assistant
-    bool hasToolResultForP1 = false;
+    // Verify tool_result is in the message immediately after assistant,
+    // and tool_result comes BEFORE text in the content blocks.
+    bool foundToolResult = false, foundText = false;
     for (auto& block : history[2].content) {
         if (block.type == ContentBlockParam::ToolResult && block.toolUseId == "call_P1") {
-            hasToolResultForP1 = true;
-            break;
+            foundToolResult = true;
+            // Text must not appear before tool_result
+            REQUIRE_FALSE(foundText);
+        } else if (block.type == ContentBlockParam::Text && !block.text.empty()) {
+            foundText = true;
+            // Tool_result must come before text
+            REQUIRE(foundToolResult);
         }
     }
-    REQUIRE(hasToolResultForP1);
+    REQUIRE(foundToolResult);
 
     // Verify NO duplicate tool_result for call_P1 in later messages
     for (size_t idx = 3; idx < history.size(); ++idx) {
@@ -746,14 +792,25 @@ TEST_CASE("E8-P0: late tool_result is moved, not duplicated",
     // After repair: must still be exactly 1 (moved, not duplicated)
     REQUIRE(countCallP2(history) == 1);
 
-    // After repair: tool_result must be immediately after assistant
+    // After repair: tool_results are merged into the user message at position 2
+    // (not a standalone ToolResult message). This avoids consecutive user messages.
     REQUIRE(history.size() >= 3);
     REQUIRE(history[1].role == MessageRole::Assistant);
-    REQUIRE(history[2].role == MessageRole::ToolResult);
+    REQUIRE(history[2].role == MessageRole::User);  // merged user(tool_result + text)
 
-    // User text message must come AFTER the tool_result
-    REQUIRE(history[3].role == MessageRole::User);
-    REQUIRE(history[3].textContent().find("你好") != String::npos);
+    // Tool_result must come before text in the merged message
+    bool foundToolResult = false, foundText = false;
+    for (auto& block : history[2].content) {
+        if (block.type == ContentBlockParam::ToolResult && block.toolUseId == "call_P2") {
+            foundToolResult = true;
+            REQUIRE_FALSE(foundText);  // tool_result must be before text
+        } else if (block.type == ContentBlockParam::Text && !block.text.empty()) {
+            foundText = true;
+            REQUIRE(foundToolResult);  // text must be after tool_result
+        }
+    }
+    REQUIRE(foundToolResult);
+    REQUIRE(history[2].textContent().find("你好") != String::npos);
 
     // Validator must pass on the repaired history
     REQUIRE(validateToolResultOrdering(history));
@@ -935,4 +992,1124 @@ TEST_CASE("E8: AgentLoop cancel check point must not skip tool_result history wr
     // but the API guard ensures we never send the broken history to the API.
     INFO("Orphaned tool_uses: " << orphans.size() << " (repaired by P0 API guard before sending)");
     CHECK_FALSE(orphans.empty());  // Documents the root cause is still detectable
+}
+
+// ============================================================================
+// validateEmptyMessages tests
+// ============================================================================
+
+TEST_CASE("validateEmptyMessages: accepts valid history", "[validator][emptymsg]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("hello"));
+    history.push_back(ContentMessage::assistant("hi there"));
+    REQUIRE(validateEmptyMessages(history));
+}
+
+TEST_CASE("validateEmptyMessages: rejects empty content vector", "[validator][emptymsg]") {
+    std::vector<ContentMessage> history;
+    ContentMessage empty;
+    empty.role = MessageRole::User;
+    // content vector is default-constructed, empty
+    history.push_back(empty);
+    REQUIRE_FALSE(validateEmptyMessages(history));
+}
+
+TEST_CASE("validateEmptyMessages: rejects empty text block", "[validator][emptymsg]") {
+    std::vector<ContentMessage> history;
+    auto msg = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("valid text"),
+        ContentBlockParam::makeText(""),  // empty text block
+    });
+    history.push_back(msg);
+    REQUIRE_FALSE(validateEmptyMessages(history));
+}
+
+TEST_CASE("validateEmptyMessages: rejects empty assistant message", "[validator][emptymsg]") {
+    // Simulates a cancelled turn that was persisted without content
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("do something"));
+    ContentMessage emptyAsst;
+    emptyAsst.role = MessageRole::Assistant;
+    // no content blocks — cancelled before any text was generated
+    history.push_back(emptyAsst);
+    REQUIRE_FALSE(validateEmptyMessages(history));
+}
+
+TEST_CASE("validateEmptyMessages: accepts assistant with text only", "[validator][emptymsg]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("hello"));
+    history.push_back(ContentMessage::assistant("hi there"));
+    history.push_back(ContentMessage::user("thanks"));
+    REQUIRE(validateEmptyMessages(history));
+}
+
+// ============================================================================
+// validateSerializedApiJson tests
+// ============================================================================
+
+// Helper: build a minimal valid request JSON with the given messages array
+static Json makeRequest(Json messages) {
+    Json req;
+    req["model"] = "claude-sonnet-4-6";
+    req["max_tokens"] = 4096;
+    req["messages"] = messages;
+    return req;
+}
+
+static Json makeMsg(const char* role, Json content) {
+    Json m;
+    m["role"] = role;
+    m["content"] = content;
+    return m;
+}
+
+static Json textBlock(const char* text) {
+    return Json::object({{"type", "text"}, {"text", text}});
+}
+
+static Json toolUseBlock(const char* id, const char* name, Json input) {
+    return Json::object({{"type", "tool_use"}, {"id", id}, {"name", name}, {"input", input}});
+}
+
+static Json toolResultBlock(const char* toolUseId, const char* content) {
+    return Json::object({{"type", "tool_result"}, {"tool_use_id", toolUseId}, {"content", content}});
+}
+
+TEST_CASE("validateSerializedApiJson: accepts valid user/assistant/user", "[validator][apijson]") {
+    auto msg = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("hello")})),
+        makeMsg("assistant", Json::array({textBlock("hi there")})),
+    }));
+    REQUIRE(validateSerializedApiJson(msg));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects missing messages key", "[validator][apijson]") {
+    Json req;
+    req["model"] = "claude-sonnet-4-6";
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects non-array messages", "[validator][apijson]") {
+    Json req;
+    req["messages"] = "not_an_array";
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects invalid role", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("system", Json::array({textBlock("sys prompt")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects empty content array", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("hello")})),
+        makeMsg("assistant", Json::array()),  // empty content
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects consecutive same roles", "[validator][apijson]") {
+    // Two consecutive user messages — Anthropic requires alternation
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("first")})),
+        makeMsg("user", Json::array({textBlock("second, but illegal")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects empty text block", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("")})),  // empty text
+        makeMsg("assistant", Json::array({textBlock("reply")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects tool_use with empty id", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("run a command")})),
+        makeMsg("assistant", Json::array({
+            textBlock("ok"),
+            toolUseBlock("", "Bash", Json::object({{"command", "ls"}})),  // empty id
+        })),
+        makeMsg("user", Json::array({toolResultBlock("", "output")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects tool_result with empty tool_use_id", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("run a command")})),
+        makeMsg("assistant", Json::array({
+            textBlock("ok"),
+            toolUseBlock("call_1", "Bash", Json::object({{"command", "ls"}})),
+        })),
+        makeMsg("user", Json::array({toolResultBlock("", "output")})),  // empty tool_use_id
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects tool_result with empty content", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("run a command")})),
+        makeMsg("assistant", Json::array({
+            textBlock("ok"),
+            toolUseBlock("call_1", "Bash", Json::object({{"command", "ls"}})),
+        })),
+        makeMsg("user", Json::array({toolResultBlock("call_1", "")})),  // empty content
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects unknown block type", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({Json::object({{"type", "invalid_type"}, {"text", "x"}})})),
+        makeMsg("assistant", Json::array({textBlock("reply")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects contentPreview leak", "[validator][apijson]") {
+    // Construct a message where contentPreview somehow leaked into a block
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({
+            Json::object({{"type", "tool_result"}, {"tool_use_id", "call_1"},
+                          {"content", "file content"},
+                          {"contentPreview", "file..."}})  // UI field leak!
+        })),
+        makeMsg("assistant", Json::array({textBlock("got it")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects stableId leak", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({
+            Json::object({{"type", "text"}, {"text", "hello"}, {"stableId", 42}})  // UI field leak!
+        })),
+        makeMsg("assistant", Json::array({textBlock("reply")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects assistant tool_use without matching tool_result",
+          "[validator][apijson]") {
+    // Assistant has tool_use, but next user message has no tool_result
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("run command")})),
+        makeMsg("assistant", Json::array({
+            textBlock("ok running"),
+            toolUseBlock("orphan_1", "Bash", Json::object({{"command", "ls"}})),
+        })),
+        // Next message is user but with text, NOT tool_results
+        makeMsg("user", Json::array({textBlock("next thing")})),
+        makeMsg("assistant", Json::array({textBlock("done")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: accepts valid tool_use/tool_result chain", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("run a command")})),
+        makeMsg("assistant", Json::array({
+            textBlock("ok"),
+            toolUseBlock("call_1", "Bash", Json::object({{"command", "ls"}})),
+        })),
+        makeMsg("user", Json::array({toolResultBlock("call_1", "file1\nfile2")})),
+        makeMsg("assistant", Json::array({textBlock("here are the files...")})),
+    }));
+    REQUIRE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: accepts thinking and redacted_thinking blocks", "[validator][apijson]") {
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("question")})),
+        makeMsg("assistant", Json::array({
+            Json::object({{"type", "thinking"}, {"thinking", "let me think..."}, {"signature", "sig1"}}),
+            textBlock("answer"),
+        })),
+    }));
+    REQUIRE(validateSerializedApiJson(req));
+}
+
+// ============================================================================
+// Merge repair tests: synthetic tool_results must merge into next user message,
+// not create consecutive user(user) messages in the serialized API JSON.
+// ============================================================================
+
+// Test 1: repair merges synthetic tool_result into next user text
+TEST_CASE("E8-merge: synthetic tool_result merges into next user text, not standalone",
+          "[serialize][e8][merge][regression]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("run a command"));
+
+    auto assistant = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running it."),
+        ContentBlockParam::makeToolUse("call_M1", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    });
+    history.push_back(assistant);
+
+    // Next user text — no tool_result present (cancelled before tool finished)
+    history.push_back(ContentMessage::user("hello"));
+
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 1);
+
+    // After repair: must be 3 messages, NOT 4 (no standalone tool_result)
+    // user → assistant(tool_use) → user(tool_result + text)
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[0].role == MessageRole::User);
+    REQUIRE(history[1].role == MessageRole::Assistant);
+    REQUIRE(history[2].role == MessageRole::User);  // merged, not ToolResult
+
+    // Tool_result must be the FIRST block in the merged message
+    REQUIRE(history[2].content.size() >= 2);
+    REQUIRE(history[2].content[0].type == ContentBlockParam::ToolResult);
+    REQUIRE(history[2].content[0].toolUseId == "call_M1");
+    // Text must come AFTER tool_result
+    REQUIRE(history[2].content[1].type == ContentBlockParam::Text);
+    REQUIRE(history[2].content[1].text == "hello");
+
+    // Must pass all validators
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+}
+
+// Test 2: cancelled Bash + next user passes serialized JSON validator end-to-end
+TEST_CASE("E8-merge: cancelled Bash + next user passes serialized JSON validator",
+          "[serialize][e8][merge][regression]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("Run sleep 30"));
+    history.push_back(ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running sleep."),
+        ContentBlockParam::makeToolUse("call_M2", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    }));
+    // User submitted new input while tool pending — no tool_result
+    history.push_back(ContentMessage::user("hello"));
+
+    // Repair
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 1);
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+
+    // Build the actual API JSON and validate it
+    auto request = buildAnthropicApiMessages(history);
+    auto fullReq = makeRequest(request);
+
+    // This is the key assertion: the serialized JSON must be valid
+    REQUIRE(validateSerializedApiJson(fullReq));
+}
+
+// Test 3: multiple cancelled turns do not accumulate consecutive users
+TEST_CASE("E8-merge: multiple cancelled turns do not create consecutive user messages",
+          "[serialize][e8][merge][regression]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("first command"));
+
+    // Turn 1: tool_use cancelled → next user text
+    auto asst1 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running first."),
+        ContentBlockParam::makeToolUse("call_M3a", "Bash",
+            Json::object({{"command", "sleep 10"}})),
+    });
+    history.push_back(asst1);
+    history.push_back(ContentMessage::user("second command"));
+
+    // Turn 2: another tool_use cancelled → another user text
+    auto asst2 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running second."),
+        ContentBlockParam::makeToolUse("call_M3b", "Bash",
+            Json::object({{"command", "sleep 10"}})),
+    });
+    history.push_back(asst2);
+    history.push_back(ContentMessage::user("third thing"));
+
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 2);
+
+    // Build the API JSON and validate — no consecutive user messages
+    auto request = buildAnthropicApiMessages(history);
+    auto fullReq = makeRequest(request);
+    REQUIRE(validateSerializedApiJson(fullReq));
+
+    // Verify role alternation in the serialized output
+    REQUIRE(request.size() >= 4);
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            REQUIRE_FALSE(role == prevRole);  // no consecutive same roles
+        }
+        prevRole = role;
+    }
+}
+
+// Test 4: tool_result block order inside merged user message
+TEST_CASE("E8-merge: tool_result blocks precede text in merged user message",
+          "[serialize][e8][merge][regression]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("do things"));
+
+    // Assistant with TWO tool_uses, both orphaned
+    auto assistant = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Doing both."),
+        ContentBlockParam::makeToolUse("call_M4a", "Read",
+            Json::object({{"path", "/f1"}})),
+        ContentBlockParam::makeToolUse("call_M4b", "Bash",
+            Json::object({{"command", "ls"}})),
+    });
+    history.push_back(assistant);
+    history.push_back(ContentMessage::user("next question"));
+
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 2);
+
+    // Both tool_results must come before the text
+    REQUIRE(history[2].content.size() == 3);
+    REQUIRE(history[2].content[0].type == ContentBlockParam::ToolResult);
+    REQUIRE(history[2].content[0].toolUseId == "call_M4a");
+    REQUIRE(history[2].content[1].type == ContentBlockParam::ToolResult);
+    REQUIRE(history[2].content[1].toolUseId == "call_M4b");
+    REQUIRE(history[2].content[2].type == ContentBlockParam::Text);
+
+    // Validators must pass
+    REQUIRE(validateToolResultOrdering(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+}
+
+// Test 5: late tool_result merged into next user — no duplicate
+TEST_CASE("E8-merge: late tool_result merged into user, not duplicated",
+          "[serialize][e8][merge][regression]") {
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("run a command"));
+
+    auto assistant = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running."),
+        ContentBlockParam::makeToolUse("call_M5", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    });
+    history.push_back(assistant);
+    history.push_back(ContentMessage::user("hello"));
+
+    // Late tool_result in a separate message (simulating cancel path)
+    ContentMessage lateResult;
+    lateResult.role = MessageRole::ToolResult;
+    lateResult.content.push_back(
+        ContentBlockParam::makeToolResult("call_M5", "cancelled", true));
+    history.push_back(lateResult);
+
+    // Count before
+    auto countCallM5 = [](const std::vector<ContentMessage>& msgs) {
+        int c = 0;
+        for (auto& m : msgs)
+            for (auto& b : m.content)
+                if (b.type == ContentBlockParam::ToolResult && b.toolUseId == "call_M5") c++;
+        return c;
+    };
+    REQUIRE(countCallM5(history) == 1);
+
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 0);  // moved, not synthetic
+
+    // Must still be exactly 1 call_M5 tool_result (moved, not duplicated)
+    REQUIRE(countCallM5(history) == 1);
+
+    // tool_result must be in the merged user message at position 2
+    REQUIRE(history[2].role == MessageRole::User);
+    bool foundInMerged = false;
+    for (auto& b : history[2].content) {
+        if (b.type == ContentBlockParam::ToolResult && b.toolUseId == "call_M5") {
+            foundInMerged = true;
+            break;
+        }
+    }
+    REQUIRE(foundInMerged);
+
+    // Validators must pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+}
+
+// ============================================================================
+// cancelGeneration race tests: verify resetCancel() + cancelGeneration detection
+// ============================================================================
+
+// Test: CancelledRunLateSuccessIsInterruptedAfterResetCancel
+//
+// Scenario:
+//   1. Run A starts tool_use sleep 30 in a background thread
+//   2. ESC pressed → cancel() increments cancelGeneration (N → N+1)
+//   3. New prompt submitted → resetCancel() clears impl_->cancelled (now false)
+//   4. Run A's sleep(30) completes normally, tool process returns "Slept for 30 seconds"
+//   5. executeLoop snapshots cancelGenBefore BEFORE tool execution,
+//      compares after: cancelGeneration changed → turnCancelled=true
+//   6. Force-override ALL tool responses:
+//      isCancelled=true, content="Interrupted: tool execution was cancelled"
+//   7. insertOrMergeToolResultsAfterAssistant writes corrected result to history
+//
+// Expected:
+//   - ToolResponse.isCancelled = true
+//   - History has "Interrupted: tool execution was cancelled", NOT "Slept for 30 seconds"
+//   - Serialized JSON passes API validator
+//   - No stale success event reaches the UI
+TEST_CASE("E8-cancelGen: force-overridden tool_result contains Interrupted, not real output",
+          "[serialize][e8][cancelgen][regression]") {
+    // Build history simulating the race:
+    // user "sleep 30" → assistant tool_use call_S1 → user "next command"
+    std::vector<ContentMessage> history;
+    history.push_back(ContentMessage::user("! sleep 30"));
+
+    auto assistant = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running sleep."),
+        ContentBlockParam::makeToolUse("call_S1", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    });
+    history.push_back(assistant);
+
+    // Simulate the new turn's user input while old tool still running
+    history.push_back(ContentMessage::user("! read CMakeLists.txt"));
+
+    // Repair the orphaned tool_use (simulates P0 API guard at buildApiRequest)
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 1);
+
+    // After repair: 3 messages, not 4 (merged into next user)
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[0].role == MessageRole::User);       // "sleep 30"
+    REQUIRE(history[1].role == MessageRole::Assistant);   // tool_use call_S1
+    REQUIRE(history[2].role == MessageRole::User);        // merged tool_result + text
+
+    // Key assertion: "Interrupted" content IS present, "Slept for 30 seconds" is NOT
+    bool foundInterrupted = false;
+    bool foundSleptSuccess = false;
+    for (auto& block : history[2].content) {
+        if (block.type == ContentBlockParam::ToolResult && block.toolUseId == "call_S1") {
+            REQUIRE(block.isError == true);  // cancelled → error
+            if (block.resultContent.find("Interrupted") != String::npos)
+                foundInterrupted = true;
+            if (block.resultContent.find("Slept for 30 seconds") != String::npos)
+                foundSleptSuccess = true;
+        }
+    }
+    REQUIRE(foundInterrupted);
+    REQUIRE_FALSE(foundSleptSuccess);
+
+    // All validators must pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+}
+
+// Test: LateCancelledToolResultDoesNotLockInput
+//
+// Scenario:
+//   Multiple consecutive ESC+resubmit cycles. Each cancelled run's tool result
+//   arrives after the new turn's resetCancel(). If the force-override is missing,
+//   stale ToolResult events with "Slept for 30 seconds" (success) reach the UI,
+//   causing input lock until a second ESC clears it.
+//
+// This test verifies the ContentBlockParam-level safety:
+//   - Multiple orphaned tool_uses from consecutive cancelled turns are all repaired
+//   - No consecutive user messages in serialized output (merge fix holds)
+//   - No stale success results survive
+//   - Serialized JSON passes all validators
+TEST_CASE("E8-cancelGen: multiple cancelled turns do not accumulate stale results",
+          "[serialize][e8][cancelgen][regression]") {
+    std::vector<ContentMessage> history;
+
+    // Turn 1: user "sleep 30" → ESC cancels → tool_use call_A1 orphaned
+    history.push_back(ContentMessage::user("! sleep 30"));
+    auto asst1 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running sleep 30."),
+        ContentBlockParam::makeToolUse("call_A1", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    });
+    history.push_back(asst1);
+
+    // User submits new command (ESC + new prompt) — tool for call_A1 not finished
+    history.push_back(ContentMessage::user("! sleep 10"));
+
+    // Turn 2: user "sleep 10" → ESC cancels → tool_use call_A2 orphaned
+    auto asst2 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running sleep 10."),
+        ContentBlockParam::makeToolUse("call_A2", "Bash",
+            Json::object({{"command", "sleep 10"}})),
+    });
+    history.push_back(asst2);
+
+    // User submits another new command while call_A2 still pending
+    history.push_back(ContentMessage::user("! read CMakeLists.txt"));
+
+    // Before repair: 2 orphaned tool_uses
+    auto orphansBefore = findOrphanedToolUses(history);
+    REQUIRE(orphansBefore.size() == 2);
+
+    // Repair
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 2);
+
+    // No orphans after repair
+    auto orphansAfter = findOrphanedToolUses(history);
+    REQUIRE(orphansAfter.empty());
+
+    // No consecutive user messages in serialized output
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+
+    // Verify role alternation: no consecutive same roles
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            REQUIRE_FALSE(role == prevRole);
+        }
+        prevRole = role;
+    }
+
+    // Verify ALL synthetic tool_results say "Interrupted", not real output
+    int interruptedCount = 0;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult &&
+                block.resultContent.find("Interrupted") != String::npos) {
+                interruptedCount++;
+            }
+        }
+    }
+    REQUIRE(interruptedCount == 2);  // both call_A1 and call_A2 are Interrupted
+
+    // Verify no block contains stale success text
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult) {
+                REQUIRE(block.resultContent.find("Slept for") == String::npos);
+                REQUIRE(block.resultContent.find("Running sleep") == String::npos);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Coalesce & idempotent repair tests: removeIndices → assistant→assistant,
+// same-role coalescing, no duplicate results, repair idempotency
+// ============================================================================
+
+// Test 1: remove stale ToolResult between two assistants must not create
+// consecutive assistants after coalesce.
+//
+// Scenario:
+//   assistant[0](tool_use call_X)
+//   ToolResult[1](call_X)  ← stale, will be removed
+//   assistant[2](text only)
+//
+// After repair: tool_result for call_X is collected from [1], [1] is removed.
+// Without coalesce, [0] assistant and [2] assistant become adjacent —
+// consecutive assistants in the serialized JSON.
+// With coalesce, [0] and [2] are merged into one assistant.
+TEST_CASE("E8-coalesce: removed ToolResult between two assistants — coalesce merges",
+          "[serialize][e8][coalesce][regression]") {
+    std::vector<ContentMessage> history;
+
+    // Assistant with tool_use call_R1
+    auto asstA = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running a task."),
+        ContentBlockParam::makeToolUse("call_R1", "Bash",
+            Json::object({{"command", "ls"}})),
+    });
+    history.push_back(asstA);
+
+    // Stale standalone ToolResult for call_R1 (to be removed)
+    ContentMessage staleTr;
+    staleTr.role = MessageRole::ToolResult;
+    staleTr.content.push_back(
+        ContentBlockParam::makeToolResult("call_R1", "file list output"));
+    history.push_back(staleTr);
+
+    // Another assistant (text-only, from a different turn)
+    auto asstB = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Here are the files."),
+    });
+    history.push_back(asstB);
+
+    // User follows
+    history.push_back(ContentMessage::user("thanks"));
+
+    // Verify pre-conditions
+    REQUIRE(history.size() == 4);
+    REQUIRE(history[0].role == MessageRole::Assistant);
+    REQUIRE(history[1].role == MessageRole::ToolResult);
+    REQUIRE(history[2].role == MessageRole::Assistant);
+    REQUIRE(history[3].role == MessageRole::User);
+
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 0);  // call_R1 result was collected, not synthetic
+
+    // After coalesce: no consecutive assistants
+    // Expected: assistant(tool_use + text) → user(tool_result + "thanks")
+    // OR: assistant(tool_use) → user(tool_result) → assistant(text) → user("thanks")
+    // Both are valid. Key assertion: no consecutive same-role messages.
+    for (size_t i = 1; i < history.size(); ++i) {
+        INFO("Position " << i << " role=" << (int)history[i].role
+             << " prev role=" << (int)history[i-1].role);
+        REQUIRE_FALSE(history[i].role == history[i - 1].role);
+    }
+
+    // All validators pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+
+    // Verify role alternation in serialized JSON
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            REQUIRE_FALSE(role == prevRole);
+        }
+        prevRole = role;
+    }
+}
+
+// Test 2: mergeTarget skips removed messages but preserves role alternation.
+//
+// Scenario from TTY log:
+//   assistant[0](tool_use X, Y) at idx 0
+//   stale ToolResult at idx 1 (removed)
+//   assistant at idx 2 (text only)
+//
+// mergeTarget finds idx 2 (assistant) → no merge → standalone insert at idx 1.
+// After removal of idx 1 (shifted to idx 2): assistant → tool_result → assistant.
+// Coalesce then merges the two assistants.
+//
+// Final: assistant(tool_use X, Y + text) → user(tool_result X, Y)
+// or:    assistant(tool_use X, Y) → user(tool_result X, Y) → assistant(text)
+TEST_CASE("E8-coalesce: mergeTarget skips removed msg, coalesce fixes result",
+          "[serialize][e8][coalesce][regression]") {
+    std::vector<ContentMessage> history;
+
+    // Assistant with two tool_uses
+    auto asstA = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Doing two things."),
+        ContentBlockParam::makeToolUse("call_T1", "Read",
+            Json::object({{"path", "/f1"}})),
+        ContentBlockParam::makeToolUse("call_T2", "Bash",
+            Json::object({{"command", "ls"}})),
+    });
+    history.push_back(asstA);
+
+    // Stale standalone ToolResult (to be removed) — contains ONLY call_T1 result
+    ContentMessage staleTr;
+    staleTr.role = MessageRole::ToolResult;
+    staleTr.content.push_back(
+        ContentBlockParam::makeToolResult("call_T1", "file content"));
+    // call_T2 has NO result (orphaned)
+    history.push_back(staleTr);
+
+    // Another assistant (text-only)
+    auto asstB = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Here is the result."),
+    });
+    history.push_back(asstB);
+
+    // No further messages (end of history)
+
+    // Verify pre-conditions
+    REQUIRE(history.size() == 3);
+    REQUIRE(history[0].role == MessageRole::Assistant);  // tool_use T1, T2
+    REQUIRE(history[1].role == MessageRole::ToolResult);  // stale, to be removed
+    REQUIRE(history[2].role == MessageRole::Assistant);   // text only
+
+    int injected = injectMissingToolResults(history);
+    // call_T1 result was collected (moved), call_T2 was missing → synthetic
+    REQUIRE(injected == 1);
+
+    // Key assertion: no consecutive same roles
+    for (size_t i = 1; i < history.size(); ++i) {
+        INFO("Position " << i << " role=" << (int)history[i].role);
+        REQUIRE_FALSE(history[i].role == history[i - 1].role);
+    }
+
+    // Both tool_use IDs must have exactly one tool_result
+    int t1Count = 0, t2Count = 0;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult) {
+                if (block.toolUseId == "call_T1") t1Count++;
+                if (block.toolUseId == "call_T2") t2Count++;
+            }
+        }
+    }
+    REQUIRE(t1Count == 1);
+    REQUIRE(t2Count == 1);
+    REQUIRE_FALSE(history.empty());
+
+    // All validators pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+
+    // Serialized JSON must have role alternation
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            REQUIRE_FALSE(role == prevRole);
+        }
+        prevRole = role;
+    }
+}
+
+// Test 3: Repair is idempotent — calling injectMissingToolResults twice
+// on the same history produces the same result and no new injections.
+TEST_CASE("E8-idempotent: second injectMissingToolResults is no-op",
+          "[serialize][e8][coalesce][regression]") {
+    std::vector<ContentMessage> history;
+
+    history.push_back(ContentMessage::user("run a command"));
+
+    auto assistant = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running it."),
+        ContentBlockParam::makeToolUse("call_I1", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    });
+    history.push_back(assistant);
+
+    // User text without tool_result → orphan
+    history.push_back(ContentMessage::user("hello"));
+
+    // First repair
+    int injected1 = injectMissingToolResults(history);
+    REQUIRE(injected1 == 1);
+
+    size_t sizeAfterFirst = history.size();
+    int t1CountAfterFirst = 0;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult &&
+                block.toolUseId == "call_I1") t1CountAfterFirst++;
+        }
+    }
+    REQUIRE(t1CountAfterFirst == 1);
+
+    // All validators pass after first repair
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request1 = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request1)));
+
+    // Second repair — must be no-op
+    int injected2 = injectMissingToolResults(history);
+    REQUIRE(injected2 == 0);
+
+    // Size must not change
+    REQUIRE(history.size() == sizeAfterFirst);
+
+    // Tool_result count must not change
+    int t1CountAfterSecond = 0;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult &&
+                block.toolUseId == "call_I1") t1CountAfterSecond++;
+        }
+    }
+    REQUIRE(t1CountAfterSecond == 1);
+
+    // Validators still pass
+    REQUIRE(validateToolResultOrdering(history));
+    auto request2 = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request2)));
+}
+
+// Test 4: Multiple tool_use repair preserves exactly one result per ID.
+//
+// Assistant has tool_use X, Y. Both orphaned. After repair, each has
+// exactly one tool_result, tool_results come before text, no duplicates.
+TEST_CASE("E8-idempotent: multiple tool_uses — one result per ID, no duplicates",
+          "[serialize][e8][coalesce][regression]") {
+    std::vector<ContentMessage> history;
+
+    history.push_back(ContentMessage::user("do two things"));
+
+    auto assistant = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Doing both."),
+        ContentBlockParam::makeToolUse("call_D1", "Read",
+            Json::object({{"path", "/a"}})),
+        ContentBlockParam::makeToolUse("call_D2", "Bash",
+            Json::object({{"command", "ls"}})),
+    });
+    history.push_back(assistant);
+
+    // User text without tool_results → both orphaned
+    history.push_back(ContentMessage::user("next question please"));
+
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 2);
+
+    // Count results per ID
+    int d1Count = 0, d2Count = 0;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult) {
+                if (block.toolUseId == "call_D1") d1Count++;
+                if (block.toolUseId == "call_D2") d2Count++;
+            }
+        }
+    }
+    REQUIRE(d1Count == 1);
+    REQUIRE(d2Count == 1);
+
+    // Tool_results must come before text
+    for (auto& msg : history) {
+        if (msg.role != MessageRole::User) continue;
+        bool foundText = false;
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::Text && !block.text.empty()) {
+                foundText = true;
+            }
+            if (block.type == ContentBlockParam::ToolResult) {
+                REQUIRE_FALSE(foundText);  // tool_result must precede text
+            }
+        }
+    }
+
+    // Idempotent: second call injects 0
+    int injected2 = injectMissingToolResults(history);
+    REQUIRE(injected2 == 0);
+
+    // Counts unchanged
+    int d1Count2 = 0, d2Count2 = 0;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult) {
+                if (block.toolUseId == "call_D1") d1Count2++;
+                if (block.toolUseId == "call_D2") d2Count2++;
+            }
+        }
+    }
+    REQUIRE(d1Count2 == 1);
+    REQUIRE(d2Count2 == 1);
+
+    // All validators pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+
+    // No consecutive same roles in serialized JSON
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            REQUIRE_FALSE(role == prevRole);
+        }
+        prevRole = role;
+    }
+}
+
+// Test 5: TTY sequence simulation — multiple turns with late results.
+//
+// Simulates the full TTY flow:
+//   1. hello
+//   2. sleep 30 → ESC
+//   3. read cmakelists.txt
+//   4. read cmakelists.tst
+//   5. hello
+//
+// With late sleep results arriving after ESC and resetCancel().
+// Validates: no consecutive roles, Interrupted content, idempotent repair.
+TEST_CASE("E8-idempotent: TTY sequence — hello, sleep+ESC, reads, hello",
+          "[serialize][e8][coalesce][regression]") {
+    std::vector<ContentMessage> history;
+
+    // Turn 1: hello
+    history.push_back(ContentMessage::user("hello"));
+    auto asst1 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Hello! How can I help you?"),
+    });
+    history.push_back(asst1);
+
+    // Turn 2: sleep 30 → ESC cancels → tool_use call_sleep
+    history.push_back(ContentMessage::user("run sleep 30"));
+    auto asst2 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Running sleep for 30 seconds."),
+        ContentBlockParam::makeToolUse("call_sleep", "Bash",
+            Json::object({{"command", "sleep 30"}})),
+    });
+    history.push_back(asst2);
+
+    // Late sleep result arrives (force-overridden in executeLoop via
+    // cancelGeneration detection, then insertOrMergeToolResultsAfterAssistant
+    // writes it to history as a standalone ToolResult).
+    ContentMessage lateSleepResult;
+    lateSleepResult.role = MessageRole::ToolResult;
+    lateSleepResult.content.push_back(
+        ContentBlockParam::makeToolResult("call_sleep",
+            "Interrupted: tool execution was cancelled", true));
+    history.push_back(lateSleepResult);
+
+    // Turn 3: read cmakelists.txt (new turn, submitted after ESC)
+    history.push_back(ContentMessage::user("read cmakelists.txt"));
+    auto asst3 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Reading the file."),
+        ContentBlockParam::makeToolUse("call_read1", "Read",
+            Json::object({{"path", "cmakelists.txt"}})),
+    });
+    history.push_back(asst3);
+
+    // Turn 3 result: read1 success
+    ContentMessage read1Result;
+    read1Result.role = MessageRole::ToolResult;
+    read1Result.content.push_back(
+        ContentBlockParam::makeToolResult("call_read1", "cmake_minimum_required(VERSION 3.20)..."));
+    history.push_back(read1Result);
+
+    // Turn 4: read cmakelists.tst
+    history.push_back(ContentMessage::user("read cmakelists.tst"));
+    auto asst4 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("That file doesn't exist."),
+    });
+    history.push_back(asst4);
+
+    // Turn 5: hello
+    history.push_back(ContentMessage::user("hello"));
+    auto asst5 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Hello again!"),
+    });
+    history.push_back(asst5);
+
+    // Run repair — should fix the orphaned sleep and read1 tool_uses
+    // call_sleep was collected (moved), call_read1 was collected (moved)
+    int injected = injectMissingToolResults(history);
+    REQUIRE(injected == 0);  // both results were collected, not synthetic
+
+    // Verify no consecutive same roles
+    for (size_t i = 1; i < history.size(); ++i) {
+        INFO("Position " << i << " role=" << (int)history[i].role
+             << " prev=" << (int)history[i-1].role);
+        REQUIRE_FALSE(history[i].role == history[i - 1].role);
+    }
+
+    // Verify Interrupted content for sleep
+    bool foundSleepInterrupted = false;
+    for (auto& msg : history) {
+        for (auto& block : msg.content) {
+            if (block.type == ContentBlockParam::ToolResult &&
+                block.toolUseId == "call_sleep") {
+                REQUIRE(block.resultContent.find("Interrupted") != String::npos);
+                REQUIRE(block.resultContent.find("Slept for") == String::npos);
+                foundSleepInterrupted = true;
+            }
+        }
+    }
+    REQUIRE(foundSleepInterrupted);
+
+    // All validators pass
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+
+    // Second repair must be no-op
+    int injected2 = injectMissingToolResults(history);
+    REQUIRE(injected2 == 0);
+
+    // Validators still pass
+    auto request2 = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request2)));
+
+    // Serialized JSON: no consecutive same roles
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            INFO("Consecutive roles: " << prevRole << " → " << role);
+            REQUIRE_FALSE(role == prevRole);
+        }
+        prevRole = role;
+    }
+}
+
+// Test 6: pre-existing consecutive assistants (not from repair) are coalesced.
+//
+// Real TTY scenario: after auto-compact, the history legitimately contains
+// two consecutive assistant messages (compaction acknowledgment + tool-result
+// analysis).  The coalesce in injectMissingToolResults must handle these
+// even when no tool_use repair was needed.
+TEST_CASE("E8-coalesce: pre-existing consecutive assistants are merged",
+          "[serialize][e8][coalesce][regression]") {
+    std::vector<ContentMessage> history;
+
+    // Normal alternating sequence with tool_use/tool_result
+    auto asst = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Let me check something."),
+        ContentBlockParam::makeToolUse("call_R1", "Bash",
+            Json::object({{"command", "ls"}})),
+    });
+    history.push_back(asst);
+
+    ContentMessage tr;
+    tr.role = MessageRole::ToolResult;
+    tr.content.push_back(ContentBlockParam::makeToolResult("call_R1", "file list"));
+    history.push_back(tr);
+
+    // User text
+    history.push_back(ContentMessage::user("thanks"));
+
+    // Pre-existing consecutive assistants (as from auto-compact)
+    auto asst2 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeText("Understood. Continuing with compressed context."),
+    });
+    history.push_back(asst2);
+
+    auto asst3 = ContentMessage::assistantBlocks({
+        ContentBlockParam::makeThinking("analysis...", "sig"),
+        ContentBlockParam::makeText("I have the files loaded. The main file is..."),
+    });
+    history.push_back(asst3);
+
+    // Final user
+    history.push_back(ContentMessage::user("next query"));
+
+    REQUIRE(history.size() == 6);
+    // Verify consecutive assistants exist before repair
+    REQUIRE(history[3].role == MessageRole::Assistant);
+    REQUIRE(history[4].role == MessageRole::Assistant);
+
+    int injected = injectMissingToolResults(history);
+    // call_R1 result was already present, no synthetics needed
+    REQUIRE(injected == 0);
+
+    // After repair+coalesce: no consecutive same-role messages
+    for (size_t i = 1; i < history.size(); ++i) {
+        INFO("Position " << i << " role=" << (int)history[i].role
+             << " prev role=" << (int)history[i-1].role);
+        REQUIRE_FALSE(history[i].role == history[i - 1].role);
+    }
+
+    REQUIRE(validateToolResultOrdering(history));
+    REQUIRE(validateEmptyMessages(history));
+    auto request = buildAnthropicApiMessages(history);
+    REQUIRE(validateSerializedApiJson(makeRequest(request)));
+
+    // Serialized JSON must have role alternation
+    String prevRole;
+    for (auto& msg : request) {
+        String role = msg["role"];
+        if (!prevRole.empty()) {
+            INFO("Consecutive roles: " << prevRole << " → " << role);
+            REQUIRE_FALSE(role == prevRole);
+        }
+        prevRole = role;
+    }
 }

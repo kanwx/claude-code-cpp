@@ -128,6 +128,13 @@ private:
     std::atomic<int> activeCount_{0};
     std::atomic<bool> executing_{false};
 
+    /// Monotonic generation counter — incremented on cancel() and on each
+    /// new execute() call.  Used by executeSingle to detect stale executions
+    /// from a detached thread.  After an old thread's tool.sleep() returns,
+    /// the generation mismatch prevents it from touching callbacks that now
+    /// belong to a newer execute() call.
+    std::atomic<uint64_t> generation_{0};
+
     /// Protects permission engine evaluation + applyChoice (not thread-safe internally)
     std::mutex permissionMutex_;
 

@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <claude/core/AgentLoop.hpp>
 #include <claude/core/ApiTypes.hpp>
+#include <claude/core/ContentBlockParam.hpp>
 
 using namespace claude;
 
@@ -650,4 +651,200 @@ TEST_CASE("P3: Partially cancelled batch — mixed success and cancelled results
     CHECK(history[2].toolResults[2].isCancelled == true);
 
     REQUIRE(validateHistoryAfterRepair(history));
+}
+
+// ============================================================================
+// cancelGeneration race tests: force-override after resetCancel() clears flag
+// ============================================================================
+
+// Test: CancelledRunLateSuccessIsInterruptedAfterResetCancel
+//
+// Simulates the cancelGeneration sticky cancel detection:
+//   1. Run A starts tool_use sleep 30
+//   2. cancel() increments cancelGeneration (N → N+1)
+//   3. resetCancel() in new turn clears impl_->cancelled (now false)
+//   4. Run A's sleep(30) completes, tool process returns "Slept for 30 seconds"
+//   5. executeLoop detects cancelGeneration changed → turnCancelled=true
+//   6. Force-override ALL responses: isCancelled=true,
+//      content="Interrupted: tool execution was cancelled"
+//   7. insertOrMergeToolResultsAfterAssistant writes corrected result to history
+//
+// Key assertions:
+//   - History has "Interrupted: tool execution was cancelled" NOT "Slept for 30 seconds"
+//   - isCancelled=true on the inserted result
+//   - Tool_result placed BETWEEN assistant and next user (not after)
+//   - validateHistoryAfterRepair passes
+TEST_CASE("cancelGen: force-overridden result after resetCancel race — "
+          "Interrupted content, not real tool output",
+          "[cancelgen][history_repair][regression]") {
+    std::vector<Message> history;
+    history.push_back(Message::user("! sleep 30"));
+
+    auto tc = makeTc("sleep-call", "Bash");
+    history.push_back(Message::assistant("Running sleep.", {tc}));
+
+    // Simulate new turn's user input while old run's tool is still pending
+    history.push_back(Message::user("! read CMakeLists.txt"));
+
+    std::vector<ToolCall> expected = {tc};
+
+    // Simulate the force-override: tool completed normally ("Slept for 30 seconds")
+    // but executeLoop rewrote content and set isCancelled=true
+    std::vector<ToolResponse> actual;
+    ToolResponse forceOverridden;
+    forceOverridden.callId = "sleep-call";
+    forceOverridden.toolName = "Bash";
+    forceOverridden.content = "Interrupted: tool execution was cancelled";
+    forceOverridden.isCancelled = true;
+    // isError stays false per the force-override logic (only isCancelled is set)
+    forceOverridden.isError = false;
+    actual.push_back(forceOverridden);
+
+    insertToolResultsIntoHistory(history, expected, actual, "Interrupted");
+
+    // After repair:
+    // [0] User "! sleep 30"
+    // [1] Assistant ← sleep tool_use
+    // [2] ToolResult ← force-overridden Interrupted result (BEFORE next user)
+    // [3] User "! read CMakeLists.txt"
+    REQUIRE(history.size() == 4);
+
+    CHECK(history[0].role == MessageRole::User);
+    CHECK(history[1].role == MessageRole::Assistant);
+    CHECK(history[2].role == MessageRole::ToolResult);
+    CHECK(history[3].role == MessageRole::User);
+
+    // Verify inserted result
+    REQUIRE(history[2].toolResults.size() == 1);
+    CHECK(history[2].toolResults[0].callId == "sleep-call");
+    CHECK(history[2].toolResults[0].isCancelled == true);
+    CHECK(history[2].toolResults[0].isError == false);
+    CHECK(history[2].toolResults[0].content == "Interrupted: tool execution was cancelled");
+
+    // Verify "Slept for 30 seconds" is NOT present
+    CHECK(history[2].toolResults[0].content.find("Slept for 30 seconds") == String::npos);
+
+    // History validation must pass
+    REQUIRE(validateHistoryAfterRepair(history));
+}
+
+// Test: LateCancelledToolResultDoesNotLockInput
+//
+// Multiple consecutive ESC+resubmit cycles produce late tool results that
+// arrive after resetCancel() in a new turn. If force-override is absent,
+// stale "success" results reach the UI and lock the input.
+//
+// This test verifies insertToolResultsIntoHistory correctly handles:
+//   - Multiple cancelled runs with different tool_use IDs
+//   - Deduplication: late results from earlier runs don't duplicate
+//   - Force-overridden results placed between correct assistant and user
+//   - No stale success content leaks into history
+TEST_CASE("cancelGen: multiple late cancelled results — no stale success, no UI lock",
+          "[cancelgen][history_repair][regression]") {
+    std::vector<Message> history;
+
+    // Turn 1: user "sleep 30" → tool_use call-1
+    history.push_back(Message::user("! sleep 30"));
+    auto tc1 = makeTc("call-1", "Bash");
+    history.push_back(Message::assistant("Sleeping 30.", {tc1}));
+
+    // ESC + new prompt: user "sleep 10" (before call-1 finished)
+    history.push_back(Message::user("! sleep 10"));
+
+    // Turn 2: tool_use call-2
+    auto tc2 = makeTc("call-2", "Bash");
+    history.push_back(Message::assistant("Sleeping 10.", {tc2}));
+
+    // ESC + new prompt: user "read file" (before call-2 finished)
+    history.push_back(Message::user("! read CMakeLists.txt"));
+
+    // Now both late results arrive simultaneously.
+    // call-1 (sleep 30): finished normally, returns "Slept for 30 seconds"
+    // call-2 (sleep 10): finished normally, returns "Slept for 10 seconds"
+    // Both are force-overridden by executeLoop's cancelGeneration detection.
+
+    // Repair call-1 (matches first assistant)
+    {
+        std::vector<ToolResponse> actual1;
+        ToolResponse r1;
+        r1.callId = "call-1";
+        r1.toolName = "Bash";
+        r1.content = "Interrupted: tool execution was cancelled";
+        r1.isCancelled = true;
+        actual1.push_back(r1);
+        insertToolResultsIntoHistory(history, {tc1}, actual1, "Interrupted");
+    }
+
+    // Repair call-2 (matches second assistant)
+    {
+        std::vector<ToolResponse> actual2;
+        ToolResponse r2;
+        r2.callId = "call-2";
+        r2.toolName = "Bash";
+        r2.content = "Interrupted: tool execution was cancelled";
+        r2.isCancelled = true;
+        actual2.push_back(r2);
+        insertToolResultsIntoHistory(history, {tc2}, actual2, "Interrupted");
+    }
+
+    // After both repairs, no consecutive user messages should exist.
+    // Expected structure:
+    // [0] User "! sleep 30"
+    // [1] Assistant (call-1)
+    // [2] ToolResult (call-1: Interrupted)
+    // [3] User "! sleep 10"
+    // [4] Assistant (call-2)
+    // [5] ToolResult (call-2: Interrupted)
+    // [6] User "! read CMakeLists.txt"
+
+    // Verify no consecutive user messages
+    String prevRole;
+    for (size_t i = 0; i < history.size(); ++i) {
+        String role = (history[i].role == MessageRole::User) ? "user" :
+                      (history[i].role == MessageRole::Assistant) ? "assistant" :
+                      (history[i].role == MessageRole::ToolResult) ? "tool_result" : "system";
+        INFO("Message " << i << " role=" << role);
+        if (!prevRole.empty() && role == "user" && prevRole == "user") {
+            FAIL("Consecutive user messages at index " << i);
+        }
+        prevRole = role;
+    }
+
+    // Count tool_result messages: should be exactly 2
+    int toolResultCount = 0;
+    for (auto& msg : history) {
+        if (msg.role == MessageRole::ToolResult) toolResultCount++;
+    }
+    CHECK(toolResultCount == 2);
+
+    // Verify both results are marked cancelled with Interrupted content
+    for (auto& msg : history) {
+        if (msg.role != MessageRole::ToolResult) continue;
+        for (auto& tr : msg.toolResults) {
+            CHECK(tr.isCancelled == true);
+            CHECK(tr.content.find("Interrupted") != String::npos);
+            CHECK(tr.content.find("Slept for") == String::npos);
+        }
+    }
+
+    // History validation must pass
+    REQUIRE(validateHistoryAfterRepair(history));
+
+    // Convert to ContentBlockParam and validate serialized JSON
+    std::vector<ContentMessage> cm;
+    for (auto& msg : history) cm.push_back(convertLegacyMessage(msg));
+
+    // Verify via injectMissingToolResults: should be no-op (all results present)
+    int injected = injectMissingToolResults(cm);
+    CHECK(injected == 0);
+
+    // All validators
+    REQUIRE(validateToolResultOrdering(cm));
+    REQUIRE(validateEmptyMessages(cm));
+    auto request = buildAnthropicApiMessages(cm);
+    Json fullReq;
+    fullReq["model"] = "claude-sonnet-4-6";
+    fullReq["max_tokens"] = 4096;
+    fullReq["messages"] = request;
+    REQUIRE(validateSerializedApiJson(fullReq));
 }

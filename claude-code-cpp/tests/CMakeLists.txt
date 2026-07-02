@@ -307,3 +307,11 @@ catch_discover_tests(test_ftxui_markdown)
 add_executable(test_ctrlc_doublepress test_ctrlc_doublepress.cpp)
 target_link_libraries(test_ctrlc_doublepress PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ctrlc_doublepress)
+
+add_executable(test_ftxui_read_expand test_ftxui_read_expand.cpp)
+target_link_libraries(test_ftxui_read_expand PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ftxui_read_expand)
+
+add_executable(test_ftxui_esc test_ftxui_esc.cpp)
+target_link_libraries(test_ftxui_esc PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ftxui_esc)

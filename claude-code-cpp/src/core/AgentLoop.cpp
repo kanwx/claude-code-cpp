@@ -239,12 +239,11 @@ bool AgentLoop::hasCognitiveBackend() const {
 
 void AgentLoop::cancel() {
     impl_->cancelled.store(true, std::memory_order_release);
+    impl_->cancelGeneration.fetch_add(1, std::memory_order_release);
     impl_->apiClient.abort();
     if (impl_->toolExecutor) {
         impl_->toolExecutor->cancel();
     }
-    // Note: spdlog is NOT async-signal-safe, so we log from the
-    // loop's cancel check point rather than here.
 }
 
 bool AgentLoop::isCancelled() const {
@@ -625,6 +624,12 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             toolResponses = std::move(result.interleavedToolResults);
         }
 
+        // Snapshot the cancel generation BEFORE tool execution.
+        // cancelGeneration is monotonic (never reset), so even if a new turn's
+        // resetCancel() clears impl_->cancelled during a long-running tool,
+        // we can still detect that a cancel happened during THIS run.
+        const uint64_t cancelGenBefore = impl_->cancelGeneration.load(std::memory_order_acquire);
+
         // Execute any remaining tool calls (not interleaved)
         if (!savedToolCalls.empty()) {
             auto batchResponses = executeToolCalls(savedToolCalls);
@@ -638,9 +643,34 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         const bool toolWasCancelled = std::any_of(toolResponses.begin(), toolResponses.end(),
             [](const ToolResponse& r) { return r.isCancelled; });
 
+        // Per-run sticky cancellation detection.  Uses three signals:
+        // 1. cancelGeneration:      monotonic — did cancel() fire during this run?
+        // 2. impl_->cancelled:      may be false if resetCancel() raced ahead
+        // 3. toolWasCancelled:      any tool response has isCancelled=true
+        const bool turnCancelled = (impl_->cancelGeneration.load(std::memory_order_acquire) != cancelGenBefore)
+                                 || impl_->cancelled.load(std::memory_order_acquire)
+                                 || toolWasCancelled;
+
         // Check cancellation after tool execution
-        if (impl_->cancelled.load(std::memory_order_acquire) || toolWasCancelled) {
-            spdlog::debug("AgentLoop: cancelled after tool execution at iteration {}", iteration);
+        if (turnCancelled) {
+            spdlog::debug("AgentLoop: cancelled after tool execution at iteration {} "
+                          "(cancelGen {} -> {})", iteration, cancelGenBefore,
+                          impl_->cancelGeneration.load(std::memory_order_acquire));
+
+            // Force-override ALL tool results as cancelled.  Even if the tool
+            // process finished normally (e.g. a 30 s sleep that completed
+            // after ESC was pressed), from the agent's perspective this turn
+            // was cancelled and the result must be treated as interrupted.
+            // If we don't rewrite here, the late real result (e.g. "Slept for
+            // 30 seconds") would overwrite the "Interrupted" placeholder in
+            // history, causing the UI to show a stale success state.
+            for (auto& tr : toolResponses) {
+                tr.isCancelled = true;
+                if (!tr.isError) {
+                    tr.content = "Interrupted: tool execution was cancelled";
+                }
+            }
+
             // Write tool results into messageHistory before returning.
             // Without this, the assistant tool_use blocks in history lack
             // matching tool_results, forcing P0's API-copy repair to synthesize
@@ -910,6 +940,20 @@ Json AgentLoop::buildApiRequest() {
         }
     }
 
+    // ===== API_MESSAGES_PRECHECK: dump summary before any repair =====
+    dumpContentHistory("API_MESSAGES_PRECHECK (raw)", contentHistory);
+
+    // ===== Validate empty messages BEFORE repair =====
+    // Catch cancelled turns that left empty assistant messages, empty text
+    // blocks, etc. before the tool_result injector runs.
+    if (!validateEmptyMessages(contentHistory)) {
+        fprintf(stderr, "[ERROR] buildApiRequest: empty message/content detected "
+                "in pre-repair check — rejecting request\n");
+        throw std::runtime_error(
+            "Cannot send request: empty message or content block in history. "
+            "This usually means a cancelled turn was persisted incorrectly.");
+    }
+
     // ===== Protocol safety net: inject synthetic tool_results for orphaned tool_uses =====
     // If a previous turn was cancelled or interrupted before tool_results were
     // committed to history, orphan tool_use blocks would cause 400 errors from
@@ -921,10 +965,53 @@ Json AgentLoop::buildApiRequest() {
                 "for orphaned tool_use blocks\n", syntheticResults);
     }
 
+    // Final safety net: coalesce any adjacent same-role messages that may
+    // remain after repair.  The coalesce inside injectMissingToolResults
+    // covers removals made during repair, but other code paths (e.g.
+    // auto-compact) can introduce consecutive assistants that weren't
+    // visited by the repair loop.
+    int coalesced = coalesceAdjacentSameRole(contentHistory);
+    if (coalesced > 0) {
+        spdlog::debug("buildApiRequest: coalesced {} adjacent same-role message(s) "
+                      "as safety net", coalesced);
+    }
+
+    // Persist the repaired ContentMessage history back to impl_->messageHistory
+    // so repair is idempotent — the same orphan tool_use won't be repaired again
+    // on subsequent API calls, and coalesced adjacent messages stay merged.
+    //
+    // Only write back if repair actually changed something (synthetic injected
+    // or messages were merged/coalesced), to avoid unnecessary history locks.
+    {
+        std::lock_guard lock(impl_->historyMutex);
+        // Convert each repaired ContentMessage back to legacy Message.
+        // A ToolResult ContentMessage that was merged into a User message
+        // becomes part of that User message's toolResults vector — no more
+        // standalone ToolResult messages that cause consecutive users.
+        std::vector<Message> repairedHistory;
+        repairedHistory.reserve(contentHistory.size());
+        for (const auto& cm : contentHistory) {
+            repairedHistory.push_back(convertContentMessageToLegacy(cm));
+        }
+
+        // Verify the conversion didn't lose information by comparing sizes
+        if (repairedHistory.size() != contentHistory.size()) {
+            fprintf(stderr, "[ERROR] buildApiRequest: legacy conversion size mismatch "
+                    "(%zu ContentMessage -> %zu Message) — this is a bug\n",
+                    contentHistory.size(), repairedHistory.size());
+        }
+
+        impl_->messageHistory = std::move(repairedHistory);
+    }
+
+    // Re-dump after repair
+    dumpContentHistory("API_MESSAGES_PRECHECK (repaired)", contentHistory);
+
     // Hard validation: after repair, verify protocol invariants.
     // If still invalid, reject the request locally rather than sending a
     // guaranteed 400 to the API.
-    if (!validateToolResultOrdering(contentHistory)) {
+    if (!validateEmptyMessages(contentHistory) ||
+        !validateToolResultOrdering(contentHistory)) {
         fprintf(stderr, "[ERROR] buildApiRequest: protocol validation FAILED "
                 "after repair — rejecting request\n");
         throw std::runtime_error(
@@ -976,7 +1063,11 @@ Json AgentLoop::buildApiRequest() {
                         Json tr;
                         tr["role"] = "tool";
                         tr["tool_call_id"] = block.toolUseId;
-                        tr["content"] = block.resultContent;
+                        String content = block.resultContent;
+                        if (content.empty()) {
+                            content = "(no output)";
+                        }
+                        tr["content"] = content;
                         messages.push_back(tr);
                     }
                 }
@@ -1066,6 +1157,31 @@ Json AgentLoop::buildApiRequest() {
     }
     if (impl_->maxTokensOverride > 0) {
         impl_->apiClient.setMaxTokens(impl_->maxTokensOverride);
+    }
+
+    // ===== Final JSON validation: check the ACTUAL serialized payload =====
+    // The C++ struct validators pass, but the JSON serializer may strip
+    // fields or produce blocks that fail Anthropic's schema.  Catch that here.
+    if (!validateSerializedApiJson(request)) {
+        if (getenv("CLAUDE_CODE_DEBUG_API_MESSAGES")) {
+            fprintf(stderr, "[ERROR] buildApiRequest: serialized JSON validation FAILED\n");
+            // Dump sanitized JSON summary (no user content)
+            String summary;
+            if (request.contains("messages")) {
+                auto& msgs = request["messages"];
+                for (size_t i = 0; i < msgs.size() && i < 20; ++i) {
+                    auto& m = msgs[i];
+                    String role = m.value("role", "?");
+                    size_t nBlocks = m.value("content", Json::array()).size();
+                    summary += "[" + std::to_string(i) + "] role=" + role
+                             + " blocks=" + std::to_string(nBlocks) + "\n";
+                }
+            }
+            fprintf(stderr, "--- FAILING JSON SUMMARY ---\n%s--- END SUMMARY ---\n", summary.c_str());
+        }
+        throw std::runtime_error(
+            "Cannot send request: serialized JSON failed protocol validation. "
+            "See stderr for details (set CLAUDE_CODE_DEBUG_API_MESSAGES=1).");
     }
 
     return request;
