@@ -5,6 +5,9 @@
 #include "claude/ui/FtxuiMarkdown.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <ctime>
 #include <algorithm>
 
 namespace claude {
@@ -30,19 +33,38 @@ String FtxuiRepl::truncate(const String& s, size_t maxLen) {
 
 // ========== Refresh thread — spinner animation + safety net flush ==========
 
+static void refreshLog(const char* msg) {
+    auto t = std::time(nullptr);
+    struct tm tm_buf;
+    localtime_r(&t, &tm_buf);
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d] REFRESH-DBG %s\n",
+                       tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, msg);
+    if (len > 0) {
+        int fd = open("/tmp/esc-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) { write(fd, buf, static_cast<size_t>(len)); close(fd); }
+    }
+}
+
 void FtxuiRepl::startRefreshThread() {
     if (refreshActive_.exchange(true)) return;
+    refreshLog("[REFRESH] startRefreshThread spawning thread");
     refreshThread_ = std::thread([this]() { refreshLoop(); });
 }
 
 void FtxuiRepl::stopRefreshThread() {
+    refreshLog("[REFRESH] stopRefreshThread begin");
     refreshActive_ = false;
     if (refreshThread_.joinable()) {
+        refreshLog("[REFRESH] stopRefreshThread joining refresh thread");
         refreshThread_.join();
+        refreshLog("[REFRESH] stopRefreshThread join done");
     }
+    refreshLog("[REFRESH] stopRefreshThread end");
 }
 
 void FtxuiRepl::refreshLoop() {
+    refreshLog("[REFRESH] refreshLoop started");
     int bgCheckCounter = 0;
 
     while (refreshActive_ && running_) {
@@ -104,6 +126,7 @@ void FtxuiRepl::refreshLoop() {
         screen_->RequestAnimationFrame();
     }
     refreshActive_ = false;
+    refreshLog("[REFRESH] refreshLoop exited");
 }
 
 // ========== Streaming — the key to smooth output ==========

@@ -12,12 +12,36 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <termios.h>
 #include <algorithm>
+#include <ctime>
 
 namespace claude {
 
 using namespace ftxui_colors;
+
+// Diagnostic helper — writes directly to /tmp/esc-debug.log bypassing spdlog.
+// ESC debug: use raw write() syscall to fd 2 (stderr) and also to a tmp file.
+// FILE*-based I/O (fprintf/fopen) was unreliable in FTXUI fullscreen on macOS.
+static void escLog(const char* msg) {
+    auto t = std::time(nullptr);
+    struct tm tm_buf;
+    localtime_r(&t, &tm_buf);
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d] ESC-DBG %s\n",
+                       tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, msg);
+    if (len > 0) {
+        write(STDERR_FILENO, buf, static_cast<size_t>(len));
+        // Also write to file as fallback
+        int fd = open("/tmp/esc-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            write(fd, buf, static_cast<size_t>(len));
+            close(fd);
+        }
+    }
+}
+
 
 // Running-status verb list — curated subset from TS spinnerVerbs.ts.
 // One verb is randomly selected per user turn and displayed during the
@@ -927,8 +951,10 @@ void FtxuiRepl::syncLayoutState() {
 FtxuiRepl::FtxuiRepl() = default;
 
 FtxuiRepl::~FtxuiRepl() {
+    escLog("[LIFETIME] ~FtxuiRepl destructor");
     running_ = false;
     stopRefreshThread();
+    escLog("[LIFETIME] ~FtxuiRepl destructor complete");
 }
 
 // ========== Thread-safe message operations ==========
@@ -1135,6 +1161,7 @@ void FtxuiRepl::run() {
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
 
+    escLog("=== FTXUI starting, ESC debug log active ===");
     spdlog::debug("FTXUI: Building component...");
     auto component = BuildMainComponent();
     spdlog::debug("FTXUI: Creating screen...");
@@ -1150,21 +1177,44 @@ void FtxuiRepl::run() {
 
     try {
         screen.Loop(component);
+        escLog("[LOOP] screen.Loop() returned normally");
     } catch (const std::exception& e) {
+        escLog("[LOOP] screen.Loop() EXCEPTION — exiting");
         spdlog::error("FTXUI loop exception: {}", e.what());
+    } catch (...) {
+        escLog("[LOOP] screen.Loop() UNKNOWN EXCEPTION — exiting");
     }
 
     screen_ = nullptr;
     stopRefreshThread();
+    escLog("[LOOP] run() exiting, screen teardown complete");
     spdlog::debug("FTXUI: Loop ended");
 }
 
 void FtxuiRepl::exit() {
-    running_ = false;
-    stopRefreshThread();
-    if (screen_) {
-        screen_->Exit();
+    escLog("[EXIT] FtxuiRepl::exit() called");
+
+    // Stack trace to identify who called exit()
+    {
+        void* bt[32];
+        int n = backtrace(bt, 32);
+        int fd = open("/tmp/esc-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            backtrace_symbols_fd(bt, n, fd);
+            close(fd);
+        }
     }
+
+    running_ = false;
+    escLog("[EXIT] running_=false set");
+    stopRefreshThread();
+    escLog("[EXIT] stopRefreshThread done");
+    if (screen_) {
+        escLog("[EXIT] calling screen_->Exit()");
+        screen_->Exit();
+        escLog("[EXIT] screen_->Exit() returned");
+    }
+    escLog("[EXIT] exit() complete");
 }
 
 bool FtxuiRepl::handleCtrlC(std::chrono::steady_clock::time_point now, int timeoutMs) {
@@ -1172,6 +1222,7 @@ bool FtxuiRepl::handleCtrlC(std::chrono::steady_clock::time_point now, int timeo
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             now - lastCtrlC_).count();
         if (elapsed < timeoutMs) {
+            escLog("[EXIT] handleCtrlC double-press -> exit()");
             exit();
             return true;
         }
@@ -1222,6 +1273,10 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
     auto eventHandler = CatchEvent([r, ls](Event event) -> bool {
         // Sync state from FtxuiRepl to layoutState_ before processing
         r->syncLayoutState();
+
+        if (event == Event::Escape) {
+            escLog("[ESC] CatchEvent ENTRY — event reached FtxuiRepl handler");
+        }
 
         if (event.is_mouse()) {
             auto& mouse = event.mouse();
@@ -1443,6 +1498,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             if (r->permissionFeedbackActive_) {
                 if (event == Event::Escape) {
                     // Escape in feedback mode: close feedback, stay in prompt
+                    escLog("[ESC] permission feedback: closing feedback, staying in prompt");
                     r->permissionFeedbackActive_ = false;
                     ls->permissionFeedbackActive = false;
                     return true;
@@ -1576,6 +1632,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 return true;
             }
             if (event == Event::Escape) {
+                escLog("[ESC] permission prompt: deny once, closing prompt");
                 r->permissionPromptActive_ = false;
                 ls->permissionActive = false;
                 clearPermissionProgress();
@@ -1599,32 +1656,71 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
 
         if (r->isStreaming_) {
             if (event == Event::Escape) {
+                try {
+                escLog("[ESC] streaming: cancelling turn");
                 if (r->onCancel_) {
+                    escLog("[ESC] streaming: calling onCancel_");
                     r->onCancel_();
+                    escLog("[ESC] streaming: onCancel_ returned");
                 }
 
+                escLog("[ESC] cleanup: before isStreaming=false");
                 r->isStreaming_ = false;
-                r->isThinking_ = false;
-                r->turnStarted_ = false;  // P1: close turn so next prompt gets fresh startTime_
+                escLog("[ESC] cleanup: after isStreaming=false");
 
+                // Clear pipeline status metadata so the footer/status bar
+                // stops showing "● Running..." and stale token counts.
+                r->newPipelineStatusMetadata_ = TurnMetadata{};
+                r->outputTokens_ = 0;
+                r->inputTokens_ = 0;
+
+                escLog("[ESC] cleanup: before isThinking=false");
+                r->isThinking_ = false;
+                escLog("[ESC] cleanup: after isThinking=false");
+
+                escLog("[ESC] cleanup: before turnStarted=false");
+                r->turnStarted_ = false;
+                escLog("[ESC] cleanup: after turnStarted=false");
+
+                escLog("[ESC] cleanup: before move streamingText");
                 String partial = std::move(r->streamingText_);
+                escLog("[ESC] cleanup: after move streamingText");
+
+                escLog("[ESC] cleanup: before clear streamingText_");
                 r->streamingText_.clear();
+                escLog("[ESC] cleanup: after clear streamingText_");
+
+                escLog("[ESC] cleanup: before reset streamingRenderer_");
                 r->streamingRenderer_.reset();
+                escLog("[ESC] cleanup: after reset streamingRenderer_");
+
                 if (!partial.empty()) {
+                    escLog("[ESC] cleanup: pushing partial AnswerText block");
                     ContentBlock cb;
                     cb.type = ContentBlock::AnswerText;
                     cb.text = std::move(partial);
                     r->contentBlocks_.push_back(std::move(cb));
+                    escLog("[ESC] cleanup: partial AnswerText block pushed");
                 }
                 {
+                    escLog("[ESC] cleanup: before push Cancelled block");
                     ContentBlock cb;
                     cb.type = ContentBlock::AnswerText;
                     cb.text = "Cancelled";
                     cb.dimmed = true;
                     r->contentBlocks_.push_back(std::move(cb));
+                    escLog("[ESC] cleanup: Cancelled block pushed");
                 }
 
+                escLog("[ESC] cleanup: before stopRefreshThread");
                 r->stopRefreshThread();
+                escLog("[ESC] cleanup: after stopRefreshThread");
+                escLog("[ESC] cleanup: DONE, returning true");
+                } catch (const std::exception& e) {
+                    escLog("[ESC] streaming: std::exception caught");
+                } catch (...) {
+                    escLog("[ESC] streaming: unknown exception caught");
+                }
                 return true;
             }
             // Explicitly block Enter/Return during streaming to prevent
@@ -1642,6 +1738,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             if (!ls->input.text.empty()) {
                 r->ctrlCPending_ = false;
                 String current = ls->input.text;
+                {
+                    // Log the submitted text (truncated for safety)
+                    char buf[256];
+                    String preview = current.size() > 40 ? current.substr(0, 40) + "..." : current;
+                    snprintf(buf, sizeof(buf), "[RETURN] submitted input: '%s' (first char: 0x%02x)",
+                             preview.c_str(), static_cast<unsigned char>(current[0]));
+                    escLog(buf);
+                }
                 ls->input.text.clear();
                 ls->input.cursorPos = 0;
                 ContentBlock userCb;
@@ -1680,8 +1784,10 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 r->startRefreshThread();
 
                 if (!current.empty() && current[0] == '/' && r->onCommand_) {
+                    escLog("[RETURN] routing to onCommand_");
                     r->onCommand_(current);
                 } else if (r->onSubmit_) {
+                    escLog("[RETURN] routing to onSubmit_");
                     r->onSubmit_(current);
                 }
             }
@@ -1844,6 +1950,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             return true;
         }
         if (event == Event::Escape) {
+            escLog("[ESC] idle: consuming escape");
             if (!r->completer_.currentCompletions().empty()) {
                 r->completer_.clearCompletions();
                 ls->completions.clear();
@@ -1852,6 +1959,10 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 return true;
             }
             return true;
+        }
+        // Log any unhandled event that falls through to help debug ESC issue
+        if (event == Event::Escape) {
+            escLog("[ESC] WARNING: ESC fell through all handlers!");
         }
         return false;
     });

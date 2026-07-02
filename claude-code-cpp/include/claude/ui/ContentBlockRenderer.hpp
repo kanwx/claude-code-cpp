@@ -31,6 +31,7 @@ namespace claude {
 
 struct BlockRenderOptions {
     bool isFocusedCollapsible = false;
+    bool isInExpandedGroup = false;  // true when rendered inside an expanded CollapsedGroup
 };
 
 ftxui::Element renderFtxuiElement(const ContentBlock& block,

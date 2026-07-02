@@ -307,8 +307,38 @@ ToolResultSummary FileReadTool::renderToolResult(const String& result, bool isEr
         }
     }
 
-    return ToolResultSummary::success(std::to_string(lines) + " lines", /*bold=*/true,
-                                      /*secondary=*/secondary);
+    // Build content preview: extract body after the "Contents of <path>:\n\n" header
+    String contentPreview;
+    bool truncated = false;
+    int previewLines = 0;
+    auto bodyStart = result.find("\n\n");
+    if (bodyStart != String::npos && bodyStart + 2 < result.size()) {
+        String body = result.substr(bodyStart + 2);
+        // Truncate to max 20 lines or 2000 chars
+        static constexpr int kMaxPreviewLines = 20;
+        static constexpr int kMaxPreviewChars = 2000;
+        int lineCount = 0;
+        size_t cutPos = 0;
+        for (size_t i = 0; i < body.size() && lineCount < kMaxPreviewLines && i < kMaxPreviewChars; ++i) {
+            if (body[i] == '\n') lineCount++;
+            cutPos = i + 1;
+        }
+        if (cutPos < body.size()) {
+            truncated = true;
+        }
+        contentPreview = body.substr(0, cutPos);
+        // Count actual preview lines
+        for (char c : contentPreview) { if (c == '\n') previewLines++; }
+        if (!contentPreview.empty() && contentPreview.back() != '\n') previewLines++;
+    }
+
+    auto summary = ToolResultSummary::success(std::to_string(lines) + " lines", /*bold=*/true,
+                                              /*secondary=*/secondary);
+    summary.contentPreview = std::move(contentPreview);
+    summary.contentPreviewTruncated = truncated;
+    summary.previewLinesShown = previewLines;
+    summary.totalLines = lines;
+    return summary;
 }
 
 } // namespace claude

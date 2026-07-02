@@ -307,7 +307,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 });
             }
 
-            if (!block.expanded) {
+            if (!block.expanded && !opts.isInExpandedGroup) {
                 return hbox({
                     focusMarker(focused),
                     renderToolBadge(dm.toolName),
@@ -316,18 +316,40 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                     ctrlOHint(focused, block.expanded),
                 });
             }
-            return hbox({
+            // Expanded view: show summary + content preview
+            Elements expandedEls;
+            expandedEls.push_back(hbox({
                 focusMarker(focused),
                 renderToolBadge(dm.toolName),
                 text(" "),
                 summaryEl,
                 ctrlOHint(focused, block.expanded),
-            });
+            }));
+            if (block.summary.contentPreview.empty()) {
+                return hbox(std::move(expandedEls));
+            }
+            // Render content preview with truncation indicator
+            String preview = block.summary.contentPreview;
+            // Strip trailing newline from preview for cleaner display
+            while (!preview.empty() && preview.back() == '\n') preview.pop_back();
+            expandedEls.push_back(
+                text(preview) | dim | color(MacShadow)
+            );
+            if (block.summary.contentPreviewTruncated) {
+                String truncMsg = "  ... truncated, " +
+                    std::to_string(block.summary.previewLinesShown) +
+                    " of " + std::to_string(block.summary.totalLines) +
+                    " lines shown";
+                expandedEls.push_back(
+                    text(truncMsg) | dim | color(MacShadow)
+                );
+            }
+            return vbox(std::move(expandedEls));
         }
 
         // ===== Tool Group =====
         case ContentBlock::ToolGroup: {
-            if (!block.expanded) {
+            if (!block.expanded && !opts.isInExpandedGroup) {
                 return hbox({
                     focusMarker(focused),
                     text(block.summary.primaryText) | (focused ? bold : dim),
@@ -343,7 +365,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
             for (auto& child : block.children) {
                 childrenEls.push_back(hbox({
                     text("    "),
-                    renderFtxuiElement(child, {}),
+                    renderFtxuiElement(child, {.isInExpandedGroup = true}),
                 }));
             }
             return vbox(std::move(childrenEls));
@@ -394,7 +416,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 String connector = last ? "  └─ " : "  ├─ ";
                 cel.push_back(hbox({
                     text(connector) | dim | color(MacShadow),
-                    renderFtxuiElement(block.children[i], {}),
+                    renderFtxuiElement(block.children[i], {.isInExpandedGroup = true}),
                 }));
             }
             return vbox(std::move(cel));

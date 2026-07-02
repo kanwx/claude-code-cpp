@@ -86,6 +86,10 @@ void signalHandler(int signal) {
 void installSignalHandlers() {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
+    // Ignore SIGPIPE — network writes to broken sockets return EPIPE
+    // instead of killing the process.  Essential for FTXUI streaming
+    // where cancel() aborts active HTTP connections.
+    std::signal(SIGPIPE, SIG_IGN);
 }
 
 } // namespace claude
