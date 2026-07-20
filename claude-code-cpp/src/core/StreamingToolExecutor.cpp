@@ -42,6 +42,15 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
     cancelled_.store(false, std::memory_order_relaxed);
     executing_.store(true, std::memory_order_release);
 
+    // Clean up stale cancel tokens from previous runs
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        activeCancelTokens_.erase(
+            std::remove_if(activeCancelTokens_.begin(), activeCancelTokens_.end(),
+                [](const std::weak_ptr<std::atomic<bool>>& w) { return w.expired(); }),
+            activeCancelTokens_.end());
+    }
+
     // Result vector pre-allocated to preserve ordering by index
     std::vector<ToolExecutionResult> results(toolCalls.size());
 
@@ -171,6 +180,17 @@ void StreamingToolExecutor::cancel() {
     generation_.fetch_add(1, std::memory_order_release);
     spdlog::debug("StreamingToolExecutor: cancellation requested (gen={})",
                   generation_.load(std::memory_order_acquire));
+
+    // P4: Signal all active per-tool cancel tokens so running Process
+    // polling loops detect the cancellation and kill the process group.
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        for (auto& weak : activeCancelTokens_) {
+            if (auto token = weak.lock()) {
+                token->store(true, std::memory_order_relaxed);
+            }
+        }
+    }
 }
 
 bool StreamingToolExecutor::isExecuting() const {
@@ -418,6 +438,16 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     }
 
     // ====== Execute the tool ======
+    // P4: Create a per-tool cancel token so Process::execute() can be
+    // interrupted from the cancel() path.  Shared with BashTool via context
+    // and tracked via weak_ptr so the token lifetime matches the tool call.
+    auto cancelToken = std::make_shared<std::atomic<bool>>(false);
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        activeCancelTokens_.push_back(cancelToken);
+    }
+    context_.set("__p4_cancel_token", cancelToken);
+
     String result;
     bool isError = false;
     try {
@@ -436,6 +466,15 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     } catch (...) {
         result = "Error: Unknown exception during tool execution";
         isError = true;
+    }
+
+    // Clean up the P4 cancel token now that tool execution has finished
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        activeCancelTokens_.erase(
+            std::remove_if(activeCancelTokens_.begin(), activeCancelTokens_.end(),
+                [](const std::weak_ptr<std::atomic<bool>>& w) { return w.expired(); }),
+            activeCancelTokens_.end());
     }
 
     // ====== Per-tool result truncation ======

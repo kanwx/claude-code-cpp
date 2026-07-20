@@ -12,6 +12,7 @@
 #include <vector>
 #include <future>
 #include <mutex>
+#include <memory>
 
 namespace claude {
 
@@ -152,6 +153,14 @@ private:
         std::future<ToolExecutionResult> future;
     };
     std::vector<PendingFuture> pendingFutures_;
+
+    // ========== P4: Per-tool cancel tokens ==========
+    // Each running tool gets a shared_ptr<atomic<bool>>.  The executor
+    // retains a weak_ptr so the token is freed automatically when the
+    // tool finishes.  cancel() locks each weak_ptr and sets the token
+    // to true, which Process::execute() picks up in its polling loop.
+    mutable std::mutex cancelTokensMutex_;
+    std::vector<std::weak_ptr<std::atomic<bool>>> activeCancelTokens_;
 
     /// Classify a tool call as parallel-safe or sequential
     bool isParallelSafe(const ToolCall& call) const;
