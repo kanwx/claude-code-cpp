@@ -11,14 +11,23 @@ void PostCompactCleanup::cleanup(std::vector<Message>& history) {
     removed += removeOrphanedResults(history);
     int fixed = enforceAlternation(history);
 
-    // Add compact boundary marker so the model knows what was preserved
-    history.push_back(Message::user(
-        "[System: Context was compacted. The most recent messages are preserved. "
-         "Older conversation has been summarized. You still have access to "
-         "session memory and the current working context.]"));
-    history.push_back(Message::assistant(
-        "Understood. I'll continue working with the compressed context, "
-        "referencing session memory as needed."));
+    // Compact boundary: add a user marker so the model knows context was
+    // compacted.  If the last message is already a user, prepend the marker
+    // to avoid creating consecutive user messages.
+    {
+        String boundaryText =
+            "[System: Context was compacted. The most recent messages are "
+            "preserved. Older conversation has been summarized.]";
+        if (!history.empty() && history.back().role == MessageRole::User) {
+            if (!history.back().content.empty()) {
+                history.back().content = boundaryText + "\n\n" + history.back().content;
+            } else {
+                history.back().content = boundaryText;
+            }
+        } else {
+            history.push_back(Message::user(boundaryText));
+        }
+    }
 
     if (removed > 0 || fixed > 0) {
         spdlog::debug("PostCompactCleanup: cleaned {} messages, fixed {} alternation issues",
@@ -130,8 +139,30 @@ int PostCompactCleanup::enforceAlternation(std::vector<Message>& history) {
                 continue;
             }
 
-            // Merge consecutive assistant messages
+            // Merge consecutive assistant messages.
+            // GUARD: never merge if either assistant carries tool_use blocks.
+            // Merging a summary/text assistant with a tool_use-bearing assistant
+            // corrupts tool ownership.  Instead of inserting a filler user
+            // (which would break tool_use→tool_result when prev has tool_use),
+            // skip the pair and let post-compact validation catch the structural
+            // problem so the caller can reject or rebuild the compact result.
             if (curEff == MessageRole::Assistant) {
+                bool prevHasToolUse = !prev.toolCalls.empty();
+                bool curHasToolUse = !current.toolCalls.empty();
+                if (prevHasToolUse || curHasToolUse) {
+                    spdlog::error(
+                        "PostCompactCleanup: refusing to merge assistant messages "
+                        "with tool_use blocks (compact structure is invalid). "
+                        "prev_tool_uses={} cur_tool_uses={} — skipping merge, "
+                        "validation will catch this.",
+                        prev.toolCalls.size(), current.toolCalls.size());
+                    // Do NOT insert a filler user here.  If prev has tool_use,
+                    // a bare user message would break tool_use→tool_result.
+                    // Advance past the pair and let validateCompactedHistory
+                    // or buildApiRequest catch the consecutive assistants.
+                    i++;
+                    continue;
+                }
                 prev.content += "\n\n" + current.content;
                 // Merge tool calls too
                 for (auto& tc : current.toolCalls) {

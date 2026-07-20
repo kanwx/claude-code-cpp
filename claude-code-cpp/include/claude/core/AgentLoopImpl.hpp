@@ -80,6 +80,10 @@ struct AgentLoop::Impl {
     // Reactive compact
     int reactiveCompactAttempts = 0;
 
+    // Compact backoff: skip compact if history size hasn't changed since
+    // last validation failure.  See attemptReactiveCompact / applyAutoCompact.
+    size_t lastFailedCompactSize = 0;
+
     // Context injection
     ContextInjector* contextInjector = nullptr;
 

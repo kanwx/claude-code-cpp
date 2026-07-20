@@ -718,7 +718,24 @@ int coalesceAdjacentSameRole(std::vector<ContentMessage>& messages) {
                     std::make_move_iterator(other.begin()),
                     std::make_move_iterator(other.end()));
             } else {
-                // Assistant + Assistant: append cur blocks to prev
+                // Assistant + Assistant: append cur blocks to prev.
+                // GUARD: never merge if either carries tool_use blocks.
+                bool hasToolUse = false;
+                for (auto& b : prev.content) {
+                    if (b.type == ContentBlockParam::ToolUse) { hasToolUse = true; break; }
+                }
+                if (!hasToolUse) {
+                    for (auto& b : cur.content) {
+                        if (b.type == ContentBlockParam::ToolUse) { hasToolUse = true; break; }
+                    }
+                }
+                if (hasToolUse) {
+                    // Skip merge — tool-bearing assistants must not be coalesced.
+                    // This indicates a structural issue in the compact pipeline;
+                    // the caller should validate and reject before reaching here.
+                    ci++;
+                    continue;
+                }
                 prev.content.insert(prev.content.end(),
                     std::make_move_iterator(cur.content.begin()),
                     std::make_move_iterator(cur.content.end()));

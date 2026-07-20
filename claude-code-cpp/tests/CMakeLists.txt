@@ -319,3 +319,7 @@ catch_discover_tests(test_ftxui_esc)
 add_executable(test_bash_cancel test_bash_cancel.cpp)
 target_link_libraries(test_bash_cancel PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_bash_cancel)
+
+add_executable(test_auto_compact_continuity test_auto_compact_continuity.cpp)
+target_link_libraries(test_auto_compact_continuity PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_auto_compact_continuity)
