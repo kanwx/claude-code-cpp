@@ -478,11 +478,12 @@ TEST_CASE("Collapse strategies: interleaved scenario", "[CollapseStrategies]") {
                   << estimateLines(result) << " lines\n";
         printBlockTree(result, "Final tree");
 
-        // Verify: all 3 ToolResults become individual CollapsedGroups with children
-        CHECK(cnt.cg == 3);
+        // P6-P0a: narration text between same-kind tools no longer breaks groups.
+        // All 3 Read tools now collapse into 1 CollapsedGroup (not 3).
+        CHECK(cnt.cg == 1);
         CHECK(cnt.tr == 3);  // ToolResults are children of CollapsedGroup, visible in recursive count
         CHECK(cnt.tg == 0);
-        CHECK(estimateLines(result) == 9);
+        CHECK(estimateLines(result) == 7);
     }
 
     // Strategy B
@@ -506,10 +507,10 @@ TEST_CASE("Collapse strategies: interleaved scenario", "[CollapseStrategies]") {
                   << estimateLines(result) << " lines\n";
         printBlockTree(result, "Final tree");
 
-        // Verify: no CollapsedGroups (all single-tool), ToolResults preserved
-        CHECK(cnt.cg == 0);
+        // P6-P0a: CollapsedGroup has 3 children >= 2 → NOT unwrapped → stays.
+        CHECK(cnt.cg == 1);
         CHECK(cnt.tr == 3);
-        CHECK(estimateLines(result) == 9);  // Same line count — ToolResult renders 1 line collapsed
+        CHECK(estimateLines(result) == 7);
     }
 
     // Strategy C
@@ -533,8 +534,8 @@ TEST_CASE("Collapse strategies: interleaved scenario", "[CollapseStrategies]") {
         // final is same as strategy A (CollapsedGroup per tool, since AnswerText breaks grouping)
         CHECK(streamCnt.cg == 0);  // No collapse during streaming
         CHECK(streamCnt.tr == 3);  // ToolResults visible during streaming
-        CHECK(cnt.cg == 3);        // Final: individual CollapsedGroups
-        CHECK(estimateLines(result) == 9);
+        CHECK(cnt.cg == 1);        // P6-P0a: 1 CollapsedGroup with all 3 reads
+        CHECK(estimateLines(result) == 7);
     }
 
     // Build comparison table

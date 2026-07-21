@@ -278,3 +278,259 @@ TEST_CASE("collapseReadSearchGroups separates Read and Grep into different group
     }
     REQUIRE(collapsedCount == 3);
 }
+
+// ========== P6-P0a: isToolNarration classifier tests ==========
+
+static ContentBlock makeAnswerText(const String& text) {
+    ContentBlock b;
+    b.type = ContentBlock::AnswerText;
+    b.text = text;
+    return b;
+}
+
+static ContentBlock makeRead(const String& tcId, const String& summaryText) {
+    ContentBlock b;
+    b.type = ContentBlock::ToolResult;
+    b.toolName = "Read";
+    b.toolCallId = tcId;
+    b.summary = ToolResultSummary::success(summaryText);
+    b.resultStatus = ToolResultStatus::Success;
+    return b;
+}
+
+static ContentBlock makeGrep(const String& tcId, const String& summaryText) {
+    ContentBlock b;
+    b.type = ContentBlock::ToolResult;
+    b.toolName = "Grep";
+    b.toolCallId = tcId;
+    b.summary = ToolResultSummary::success(summaryText);
+    b.resultStatus = ToolResultStatus::Success;
+    return b;
+}
+
+static ContentBlock makeBash(const String& tcId, const String& summaryText) {
+    ContentBlock b;
+    b.type = ContentBlock::ToolResult;
+    b.toolName = "Bash";
+    b.toolCallId = tcId;
+    b.summary = ToolResultSummary::success(summaryText);
+    b.resultStatus = ToolResultStatus::Success;
+    return b;
+}
+
+static int countCollapsedGroups(const std::vector<ContentBlock>& blocks) {
+    int n = 0;
+    for (auto& b : blocks) {
+        if (b.type == ContentBlock::CollapsedGroup) n++;
+    }
+    return n;
+}
+
+static int countToolResults(const std::vector<ContentBlock>& blocks) {
+    int n = 0;
+    for (auto& b : blocks) {
+        if (b.type == ContentBlock::ToolResult) n++;
+        n += countToolResults(b.children);
+    }
+    return n;
+}
+
+static int countAnswerText(const std::vector<ContentBlock>& blocks) {
+    int n = 0;
+    for (auto& b : blocks) {
+        if (b.type == ContentBlock::AnswerText) n++;
+    }
+    return n;
+}
+
+// Count all leaf ToolResult blocks, including those nested inside
+// CollapsedGroup and ToolGroup children.
+static int countAllToolResults(const std::vector<ContentBlock>& blocks) {
+    int n = 0;
+    for (auto& b : blocks) {
+        if (b.type == ContentBlock::ToolResult) n++;
+        n += countAllToolResults(b.children);
+    }
+    return n;
+}
+
+// Helper: run full process() on blocks and return result
+static std::vector<ContentBlock> runPipeline(std::vector<ContentBlock> blocks) {
+    MessagePipeline pipeline;
+    return pipeline.process(std::move(blocks));
+}
+
+TEST_CASE("P6-P0a: Read tools separated by short narration collapse into one group",
+          "[MessagePipeline][p0a][narration]") {
+    // Simulates the core G2 scenario:
+    //   AnswerText "Let me read the key files."
+    //   Read toolu_001
+    //   AnswerText "Now let me check MessagePipeline."
+    //   Read toolu_002
+    //   AnswerText "And the headers."
+    //   Read toolu_003
+    //   Read toolu_004
+    //   Read toolu_005
+    //
+    // All 5 Read should collapse into one CollapsedGroup, not 3.
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the key files."));
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeAnswerText("Now let me check MessagePipeline."));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+    blocks.push_back(makeAnswerText("And the headers."));
+    blocks.push_back(makeRead("t3", "StreamBuffer.hpp (89 lines)"));
+    blocks.push_back(makeRead("t4", "MessagePipeline.hpp (76 lines)"));
+    blocks.push_back(makeRead("t5", "FtxuiRepl.cpp (~800 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    // Should have exactly 1 CollapsedGroup containing all 5 reads.
+    // The CollapsedGroup may nest reads through a P3 ToolGroup wrapper.
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 5);  // all 5 reads accounted for
+
+    // Verify summary mentions "Read 5 files"
+    for (auto& b : result) {
+        if (b.type == ContentBlock::CollapsedGroup) {
+            REQUIRE(b.summary.primaryText.find("Read 5 files") != String::npos);
+        }
+    }
+
+    // Narration text blocks should still be present (not deleted)
+    REQUIRE(countAnswerText(result) >= 3);
+}
+
+TEST_CASE("P6-P0a: Substantive AnswerText still breaks group",
+          "[MessagePipeline][p0a][breaker]") {
+    // Long, substantive answer text with summary language should still break.
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the file."));
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+    // This is a real answer, not narration
+    blocks.push_back(makeAnswerText(
+        "Based on my analysis, the StreamBuffer is responsible for text "
+        "accumulation and thinking tag stripping. The MessagePipeline "
+        "handles 7-pass post-processing at AnswerEnd. In summary, the "
+        "data flow follows: API SSE -> AgentLoop -> StreamBuffer -> "
+        "DisplayEvent -> FtxuiRepl -> MessagePipeline -> ContentBlock tree."));
+    blocks.push_back(makeRead("t3", "FtxuiRepl.cpp (~800 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    // Should have 2 groups: Readx2 before answer, Readx1 after
+    REQUIRE(countCollapsedGroups(result) >= 2);
+}
+
+TEST_CASE("P6-P0a: Markdown code block AnswerText still breaks group",
+          "[MessagePipeline][p0a][markdown]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the file."));
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeAnswerText(
+        "The pipeline structure is:\n```\nAPI -> StreamBuffer -> FtxuiRepl\n```"));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    // Code block should prevent grouping across it
+    REQUIRE(countCollapsedGroups(result) >= 2);
+}
+
+TEST_CASE("P6-P0a: Markdown bullet list AnswerText still breaks group",
+          "[MessagePipeline][p0a][markdown]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeAnswerText("Key components:\n- StreamBuffer\n- MessagePipeline\n- FtxuiRepl"));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    // Bullet list should break group
+    REQUIRE(countCollapsedGroups(result) >= 2);
+}
+
+TEST_CASE("P6-P0a: Short narration before Bash does not merge Read+Bash",
+          "[MessagePipeline][p0a][crosskind]") {
+    // Narration should not cause Read and Bash to merge across tool kinds.
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the files."));
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+    blocks.push_back(makeAnswerText("Now let me count the lines."));
+    blocks.push_back(makeBash("t3", "1914 lines total"));
+
+    auto result = runPipeline(blocks);
+
+    // Readx2 should be in one group, Bash in another (separate kinds).
+    // Different GroupKinds (ReadGroup vs BashGroup) MUST trigger a flush.
+    REQUIRE(countCollapsedGroups(result) >= 2);
+    REQUIRE(countAllToolResults(result) == 3);
+
+    // Verify Read and Bash are in separate groups
+    int readGroups = 0;
+    int bashGroups = 0;
+    for (auto& b : result) {
+        if (b.type == ContentBlock::CollapsedGroup) {
+            if (b.summary.primaryText.find("Read") != String::npos) readGroups++;
+            if (b.summary.primaryText.find("Ran") != String::npos) bashGroups++;
+        }
+    }
+    REQUIRE(readGroups == 1);
+    REQUIRE(bashGroups == 1);
+}
+
+TEST_CASE("P6-P0a: Existing consecutive Read collapse still works",
+          "[MessagePipeline][p0a][regression]") {
+    // Consecutive reads without narration should still collapse (existing behavior).
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+    blocks.push_back(makeRead("t3", "FtxuiRepl.cpp (~800 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 3);  // all 3 reads accounted for
+}
+
+TEST_CASE("P6-P0a: isToolNarration classification rules", "[MessagePipeline][p0a][unit]") {
+    MessagePipeline pipeline;
+
+    // Narration patterns
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("Let me read that file.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("Now let me check the headers.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("I'll search for references.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("First, let me find the files.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("Next, I'll inspect the code.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("And the headers.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("Looking at the pipeline now.")));
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("Checking FtxuiRepl.cpp.")));
+
+    // Single short sentence
+    REQUIRE(pipeline.isToolNarration(makeAnswerText("Now the headers.")));
+
+    // NOT narration: conclusion language
+    REQUIRE_FALSE(pipeline.isToolNarration(
+        makeAnswerText("In summary, the pipeline is well-structured.")));
+    REQUIRE_FALSE(pipeline.isToolNarration(
+        makeAnswerText("Here's a summary of the findings.")));
+
+    // NOT narration: code block
+    REQUIRE_FALSE(pipeline.isToolNarration(
+        makeAnswerText("The code:\n```\nAPI -> StreamBuffer\n```")));
+
+    // NOT narration: bullet list
+    REQUIRE_FALSE(pipeline.isToolNarration(
+        makeAnswerText("Components:\n- StreamBuffer\n- MessagePipeline")));
+
+    // NOT narration: long multi-sentence paragraph
+    REQUIRE_FALSE(pipeline.isToolNarration(
+        makeAnswerText(
+            "The StreamBuffer is the central component of the output pipeline. "
+            "It receives TypedStreamEvents from the AgentLoop and converts them "
+            "into DisplayEvents. The IncrementalBlockParser detects paragraph "
+            "boundaries and the thinking tag stripper handles 6 tag variants. "
+            "This class is essential for proper text formatting.")));
+}

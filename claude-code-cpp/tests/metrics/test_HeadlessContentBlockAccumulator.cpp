@@ -279,14 +279,15 @@ TEST_CASE("HeadlessContentBlockAccumulator FTXUI consistency", "[HeadlessContent
     auto j = nlohmann::json::parse(lines[0]);
 
     // M2: inter-tool words
-    // "Let me check the codebase structure." = 6 words → before CollapsedGroup → inter-tool
-    // "Now let me read the main file." = 7 words → between CollapsedGroups → inter-tool
-    // "The codebase has 3 directories." = 5 words → next is ThinkingBlock → NOT inter-tool
+    // P6-P0a: "Let me check the codebase structure." (6w) is tool narration that
+    // passes through without breaking the group. It is no longer classified as
+    // inter-tool since it appears before the first CollapsedGroup.
+    // "Now let me read the main file." = 7 words → between CollapsedGroups → inter-tool.
+    // "The codebase has 3 directories." = 5 words → next is ThinkingBlock → NOT inter-tool.
     auto& m2 = j["inter_tool_words"];
     REQUIRE(m2.contains("values"));
-    CHECK(m2["values"].size() == 2);
-    CHECK(m2["values"][0] == 6);
-    CHECK(m2["values"][1] == 7);
+    CHECK(m2["values"].size() == 1);
+    CHECK(m2["values"][0] == 7);
 
     // M4: total words = 6 + 7 + 5 = 18
     CHECK(j["total_user_words"] == 18);

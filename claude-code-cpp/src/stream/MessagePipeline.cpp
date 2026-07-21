@@ -237,6 +237,65 @@ GroupAccumulator::Category MessagePipeline::categorizeBlock(const ContentBlock& 
     return GroupAccumulator::Search;
 }
 
+bool MessagePipeline::isToolNarration(const ContentBlock& block) const {
+    if (block.type != ContentBlock::AnswerText) return false;
+    const String& text = block.text;
+    if (text.empty()) return false;
+
+    // Rule 1: Short text only — narration is brief.
+    if (text.size() > 200) return false;
+
+    // Rule 2: No markdown structures.
+    if (text.find("```") != String::npos) return false;
+    // Bullet lists
+    if (text.find("\n- ") != String::npos || text.find("\n* ") != String::npos) return false;
+    // Numbered lists
+    if (text.find("\n1. ") != String::npos) return false;
+
+    // Rule 3: No conclusion/summary signal words.
+    String lower = text;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    static const std::vector<String> conclusionWords = {
+        "summary", "conclusion", "therefore", "found that",
+        "in summary", "to summarize", "the result",
+        "overall", "in conclusion", "key findings",
+        "based on", "according to", "here is", "here's"
+    };
+    for (const auto& word : conclusionWords) {
+        if (lower.find(word) != String::npos) return false;
+    }
+
+    // Rule 4: At most 2 sentences (narration is not a paragraph).
+    int sentenceEnds = 0;
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] == '.' || text[i] == '!' || text[i] == '?') {
+            if (i + 1 >= text.size() || text[i + 1] == ' ' || text[i + 1] == '\n') {
+                sentenceEnds++;
+            }
+        }
+    }
+    if (sentenceEnds > 2) return false;
+
+    // Rule 5: Starts with a tool-narration pattern.
+    // These are brief phrases the model uses to introduce the next tool call.
+    static const std::vector<String> narrationStarts = {
+        "let me", "now let me", "i'll", "i will", "let's",
+        "first", "next", "then", "also", "finally",
+        "looking at", "checking", "reading", "searching",
+        "and the", "and now", "moving on", "additionally",
+        "now i'll", "now i will", "next i'll", "next i will",
+        "now,", "now ", "and,", "and ",
+    };
+
+    for (const auto& prefix : narrationStarts) {
+        if (lower.find(prefix) == 0) return true;
+    }
+
+    // Conservative: if no explicit narration pattern matched, treat as
+    // substantive content.  "If unsure, keep as group breaker."
+    return false;
+}
+
 bool MessagePipeline::isGroupBreaker(const ContentBlock& block) const {
     // Assistant text with non-empty content breaks the group
     if (block.type == ContentBlock::AnswerText && !block.text.empty()) {
@@ -248,7 +307,8 @@ bool MessagePipeline::isGroupBreaker(const ContentBlock& block) const {
                 break;
             }
         }
-        if (hasContent) return true;
+        // Tool narration between collapsible tools should not break groups.
+        if (hasContent && !isToolNarration(block)) return true;
     }
 
     // Non-collapsible tool results break the group
@@ -435,6 +495,15 @@ std::vector<ContentBlock> MessagePipeline::collapseReadSearchGroups(
                 accumulateStats(block, cat);
             }
 
+            i++;
+            continue;
+        }
+
+        // Tool narration between collapsible tools: pass through without
+        // breaking the current group. "Let me read X" / "Now I'll check Y"
+        // should not prevent Readx3 from collapsing into one group.
+        if (isToolNarration(block)) {
+            result.push_back(std::move(block));
             i++;
             continue;
         }
