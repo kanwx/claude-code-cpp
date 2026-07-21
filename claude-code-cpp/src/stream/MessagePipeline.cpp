@@ -528,17 +528,27 @@ String MessagePipeline::buildGroupSummary(const GroupAccumulator& acc, bool hasC
 
 String MessagePipeline::buildFinalizedSummary(const GroupAccumulator& acc) {
     std::vector<String> parts;
-    // Use past tense
 
+    // Exploration tools (Read + Search + List) combined with "and"
+    std::vector<String> explorationParts;
     if (acc.readCount() > 0) {
-        parts.push_back("Read " + std::to_string(acc.readCount()) + " files");
+        explorationParts.push_back("Read " + std::to_string(acc.readCount()) + " files");
     }
     if (acc.searchCount > 0) {
-        parts.push_back("Searched for " + std::to_string(acc.searchCount) + " patterns");
+        explorationParts.push_back("Searched " + std::to_string(acc.searchCount) + " patterns");
     }
     if (acc.listCount > 0) {
-        parts.push_back("Listed " + std::to_string(acc.listCount) + " directories");
+        explorationParts.push_back("Listed " + std::to_string(acc.listCount) + " directories");
     }
+    if (!explorationParts.empty()) {
+        std::ostringstream exp;
+        for (size_t i = 0; i < explorationParts.size(); i++) {
+            if (i > 0) exp << (i == explorationParts.size() - 1 ? " and " : ", ");
+            exp << explorationParts[i];
+        }
+        parts.push_back(exp.str());
+    }
+
     if (acc.bashCount > 0) {
         parts.push_back("Ran " + std::to_string(acc.bashCount) + " commands");
     }
@@ -562,11 +572,6 @@ String MessagePipeline::buildFinalizedSummary(const GroupAccumulator& acc) {
 
     if (parts.empty()) return "No operations";
 
-    // Capitalize first verb
-    if (!parts.empty() && !parts[0].empty()) {
-        // Already capitalized from template
-    }
-
     std::ostringstream oss;
     for (size_t i = 0; i < parts.size(); i++) {
         if (i > 0) oss << " · ";
@@ -577,17 +582,27 @@ String MessagePipeline::buildFinalizedSummary(const GroupAccumulator& acc) {
 
 String MessagePipeline::buildActiveSummary(const GroupAccumulator& acc) {
     std::vector<String> parts;
-    // Use present continuous tense
 
+    // Exploration tools (Read + Search + List) combined with "and"
+    std::vector<String> explorationParts;
     if (acc.readCount() > 0) {
-        parts.push_back("Reading " + std::to_string(acc.readCount()) + " files");
+        explorationParts.push_back("Reading " + std::to_string(acc.readCount()) + " files");
     }
     if (acc.searchCount > 0) {
-        parts.push_back("Searching for " + std::to_string(acc.searchCount) + " patterns");
+        explorationParts.push_back("Searching " + std::to_string(acc.searchCount) + " patterns");
     }
     if (acc.listCount > 0) {
-        parts.push_back("Listing " + std::to_string(acc.listCount) + " directories");
+        explorationParts.push_back("Listing " + std::to_string(acc.listCount) + " directories");
     }
+    if (!explorationParts.empty()) {
+        std::ostringstream exp;
+        for (size_t i = 0; i < explorationParts.size(); i++) {
+            if (i > 0) exp << (i == explorationParts.size() - 1 ? " and " : ", ");
+            exp << explorationParts[i];
+        }
+        parts.push_back(exp.str());
+    }
+
     if (acc.bashCount > 0) {
         parts.push_back("Running " + std::to_string(acc.bashCount) + " commands");
     }

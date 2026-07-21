@@ -167,11 +167,10 @@ struct MessageLookups {
 struct GroupAccumulator {
     /// High-level group kind — determines when to flush and start a new group.
     enum class GroupKind {
-        None,         // Not yet assigned
-        SearchGroup,  // Grep, Glob (pattern search)
-        ReadGroup,    // Read
-        BashGroup,    // Bash (non-search)
-        WebGroup,     // WebSearch, WebFetch
+        None,             // Not yet assigned
+        ExplorationGroup, // Read, Grep, Glob, LS (read-only exploration)
+        BashGroup,        // Bash (non-search, state-modifying)
+        WebGroup,         // WebSearch, WebFetch
     };
 
     enum Category {
@@ -190,9 +189,9 @@ struct GroupAccumulator {
 
     static GroupKind toGroupKind(Category cat) {
         switch (cat) {
-            case Search:       return GroupKind::SearchGroup;
-            case FileRead:     return GroupKind::ReadGroup;
-            case FileList:     return GroupKind::ReadGroup;  // LS groups with Read
+            case Search:
+            case FileRead:
+            case FileList:     return GroupKind::ExplorationGroup;
             case Bash:         return GroupKind::BashGroup;
             case WebSearch:
             case WebFetch:     return GroupKind::WebGroup;

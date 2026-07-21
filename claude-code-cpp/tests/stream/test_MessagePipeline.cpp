@@ -242,7 +242,8 @@ TEST_CASE("groupToolResultPairs does not pair mismatched toolCallIds", "[Message
     REQUIRE(processed[1].type == ContentBlock::ToolResult);
 }
 
-TEST_CASE("collapseReadSearchGroups separates Read and Grep into different groups", "[MessagePipeline][groupkind]") {
+TEST_CASE("collapseReadSearchGroups merges Read and Grep into ExplorationGroup",
+          "[MessagePipeline][groupkind][p0b]") {
     std::vector<ContentBlock> blocks;
     uint64_t nextId = 1;
 
@@ -257,7 +258,7 @@ TEST_CASE("collapseReadSearchGroups separates Read and Grep into different group
         return b;
     };
 
-    // Interleave Read and Grep — should produce separate groups
+    // Interleave Read and Grep — should merge into one ExplorationGroup
     blocks.push_back(makeBlock("Read",  "t1", "42 lines"));
     blocks.push_back(makeBlock("Read",  "t2", "15 lines"));
     blocks.push_back(makeBlock("Grep",  "t3", "Found 5 matches"));
@@ -265,18 +266,25 @@ TEST_CASE("collapseReadSearchGroups separates Read and Grep into different group
     blocks.push_back(makeBlock("Bash",  "t5", "Done"));
 
     MessagePipeline pipeline;
-    // Call collapseReadSearchGroups directly to test GroupKind subdivision
-    // in isolation (process() would run groupConsecutiveToolUses first, which
-    // wraps consecutive same-name results into ToolGroup blocks that
-    // collapseReadSearchGroups then ignores).
     auto result = pipeline.collapseReadSearchGroups(blocks);
 
-    // Count CollapsedGroup blocks — expect 3 (Read x2, Grep x2, Bash x1)
+    // Should have 2 groups: ExplorationGroup (Read×2 + Grep×2) + BashGroup (Bash×1)
     int collapsedCount = 0;
     for (auto& b : result) {
         if (b.type == ContentBlock::CollapsedGroup) collapsedCount++;
     }
-    REQUIRE(collapsedCount == 3);
+    REQUIRE(collapsedCount == 2);
+
+    // Verify the ExplorationGroup summary combines Read and Search
+    bool foundExploration = false;
+    for (auto& b : result) {
+        if (b.type == ContentBlock::CollapsedGroup &&
+            b.summary.primaryText.find("Read") != String::npos &&
+            b.summary.primaryText.find("Searched") != String::npos) {
+            foundExploration = true;
+        }
+    }
+    REQUIRE(foundExploration);
 }
 
 // ========== P6-P0a: isToolNarration classifier tests ==========
@@ -533,4 +541,195 @@ TEST_CASE("P6-P0a: isToolNarration classification rules", "[MessagePipeline][p0a
             "into DisplayEvents. The IncrementalBlockParser detects paragraph "
             "boundaries and the thinking tag stripper handles 6 tag variants. "
             "This class is essential for proper text formatting.")));
+}
+
+// ========== P6-P0b: Multi-kind exploration grouping ==========
+
+static ContentBlock makeGlob(const String& tcId, const String& summaryText) {
+    ContentBlock b;
+    b.type = ContentBlock::ToolResult;
+    b.toolName = "Glob";
+    b.toolCallId = tcId;
+    b.summary = ToolResultSummary::success(summaryText);
+    b.resultStatus = ToolResultStatus::Success;
+    return b;
+}
+
+static ContentBlock makeLS(const String& tcId, const String& summaryText) {
+    ContentBlock b;
+    b.type = ContentBlock::ToolResult;
+    b.toolName = "LS";
+    b.toolCallId = tcId;
+    b.summary = ToolResultSummary::success(summaryText);
+    b.resultStatus = ToolResultStatus::Success;
+    return b;
+}
+
+static ContentBlock makeWebSearch(const String& tcId, const String& summaryText) {
+    ContentBlock b;
+    b.type = ContentBlock::ToolResult;
+    b.toolName = "WebSearch";
+    b.toolCallId = tcId;
+    b.summary = ToolResultSummary::success(summaryText);
+    b.resultStatus = ToolResultStatus::Success;
+    return b;
+}
+
+TEST_CASE("P6-P0b: Glob Read Glob Read collapses into one ExplorationGroup",
+          "[MessagePipeline][p0b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeRead("t2", "42 lines"));
+    blocks.push_back(makeGlob("t3", "include/*.hpp"));
+    blocks.push_back(makeRead("t4", "15 lines"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 4);
+}
+
+TEST_CASE("P6-P0b: Grep Glob Read collapses into one ExplorationGroup",
+          "[MessagePipeline][p0b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGrep("t1", "Found 3 matches"));
+    blocks.push_back(makeGlob("t2", "src/**/*.cpp"));
+    blocks.push_back(makeRead("t3", "128 lines"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 3);
+}
+
+TEST_CASE("P6-P0b: Read LS Grep collapses into one ExplorationGroup",
+          "[MessagePipeline][p0b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "42 lines"));
+    blocks.push_back(makeLS("t2", "12 items"));
+    blocks.push_back(makeGrep("t3", "Found 5 matches"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 3);
+}
+
+TEST_CASE("P6-P0b: Glob Bash Read produces ExplorationGroup + BashGroup",
+          "[MessagePipeline][p0b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeBash("t2", "wc -l *.cpp"));
+    blocks.push_back(makeRead("t3", "42 lines"));
+
+    auto result = runPipeline(blocks);
+
+    // Glob and Read cannot merge across Bash — two groups
+    REQUIRE(countCollapsedGroups(result) >= 2);
+    REQUIRE(countAllToolResults(result) == 3);
+
+    // Verify Bash is in its own group
+    int bashGroups = 0;
+    for (auto& b : result) {
+        if (b.type == ContentBlock::CollapsedGroup &&
+            b.summary.primaryText.find("Ran") != String::npos) {
+            bashGroups++;
+        }
+    }
+    REQUIRE(bashGroups == 1);
+}
+
+TEST_CASE("P6-P0b: substantive AnswerText breaks exploration group",
+          "[MessagePipeline][p0b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeAnswerText(
+        "The codebase has 3 main directories. Each one contains a different "
+        "layer of the pipeline. The src/ directory is the largest."));
+    blocks.push_back(makeRead("t2", "42 lines"));
+
+    auto result = runPipeline(blocks);
+
+    // Substantive AnswerText must break the group
+    REQUIRE(countCollapsedGroups(result) >= 2);
+    REQUIRE(countAllToolResults(result) == 2);
+}
+
+TEST_CASE("P6-P0b: Glob Read WebSearch produces ExplorationGroup + WebGroup",
+          "[MessagePipeline][p0b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeRead("t2", "42 lines"));
+    blocks.push_back(makeWebSearch("t3", "Found docs"));
+
+    auto result = runPipeline(blocks);
+
+    // WebSearch is WebGroup, separate from ExplorationGroup
+    REQUIRE(countCollapsedGroups(result) >= 2);
+    REQUIRE(countAllToolResults(result) == 3);
+}
+
+TEST_CASE("P6-P0b: combined summary with Read and Search",
+          "[MessagePipeline][p0b][summary]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "42 lines"));
+    blocks.push_back(makeRead("t2", "15 lines"));
+    blocks.push_back(makeGrep("t3", "Found 5 matches"));
+    blocks.push_back(makeGrep("t4", "Found 2 matches"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+
+    // Summary should combine Read + Search
+    auto& cg = result[0];
+    REQUIRE(cg.type == ContentBlock::CollapsedGroup);
+    CHECK(cg.summary.primaryText.find("Read 2 files") != String::npos);
+    CHECK(cg.summary.primaryText.find("Searched 2 patterns") != String::npos);
+    CHECK(cg.summary.primaryText.find(" and ") != String::npos);
+}
+
+TEST_CASE("P6-P0b: read-only summary backward compatibility",
+          "[MessagePipeline][p0b][summary]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "42 lines"));
+    blocks.push_back(makeRead("t2", "15 lines"));
+    blocks.push_back(makeRead("t3", "8 lines"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+    CHECK(result[0].summary.primaryText == "Read 3 files");
+}
+
+TEST_CASE("P6-P0b: search-only summary backward compatibility",
+          "[MessagePipeline][p0b][summary]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeGrep("t2", "Found 3 matches"));
+    blocks.push_back(makeGlob("t3", "include/*.hpp"));
+
+    auto result = runPipeline(blocks);
+
+    REQUIRE(countCollapsedGroups(result) == 1);
+    CHECK(result[0].summary.primaryText.find("Searched 3 patterns") != String::npos);
+    // No "Read" text
+    CHECK(result[0].summary.primaryText.find("Read") == String::npos);
+}
+
+TEST_CASE("P6-P0b: narration does not break exploration group (P6-P0a regression)",
+          "[MessagePipeline][p0b][p0a][regression]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeGlob("t2", "include/*.hpp"));
+    blocks.push_back(makeAnswerText("Let me read these files now."));
+    blocks.push_back(makeRead("t3", "42 lines"));
+    blocks.push_back(makeAnswerText("And now let me search for more."));
+    blocks.push_back(makeGrep("t4", "Found 3 matches"));
+
+    auto result = runPipeline(blocks);
+
+    // All exploration tools should be in one group with narration pass-through
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 4);
 }
