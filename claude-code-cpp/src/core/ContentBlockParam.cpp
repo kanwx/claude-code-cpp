@@ -967,13 +967,27 @@ bool validateSerializedApiJson(const Json& request) {
         }
     }
 
-    // Check 6: no contentPreview or UI-only fields in JSON
-    String body = request.dump();
-    if (body.find("contentPreview") != String::npos) {
+    // Check 6: no contentPreview or UI-only fields as JSON object keys.
+    // Must use structural key inspection, not string search — legitimate
+    // tool_result content (e.g. source code) may contain these words.
+    auto containsKey = [](const Json& value, const String& key, auto& ref) -> bool {
+        if (value.is_object()) {
+            if (value.contains(key)) return true;
+            for (const auto& [k, v] : value.items()) {
+                if (ref(v, key, ref)) return true;
+            }
+        } else if (value.is_array()) {
+            for (const auto& item : value) {
+                if (ref(item, key, ref)) return true;
+            }
+        }
+        return false;
+    };
+    if (containsKey(request, "contentPreview", containsKey)) {
         fprintf(stderr, "[ERROR] API JSON: 'contentPreview' found in payload — UI field leak!\n");
         ok = false;
     }
-    if (body.find("stableId") != String::npos) {
+    if (containsKey(request, "stableId", containsKey)) {
         fprintf(stderr, "[ERROR] API JSON: 'stableId' found in payload — UI field leak!\n");
         ok = false;
     }

@@ -1184,7 +1184,7 @@ TEST_CASE("validateSerializedApiJson: rejects contentPreview leak", "[validator]
     REQUIRE_FALSE(validateSerializedApiJson(req));
 }
 
-TEST_CASE("validateSerializedApiJson: rejects stableId leak", "[validator][apijson]") {
+TEST_CASE("validateSerializedApiJson: rejects stableId as object key", "[validator][apijson]") {
     auto req = makeRequest(Json::array({
         makeMsg("user", Json::array({
             Json::object({{"type", "text"}, {"text", "hello"}, {"stableId", 42}})  // UI field leak!
@@ -1192,6 +1192,103 @@ TEST_CASE("validateSerializedApiJson: rejects stableId leak", "[validator][apijs
         makeMsg("assistant", Json::array({textBlock("reply")})),
     }));
     REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: allows stableId in tool_result content",
+          "[validator][apijson]") {
+    // Legitimate: tool_result content that happens to contain "stableId" as
+    // a C++ field name in source code (e.g. reading ContentBlock.hpp).
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("read the file")})),
+        makeMsg("assistant", Json::array({
+            textBlock("let me read that"),
+            toolUseBlock("call_1", "Read", Json::object({{"file_path", "ContentBlock.hpp"}})),
+        })),
+        makeMsg("user", Json::array({
+            toolResultBlock("call_1", "struct ContentBlock {\n    uint64_t stableId = 0;\n};"),
+        })),
+        makeMsg("assistant", Json::array({textBlock("the file contains stableId field")})),
+    }));
+    REQUIRE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: allows stableId in text content",
+          "[validator][apijson]") {
+    // Legitimate: user message text that happens to contain "stableId".
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({
+            textBlock("what does stableId mean in ContentBlock?")
+        })),
+        makeMsg("assistant", Json::array({
+            textBlock("stableId is a monotonic ID for incremental diff matching"),
+        })),
+    }));
+    REQUIRE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: allows contentPreview in tool_result content",
+          "[validator][apijson]") {
+    // Legitimate: tool_result content that mentions "contentPreview" as a term.
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("check for contentPreview leaks")})),
+        makeMsg("assistant", Json::array({
+            toolUseBlock("call_1", "Grep", Json::object({{"pattern", "contentPreview"}})),
+        })),
+        makeMsg("user", Json::array({
+            toolResultBlock("call_1", "found contentPreview in 3 files"),
+        })),
+        makeMsg("assistant", Json::array({textBlock("there are 3 occurrences")})),
+    }));
+    REQUIRE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects stableId in nested block key",
+          "[validator][apijson]") {
+    // stableId must be rejected even when deeply nested inside a content block.
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({
+            Json::object({{"type", "text"}, {"text", "hello"},
+                          {"metadata", Json::object({{"stableId", 123}})}}),
+        })),
+        makeMsg("assistant", Json::array({textBlock("reply")})),
+    }));
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: rejects contentPreview in nested block key",
+          "[validator][apijson]") {
+    // contentPreview must be rejected even when nested.
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({
+            toolResultBlock("call_1", "file content"),
+        })),
+        makeMsg("assistant", Json::array({textBlock("done")})),
+    }));
+    // Inject contentPreview as an extra key on the messages array wrapper
+    // (simulates a serialization bug leaking UI state into the request).
+    req["contentPreview"] = "leaked preview";
+    REQUIRE_FALSE(validateSerializedApiJson(req));
+}
+
+TEST_CASE("validateSerializedApiJson: allows source code snippet with stableId",
+          "[validator][apijson]") {
+    // Baseline Task B reads ContentBlock.hpp, FtxuiRepl.cpp, etc.
+    // These all contain "stableId" as C++ source code — must pass.
+    auto req = makeRequest(Json::array({
+        makeMsg("user", Json::array({textBlock("find stableId usage")})),
+        makeMsg("assistant", Json::array({
+            textBlock("searching for stableId"),
+            toolUseBlock("call_1", "Grep", Json::object({{"pattern", "stableId"}})),
+        })),
+        makeMsg("user", Json::array({
+            toolResultBlock("call_1",
+                "src/ui/FtxuiRepl.cpp:229: cb.stableId = nextStableId_++;\n"
+                "include/claude/stream/ContentBlock.hpp:65: uint64_t stableId = 0;\n"
+                "src/stream/MessagePipeline.cpp:42: if (block.stableId >= nextId) {\n"),
+        })),
+        makeMsg("assistant", Json::array({textBlock("found 3 uses of stableId")})),
+    }));
+    REQUIRE(validateSerializedApiJson(req));
 }
 
 TEST_CASE("validateSerializedApiJson: rejects assistant tool_use without matching tool_result",
