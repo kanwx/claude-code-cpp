@@ -511,6 +511,60 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
                 contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
+
+                // P6-P1b: Phase-aware AnswerText prefix detection.
+                // After pipeline, re-assign isFirst on AnswerText blocks:
+                //   - First non-dimmed AnswerText → isFirst=true (phase header)
+                //   - Non-dimmed AnswerText preceded by tool-like block → isFirst=true
+                //   - All other non-dimmed AnswerText → isFirst=false (continuation)
+                //   - Dimmed narration → isFirst=false always
+                {
+                    auto isToolLikeBlock = [](const ContentBlock& b) {
+                        return b.type == ContentBlock::ToolResult ||
+                               b.type == ContentBlock::ToolGroup ||
+                               b.type == ContentBlock::CollapsedGroup ||
+                               b.type == ContentBlock::AgentProgress;
+                    };
+
+                    // Find previous significant block, skipping dimmed/empty AnswerText
+                    auto findPrevSignificant = [&](size_t i) -> const ContentBlock* {
+                        for (size_t j = i; j > 0; --j) {
+                            const auto& prev = contentBlocks_[j - 1];
+                            if (prev.type == ContentBlock::AnswerText) {
+                                if (prev.dimmed || prev.text.find_first_not_of(" \t\n\r") == String::npos) {
+                                    continue;
+                                }
+                            }
+                            return &prev;
+                        }
+                        return nullptr;
+                    };
+
+                    bool seenNonDimmedAnswer = false;
+
+                    for (size_t i = 0; i < contentBlocks_.size(); ++i) {
+                        auto& block = contentBlocks_[i];
+                        if (block.type != ContentBlock::AnswerText) continue;
+
+                        if (block.dimmed) {
+                            block.isFirst = false;
+                            continue;
+                        }
+
+                        const auto* prev = findPrevSignificant(i);
+
+                        if (!seenNonDimmedAnswer) {
+                            block.isFirst = true;
+                        } else if (prev && isToolLikeBlock(*prev)) {
+                            block.isFirst = true;
+                        } else {
+                            block.isFirst = false;
+                        }
+
+                        seenNonDimmedAnswer = true;
+                    }
+                }
+
                 lastStableIndex_ = contentBlocks_.size();
                 {
                     const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&

@@ -168,18 +168,20 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
         // ===== Assistant Text =====
         case ContentBlock::AnswerText: {
             if (block.dimmed) {
-                return text(block.text) | dim | color(MacCream);
+                return hbox({
+                    text("   "),
+                    text(block.text) | dim | color(MacCream),
+                });
             }
             if (block.text.find_first_not_of(" \t\n\r") == String::npos) {
                 return text("");
             }
 
-            // Prefix: " ⏺ " for every committed AnswerText block.
-            // One-space gutter aligns with UserMessage box left edge.
-            // All assistant narration (initial, intermediate, final) uses ⏺;
-            // the "only first" distinction was causing bare continuation lines
-            // to appear at column 0 without a marker or gutter.
-            String prefix = " ⏺ ";
+            // P6-P1b: Three-state prefix preserving gutter alignment (3 chars).
+            //   ●  = phase header (first answer after tool output)
+            //   ⏺  = continuation (same phase)
+            //   (dimmed narration returns early with "   " gutter, no marker)
+            String prefix = block.isFirst ? " ● " : " ⏺ ";
 
             // Single-paragraph plain text: use hbox so the prefix gutter is
             // preserved.  Embedding the prefix inside paragraph() causes FTXUI
