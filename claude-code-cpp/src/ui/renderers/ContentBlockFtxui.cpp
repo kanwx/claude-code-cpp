@@ -258,7 +258,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
         // ===== Tool Progress =====
         case ContentBlock::ToolProgress: {
             return hbox({
-                text("  ⎿ "),
+                text(" ⎿ "),
                 renderToolBadge(block.toolName),
                 text(" "),
                 text(block.activity) | dim,
@@ -273,6 +273,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 String errDisplay = dm.errorText.empty() ? "Error" : dm.errorText;
                 return hbox({
                     focusMarker(focused),
+                    text("⎿ "),
                     renderToolBadge(dm.toolName),
                     text(" "),
                     text(errDisplay) | color(MacRose),
@@ -283,6 +284,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 String label = dm.isRejected ? "Rejected" : "Interrupted";
                 return hbox({
                     focusMarker(focused),
+                    text("⎿ "),
                     renderToolBadge(dm.toolName, /*dimmed=*/true),
                     text(" "),
                     text(label) | dim,
@@ -312,6 +314,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
             if (!block.expanded && !opts.isInExpandedGroup) {
                 return hbox({
                     focusMarker(focused),
+                    text("⎿ "),
                     renderToolBadge(dm.toolName),
                     text(" "),
                     summaryEl,
@@ -322,6 +325,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
             Elements expandedEls;
             expandedEls.push_back(hbox({
                 focusMarker(focused),
+                text("⎿ "),
                 renderToolBadge(dm.toolName),
                 text(" "),
                 summaryEl,
@@ -354,6 +358,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
             if (!block.expanded && !opts.isInExpandedGroup) {
                 return hbox({
                     focusMarker(focused),
+                    text("⎿ ") | dim,
                     text(block.summary.primaryText) | (focused ? bold : dim),
                     ctrlOHint(focused, block.expanded),
                 });
@@ -361,6 +366,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
             Elements childrenEls;
             childrenEls.push_back(hbox({
                 focusMarker(focused),
+                text("⎿ ") | dim,
                 text(block.summary.primaryText) | dim,
                 ctrlOHint(focused, block.expanded),
             }));
@@ -376,7 +382,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
         // ===== Agent Progress =====
         case ContentBlock::AgentProgress:
             return hbox({
-                text("  ⎿ "),
+                text(" ⎿ "),
                 text("● ") | color(MacLilac),
                 text(block.toolName + ": " + block.text) | dim | color(MacLilac),
             });
@@ -400,7 +406,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
                 }
                 return hbox({
                     focusMarker(focused),
-                    text("⏺ ") | color(dotColor),
+                    text("⎿ ") | color(dotColor),
                     text(block.summary.primaryText) | (focused ? bold : dim),
                     ctrlOHint(focused, block.expanded),
                 });
@@ -409,7 +415,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOp
             Elements cel;
             cel.push_back(hbox({
                 focusMarker(focused),
-                text("⏺ ") | color(MacMint),
+                text("⎿ ") | color(MacMint),
                 text(block.summary.primaryText) | dim,
                 ctrlOHint(focused, block.expanded),
             }));
