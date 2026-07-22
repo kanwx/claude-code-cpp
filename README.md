@@ -20,8 +20,8 @@ C++23 + FTXUI 重写的 Claude Code CLI。当前进度：**Phase 6 — 输出体
 
 - **分支**: `ui-polish-ftxui`
 - **构建**: `cmake --build build -j$(sysctl -n hw.logicalcpu)`
-- **测试**: 723+ ctest PASS
-- **Phase 6 进度**: P6-P0a/P0b 已提交，P6-P0c RCA 完成
+- **测试**: 741 ctest PASS (0 failures)
+- **Phase 6 进度**: P6-P0a/P0b/P0c/P1a/P1b 已提交，P1c/P1d RCA 就绪
 
 ### 核心模块
 
@@ -81,5 +81,3 @@ cd ontology-platform/build && make
 
 - [Claude Code C++ Phase 6 文档](claude-code-cpp/docs/superpowers/)
 - [Claude Code TS 源码架构](src/)
-- [香港民熙《合法等于正当吗》](2026-03-09-is-legal-the-same-as-legitimate-ai-reimplementation-and-the-erosion-of-copyleft.md)
-- [C++ 构建指南](claude-code-cpp/BUILD.md)（如存在）
