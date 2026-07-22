@@ -733,3 +733,172 @@ TEST_CASE("P6-P0b: narration does not break exploration group (P6-P0a regression
     REQUIRE(countCollapsedGroups(result) == 1);
     REQUIRE(countAllToolResults(result) == 4);
 }
+
+// ========== P6-P1a: narration dimmed flag ==========
+
+// Helper: find all AnswerText blocks (top-level only, not in children)
+static std::vector<const ContentBlock*> findAnswerTexts(const std::vector<ContentBlock>& blocks) {
+    std::vector<const ContentBlock*> result;
+    for (auto& b : blocks) {
+        if (b.type == ContentBlock::AnswerText) result.push_back(&b);
+    }
+    return result;
+}
+
+static ContentBlock makeLongAnswer(const String& text) {
+    ContentBlock b;
+    b.type = ContentBlock::AnswerText;
+    b.text = text;
+    return b;
+}
+
+static ContentBlock makeSubstantiveAnswer() {
+    return makeAnswerText(
+        "The key finding is that the pipeline correctly handles interleaved text "
+        "and tool calls. The collapse logic groups tools by category, and the "
+        "narration classifier prevents tool-intro text from breaking groups.");
+}
+
+TEST_CASE("P6-P1a: tool narration AnswerText gets dimmed=true",
+          "[MessagePipeline][p1a][narration]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the key files."));
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+
+    auto result = runPipeline(blocks);
+    auto answers = findAnswerTexts(result);
+
+    // "Let me read the key files." should be dimmed (isToolNarration)
+    REQUIRE(answers.size() >= 1);
+    bool foundNarration = false;
+    for (auto* a : answers) {
+        if (a->text.find("Let me read") != String::npos) {
+            CHECK(a->dimmed == true);
+            foundNarration = true;
+        }
+    }
+    CHECK(foundNarration);
+}
+
+TEST_CASE("P6-P1a: tool narration still does not break exploration grouping",
+          "[MessagePipeline][p1a][p0a][regression]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read these files."));
+    blocks.push_back(makeRead("t1", "file1.cpp (317 lines)"));
+    blocks.push_back(makeAnswerText("Now let me search."));
+    blocks.push_back(makeGrep("t2", "Found 3 matches"));
+    blocks.push_back(makeAnswerText("And the headers too."));
+    blocks.push_back(makeRead("t3", "file3.hpp (89 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    // All 3 explorations in one group — narration does not break grouping
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 3);
+
+    // All 3 narrations should be dimmed
+    auto answers = findAnswerTexts(result);
+    REQUIRE(answers.size() == 3);
+    for (auto* a : answers) {
+        CHECK(a->dimmed == true);
+    }
+}
+
+TEST_CASE("P6-P1a: substantive AnswerText remains dimmed=false",
+          "[MessagePipeline][p1a]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeSubstantiveAnswer());
+    blocks.push_back(makeRead("t1", "data.txt (100 lines)"));
+
+    auto result = runPipeline(blocks);
+    auto answers = findAnswerTexts(result);
+
+    REQUIRE(answers.size() >= 1);
+    for (auto* a : answers) {
+        CHECK(a->dimmed == false);
+    }
+}
+
+TEST_CASE("P6-P1a: code block AnswerText remains dimmed=false",
+          "[MessagePipeline][p1a]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me check:\n```\ncode here\n```"));
+    blocks.push_back(makeRead("t1", "file.cpp (317 lines)"));
+
+    auto result = runPipeline(blocks);
+    auto answers = findAnswerTexts(result);
+
+    REQUIRE(answers.size() >= 1);
+    for (auto* a : answers) {
+        CHECK(a->dimmed == false);
+    }
+}
+
+TEST_CASE("P6-P1a: bullet list AnswerText remains dimmed=false",
+          "[MessagePipeline][p1a]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me list:\n- item 1\n- item 2"));
+    blocks.push_back(makeRead("t1", "file.cpp (317 lines)"));
+
+    auto result = runPipeline(blocks);
+    auto answers = findAnswerTexts(result);
+
+    REQUIRE(answers.size() >= 1);
+    for (auto* a : answers) {
+        CHECK(a->dimmed == false);
+    }
+}
+
+TEST_CASE("P6-P1a: P6-P0a Read grouping across narration regression",
+          "[MessagePipeline][p1a][p0a][regression]") {
+    // Same test as P6-P0a but verifies dimmed flag is the only new behavior
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the key files."));
+    blocks.push_back(makeRead("t1", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeAnswerText("Now let me check MessagePipeline."));
+    blocks.push_back(makeRead("t2", "MessagePipeline.cpp (632 lines)"));
+    blocks.push_back(makeAnswerText("And the headers."));
+    blocks.push_back(makeRead("t3", "StreamBuffer.hpp (89 lines)"));
+    blocks.push_back(makeRead("t4", "MessagePipeline.hpp (76 lines)"));
+    blocks.push_back(makeRead("t5", "FtxuiRepl.cpp (~800 lines)"));
+
+    auto result = runPipeline(blocks);
+
+    // P0a: all 5 Reads should collapse into one group
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 5);
+
+    // P1a: narrations dimmed but grouping unchanged
+    auto answers = findAnswerTexts(result);
+    REQUIRE(answers.size() == 3);
+    for (auto* a : answers) {
+        CHECK(a->dimmed == true);
+    }
+}
+
+TEST_CASE("P6-P1a: P6-P0b ExplorationGroup grouping regression",
+          "[MessagePipeline][p1a][p0b][regression]") {
+    // Same test as P6-P0b but verifies dimmed flag is the only new behavior
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me find files."));
+    blocks.push_back(makeGlob("t1", "src/*.cpp"));
+    blocks.push_back(makeGlob("t2", "include/*.hpp"));
+    blocks.push_back(makeAnswerText("Let me read these files now."));
+    blocks.push_back(makeRead("t3", "42 lines"));
+    blocks.push_back(makeAnswerText("And now let me search for more."));
+    blocks.push_back(makeGrep("t4", "Found 3 matches"));
+
+    auto result = runPipeline(blocks);
+
+    // P0b: all exploration tools in one group with narration pass-through
+    REQUIRE(countCollapsedGroups(result) == 1);
+    REQUIRE(countAllToolResults(result) == 4);
+
+    // P1a: all 3 narrations dimmed
+    auto answers = findAnswerTexts(result);
+    REQUIRE(answers.size() == 3);
+    for (auto* a : answers) {
+        CHECK(a->dimmed == true);
+    }
+}

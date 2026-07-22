@@ -502,7 +502,9 @@ std::vector<ContentBlock> MessagePipeline::collapseReadSearchGroups(
         // Tool narration between collapsible tools: pass through without
         // breaking the current group. "Let me read X" / "Now I'll check Y"
         // should not prevent Readx3 from collapsing into one group.
+        // Mark dimmed so the renderer can reduce visual weight.
         if (isToolNarration(block)) {
+            block.dimmed = true;
             result.push_back(std::move(block));
             i++;
             continue;
