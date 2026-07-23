@@ -182,7 +182,22 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
                 size_t idx = turnVerbIndex_.fetch_add(1, std::memory_order_relaxed);
                 String verb = kTurnVerbs[idx % kTurnVerbs.size()];
 
+                // P6-P1d: count tool uses in the current turn only [currentTurnStartIndex_, end)
+                int toolCount = 0;
+                for (size_t i = currentTurnStartIndex_; i < contentBlocks_.size(); ++i) {
+                    const auto& block = contentBlocks_[i];
+                    if (block.type == ContentBlock::ToolResult && !block.toolCallId.empty()) {
+                        toolCount++;
+                    } else if (block.type == ContentBlock::ToolGroup ||
+                               block.type == ContentBlock::CollapsedGroup) {
+                        toolCount += static_cast<int>(block.toolUseIds.size());
+                    }
+                }
                 td.text = verb + " for " + formatElapsed(seconds);
+                if (toolCount > 0) {
+                    td.text += " · " + std::to_string(toolCount) +
+                               (toolCount == 1 ? " tool" : " tools");
+                }
                 contentBlocks_.push_back(std::move(td));
             }
             turnDurationEmitted_ = true;

@@ -366,3 +366,284 @@ TEST_CASE("P1: Second AnswerStart does not reset turn start time",
     // 4. TurnDuration is the last block in the vector
     CHECK(tdIdx == static_cast<int>(blocks.size()) - 1);
 }
+
+// ============================================================================
+// P1d Tests: TurnDuration tool count
+// ============================================================================
+
+/// Mirror of the counting logic in FtxuiStreaming::finishStream().
+/// Counts tool uses in [turnStartIndex, blocks.size()).
+static int countToolsFromIndex(const std::vector<ContentBlock>& blocks,
+                               size_t turnStartIndex) {
+    int count = 0;
+    for (size_t i = turnStartIndex; i < blocks.size(); ++i) {
+        const auto& block = blocks[i];
+        if (block.type == ContentBlock::ToolResult && !block.toolCallId.empty()) {
+            count++;
+        } else if (block.type == ContentBlock::ToolGroup ||
+                   block.type == ContentBlock::CollapsedGroup) {
+            count += static_cast<int>(block.toolUseIds.size());
+        }
+    }
+    return count;
+}
+
+/// Build a TurnDuration text matching the format in finishStream().
+static String makeTurnDurationText(const String& verb, int seconds, int toolCount) {
+    auto fmtElapsed = [](int s) -> String {
+        if (s >= 60) return std::to_string(s / 60) + "m " + std::to_string(s % 60) + "s";
+        return std::to_string(s) + "s";
+    };
+    String text = verb + " for " + fmtElapsed(seconds);
+    if (toolCount > 0) {
+        text += " · " + std::to_string(toolCount) +
+                (toolCount == 1 ? " tool" : " tools");
+    }
+    return text;
+}
+
+// ============================================================================
+// Test P1d.1: Zero tools → no suffix
+// ============================================================================
+TEST_CASE("P1d: TurnDuration format — zero tools (no suffix)",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock answer;
+    answer.type = ContentBlock::AnswerText;
+    answer.text = "Hello!";
+    blocks.push_back(answer);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 0);
+
+    String text = makeTurnDurationText("Worked", 5, count);
+    CHECK(text == "Worked for 5s");
+}
+
+// ============================================================================
+// Test P1d.2: One tool → singular "· 1 tool"
+// ============================================================================
+TEST_CASE("P1d: TurnDuration format — 1 tool (singular)",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock result;
+    result.type = ContentBlock::ToolResult;
+    result.toolName = "Bash";
+    result.toolCallId = "toolu_001";
+    result.summary = ToolResultSummary::success("Completed");
+    blocks.push_back(result);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 1);
+
+    String text = makeTurnDurationText("Baked", 12, count);
+    CHECK(text == "Baked for 12s · 1 tool");
+}
+
+// ============================================================================
+// Test P1d.3: Three tools → plural "· 3 tools"
+// ============================================================================
+TEST_CASE("P1d: TurnDuration format — 3 tools (plural)",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    for (int i = 0; i < 3; i++) {
+        ContentBlock result;
+        result.type = ContentBlock::ToolResult;
+        result.toolName = "Bash";
+        result.toolCallId = "toolu_00" + std::to_string(i);
+        result.summary = ToolResultSummary::success("OK");
+        blocks.push_back(result);
+    }
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 3);
+
+    String text = makeTurnDurationText("Crunched", 23, count);
+    CHECK(text == "Crunched for 23s · 3 tools");
+}
+
+// ============================================================================
+// Test P1d.4: Previous turn tools NOT counted in current turn
+// ============================================================================
+TEST_CASE("P1d: Previous turn tools not counted in current turn",
+          "[ContentBlock][p1d]") {
+    // Turn 1: user message + 2 tools + TurnDuration
+    // Turn 2: user message + 1 tool + TurnDuration
+    // Counting from Turn 2's start must see only 1 tool.
+    std::vector<ContentBlock> blocks;
+
+    // ---- Turn 1 ----
+    ContentBlock user1;
+    user1.type = ContentBlock::UserMessage;
+    user1.text = "run tests";
+    blocks.push_back(user1);
+
+    ContentBlock result1a;
+    result1a.type = ContentBlock::ToolResult;
+    result1a.toolName = "Bash";
+    result1a.toolCallId = "toolu_t1a";
+    result1a.summary = ToolResultSummary::success("tests passed");
+    blocks.push_back(result1a);
+
+    ContentBlock result1b;
+    result1b.type = ContentBlock::ToolResult;
+    result1b.toolName = "Read";
+    result1b.toolCallId = "toolu_t1b";
+    result1b.summary = ToolResultSummary::success("4 lines");
+    blocks.push_back(result1b);
+
+    size_t turn2Start = blocks.size();  // snapshot before Turn 2
+
+    // ---- Turn 2 ----
+    ContentBlock user2;
+    user2.type = ContentBlock::UserMessage;
+    user2.text = "analyze output";
+    blocks.push_back(user2);
+
+    ContentBlock result2;
+    result2.type = ContentBlock::ToolResult;
+    result2.toolName = "Grep";
+    result2.toolCallId = "toolu_t2";
+    result2.summary = ToolResultSummary::success("3 matches");
+    blocks.push_back(result2);
+
+    // Count from Turn 2 start
+    int count = countToolsFromIndex(blocks, turn2Start);
+    CHECK(count == 1);  // only 1 tool in Turn 2, not 3
+}
+
+// ============================================================================
+// Test P1d.5: CollapsedGroup counted by toolUseIds.size()
+// ============================================================================
+TEST_CASE("P1d: CollapsedGroup counted by toolUseIds.size()",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock group;
+    group.type = ContentBlock::CollapsedGroup;
+    group.toolName = "Read";
+    group.toolUseIds = {"toolu_r1", "toolu_r2", "toolu_r3"};
+    group.summary = ToolResultSummary::success("3 files");
+    blocks.push_back(group);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 3);
+}
+
+// ============================================================================
+// Test P1d.6: ToolGroup counted by toolUseIds.size()
+// ============================================================================
+TEST_CASE("P1d: ToolGroup counted by toolUseIds.size()",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock group;
+    group.type = ContentBlock::ToolGroup;
+    group.toolName = "Edit";
+    group.toolUseIds = {"toolu_e1", "toolu_e2"};
+    group.summary = ToolResultSummary::success("2 edits");
+    blocks.push_back(group);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 2);
+}
+
+// ============================================================================
+// Test P1d.7: Failed ToolResult counted
+// ============================================================================
+TEST_CASE("P1d: Failed ToolResult counted",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock result;
+    result.type = ContentBlock::ToolResult;
+    result.toolName = "Bash";
+    result.toolCallId = "toolu_fail";
+    result.summary = ToolResultSummary::error("Command failed");
+    blocks.push_back(result);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 1);  // failed tools still count
+}
+
+// ============================================================================
+// Test P1d.8: Cancelled/interrupted ToolResult counted
+// ============================================================================
+TEST_CASE("P1d: Cancelled ToolResult counted",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock result;
+    result.type = ContentBlock::ToolResult;
+    result.toolName = "Bash";
+    result.toolCallId = "toolu_cancel";
+    result.resultStatus = ToolResultStatus::Cancelled;
+    result.summary = ToolResultSummary::success("Cancelled");  // isCancelled via resultStatus
+    blocks.push_back(result);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 1);  // cancelled tools still count
+}
+
+// ============================================================================
+// Test P1d.9: AgentProgress not counted
+// ============================================================================
+TEST_CASE("P1d: AgentProgress not counted",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock result;
+    result.type = ContentBlock::ToolResult;
+    result.toolName = "Bash";
+    result.toolCallId = "toolu_bash";
+    result.summary = ToolResultSummary::success("OK");
+    blocks.push_back(result);
+
+    ContentBlock agent;
+    agent.type = ContentBlock::AgentProgress;
+    agent.toolName = "general-purpose";
+    agent.text = "analyzing code...";
+    blocks.push_back(agent);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 1);  // only Bash, not AgentProgress
+}
+
+// ============================================================================
+// Test P1d.10: Mixed turn: ToolResult + CollapsedGroup + ToolGroup
+// ============================================================================
+TEST_CASE("P1d: Mixed tool types counted correctly",
+          "[ContentBlock][p1d]") {
+    std::vector<ContentBlock> blocks;
+
+    // Standalone ToolResult (e.g., lone Bash)
+    ContentBlock bash;
+    bash.type = ContentBlock::ToolResult;
+    bash.toolName = "Bash";
+    bash.toolCallId = "toolu_bash";
+    bash.summary = ToolResultSummary::success("ok");
+    blocks.push_back(bash);
+
+    // CollapsedGroup with 3 internal tools
+    ContentBlock readGroup;
+    readGroup.type = ContentBlock::CollapsedGroup;
+    readGroup.toolName = "Read";
+    readGroup.toolUseIds = {"toolu_r1", "toolu_r2", "toolu_r3"};
+    readGroup.summary = ToolResultSummary::success("3 files");
+    blocks.push_back(readGroup);
+
+    // ToolGroup with 2 internal tools (Edit + Write)
+    ContentBlock editGroup;
+    editGroup.type = ContentBlock::ToolGroup;
+    editGroup.toolName = "Edit";
+    editGroup.toolUseIds = {"toolu_e1", "toolu_e2"};
+    editGroup.summary = ToolResultSummary::success("2 edits");
+    blocks.push_back(editGroup);
+
+    // Answer text (not a tool)
+    ContentBlock answer;
+    answer.type = ContentBlock::AnswerText;
+    answer.text = "Done!";
+    blocks.push_back(answer);
+
+    int count = countToolsFromIndex(blocks, 0);
+    CHECK(count == 6);  // 1 + 3 + 2 = 6
+
+    String text = makeTurnDurationText("Cogitated", 30, count);
+    CHECK(text == "Cogitated for 30s · 6 tools");
+}
