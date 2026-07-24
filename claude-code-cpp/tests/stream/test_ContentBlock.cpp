@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "claude/stream/ContentBlock.hpp"
+#include <algorithm>
 
 using namespace claude;
 
@@ -646,4 +647,179 @@ TEST_CASE("P1d: Mixed tool types counted correctly",
 
     String text = makeTurnDurationText("Cogitated", 30, count);
     CHECK(text == "Cogitated for 30s · 6 tools");
+}
+
+// ============================================================================
+// P2a Tests: Phase-header eligibility classifier
+// ============================================================================
+
+/// Mirror of isPhaseHeaderEligible() in FtxuiRepl.cpp P1b block.
+/// Denies ● promotion for short transitional tool-intro text while allowing
+/// real phase headers and substantive answers through.
+static bool isPhaseHeaderEligible(const String& rawText) {
+    String text = rawText;
+    size_t start = text.find_first_not_of(" \t\n\r");
+    if (start == String::npos) return false;
+    size_t end = text.find_last_not_of(" \t\n\r");
+    text = text.substr(start, end - start + 1);
+
+    String lower = text;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    // Phase/summary/conclusion keywords always eligible
+    static const std::vector<String> phaseKeywords = {
+        "here is", "here's", "summary", "analysis", "overview",
+        "conclusion", "result", "results", "findings",
+        "recommendation", "the output pipeline follows",
+        "the pipeline follows", "based on",
+    };
+    for (const auto& kw : phaseKeywords) {
+        if (lower.find(kw) != String::npos) return true;
+    }
+
+    // Text metrics
+    size_t substantiveChars = 0;
+    for (char c : text) {
+        if (c != ' ' && c != '\n' && c != '\t' && c != '\r') {
+            substantiveChars++;
+        }
+    }
+    int sentences = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '.' || text[i] == '!' || text[i] == '?') {
+            if (i + 1 >= text.size() || text[i + 1] == ' ' ||
+                text[i + 1] == '\n') {
+                sentences++;
+            }
+        }
+    }
+
+    // Structured content → eligible
+    if (text.find("\n\n") != String::npos) return true;
+    if (text.find("\n- ") != String::npos ||
+        text.find("\n* ") != String::npos) return true;
+    for (size_t i = 0; i + 2 < text.size(); ++i) {
+        if (text[i] == '\n' && text[i + 1] >= '0' &&
+            text[i + 1] <= '9') return true;
+    }
+    if (text.find("```") != String::npos) return true;
+
+    // Long or multi-sentence substantive → eligible
+    if (substantiveChars > 80) return true;
+    if (sentences >= 2) return true;
+
+    // Short single-sentence starting with transitional → deny
+    static const std::vector<String> transitionalPrefixes = {
+        "let me", "now let me", "i'll", "i will", "let's",
+        "next", "then", "also",
+        "and the", "and now", "now i'll",
+        "checking", "reading", "searching", "looking at",
+        "moving on",
+    };
+    for (const auto& prefix : transitionalPrefixes) {
+        if (lower.find(prefix) == 0) return false;
+    }
+
+    return true;
+}
+
+// Test P2a.1: "Let me read the key files." → not eligible
+TEST_CASE("P2a: transitional text denied — Let me read",
+          "[ContentBlock][p2a]") {
+    CHECK_FALSE(isPhaseHeaderEligible("Let me read the key files."));
+}
+
+// Test P2a.2: "Now I'll edit the config." → not eligible
+TEST_CASE("P2a: transitional text denied — Now I'll edit",
+          "[ContentBlock][p2a]") {
+    CHECK_FALSE(isPhaseHeaderEligible("Now I'll edit the config."));
+}
+
+// Test P2a.3: "Here is the complete analysis:" → eligible
+TEST_CASE("P2a: phase keyword eligible — Here is",
+          "[ContentBlock][p2a]") {
+    CHECK(isPhaseHeaderEligible("Here is the complete analysis:"));
+}
+
+// Test P2a.4: "The output pipeline follows:" → eligible
+TEST_CASE("P2a: phase keyword eligible — output pipeline follows",
+          "[ContentBlock][p2a]") {
+    CHECK(isPhaseHeaderEligible("The output pipeline follows:"));
+}
+
+// Test P2a.5: "Done. All tests pass." → eligible (short but substantive,
+//           doesn't start with transitional prefix)
+TEST_CASE("P2a: substantive short text eligible — Done",
+          "[ContentBlock][p2a]") {
+    CHECK(isPhaseHeaderEligible("Done. All tests pass."));
+}
+
+// Test P2a.6: multi-paragraph summary → eligible
+TEST_CASE("P2a: multi-paragraph eligible",
+          "[ContentBlock][p2a]") {
+    CHECK(isPhaseHeaderEligible(
+        "Here is a summary of the changes.\n\n"
+        "First, we refactored the pipeline.\n"
+        "Second, we added tests."));
+}
+
+// Test P2a.7: first AnswerText in turn "Let me search..." → not eligible
+TEST_CASE("P2a: first AnswerText transitional denied",
+          "[ContentBlock][p2a]") {
+    CHECK_FALSE(isPhaseHeaderEligible("Let me search for relevant files."));
+}
+
+// Test P2a.8: non-eligible blocks don't block subsequent phase header.
+// "Let me read..." is non-eligible, but a subsequent "Here is..."
+// must still be eligible — it's tested independently since the
+// blocking-prevention logic is in findPrevSignificant, not the classifier.
+TEST_CASE("P2a: transitional doesn't poison subsequent phase header",
+          "[ContentBlock][p2a]") {
+    CHECK_FALSE(isPhaseHeaderEligible("Let me read the file."));
+    CHECK(isPhaseHeaderEligible("Here is the analysis."));
+}
+
+// Test P2a.9: dimmed narration remains handled separately (classifier
+// runs only on non-dimmed blocks — verified structurally).
+TEST_CASE("P2a: classifier ignores dimmed state",
+          "[ContentBlock][p2a]") {
+    // The classifier itself doesn't check dimmed — that's the caller's job
+    CHECK(isPhaseHeaderEligible("Here is the summary."));
+}
+
+// Test P2a.10: Various transitional prefixes denied
+TEST_CASE("P2a: transitional prefixes denied",
+          "[ContentBlock][p2a]") {
+    CHECK_FALSE(isPhaseHeaderEligible("Let me check that file."));
+    CHECK_FALSE(isPhaseHeaderEligible("Now let me edit the config."));
+    CHECK_FALSE(isPhaseHeaderEligible("I'll read the source."));
+    CHECK_FALSE(isPhaseHeaderEligible("Next, the implementation."));
+    CHECK_FALSE(isPhaseHeaderEligible("Then we check the output."));
+    CHECK_FALSE(isPhaseHeaderEligible("Also the header files."));
+    CHECK_FALSE(isPhaseHeaderEligible("Reading the main file."));
+    CHECK_FALSE(isPhaseHeaderEligible("Searching for references."));
+    CHECK_FALSE(isPhaseHeaderEligible("Looking at the test."));
+    CHECK_FALSE(isPhaseHeaderEligible("Moving on to edits."));
+}
+
+// Test P2a.11: Long transitional text (>=2 sentences, > 80 chars) → eligible
+TEST_CASE("P2a: long transitional text eligible",
+          "[ContentBlock][p2a]") {
+    // Even though it starts with "Let me", it's multi-sentence → eligible
+    CHECK(isPhaseHeaderEligible(
+        "Let me explain the architecture in detail. "
+        "The pipeline has three stages: parsing, grouping, and rendering. "
+        "Each stage is independent and testable."));
+}
+
+// Test P2a.12: "Based on the results" → phase keyword eligible
+TEST_CASE("P2a: based on keyword eligible",
+          "[ContentBlock][p2a]") {
+    CHECK(isPhaseHeaderEligible("Based on the results above, here is the fix:"));
+}
+
+// Test P2a.13: Code block / markdown table → eligible (structured)
+TEST_CASE("P2a: markdown structure eligible",
+          "[ContentBlock][p2a]") {
+    CHECK(isPhaseHeaderEligible("The key types:\n```\nstruct A {};\n```"));
 }

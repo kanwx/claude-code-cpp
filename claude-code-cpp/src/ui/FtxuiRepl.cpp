@@ -514,10 +514,13 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
 
                 // P6-P1b: Phase-aware AnswerText prefix detection.
                 // After pipeline, re-assign isFirst on AnswerText blocks:
-                //   - First non-dimmed AnswerText → isFirst=true (phase header)
-                //   - Non-dimmed AnswerText preceded by tool-like block → isFirst=true
+                //   - First non-dimmed eligible AnswerText → isFirst=true (phase header)
+                //   - Non-dimmed eligible AnswerText preceded by tool-like block → isFirst=true
                 //   - All other non-dimmed AnswerText → isFirst=false (continuation)
                 //   - Dimmed narration → isFirst=false always
+                // P6-P2a: Non-eligible transitional AnswerText (short, single-sentence,
+                //   starts with tool-intro pattern, no phase keywords) → isFirst=false,
+                //   does NOT affect seenNonDimmedAnswer or previous-significant lookup.
                 {
                     auto isToolLikeBlock = [](const ContentBlock& b) {
                         return b.type == ContentBlock::ToolResult ||
@@ -526,12 +529,89 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                                b.type == ContentBlock::AgentProgress;
                     };
 
-                    // Find previous significant block, skipping dimmed/empty AnswerText
+                    // P6-P2a: Phase-header eligibility classifier.
+                    // Denies ● promotion for short transitional tool-intro text
+                    // (e.g. "Let me read the key files.") while allowing real
+                    // phase headers and substantive answers through.
+                    auto isPhaseHeaderEligible = [](const ContentBlock& block) -> bool {
+                        String text = block.text;
+                        size_t start = text.find_first_not_of(" \t\n\r");
+                        if (start == String::npos) return false;
+                        size_t end = text.find_last_not_of(" \t\n\r");
+                        text = text.substr(start, end - start + 1);
+
+                        String lower = text;
+                        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+                        // Phase/summary/conclusion keywords always eligible
+                        static const std::vector<String> phaseKeywords = {
+                            "here is", "here's", "summary", "analysis", "overview",
+                            "conclusion", "result", "results", "findings",
+                            "recommendation", "the output pipeline follows",
+                            "the pipeline follows", "based on",
+                        };
+                        for (const auto& kw : phaseKeywords) {
+                            if (lower.find(kw) != String::npos) return true;
+                        }
+
+                        // Text metrics
+                        size_t substantiveChars = 0;
+                        for (char c : text) {
+                            if (c != ' ' && c != '\n' && c != '\t' && c != '\r') {
+                                substantiveChars++;
+                            }
+                        }
+                        int sentences = 0;
+                        for (size_t i = 0; i < text.size(); ++i) {
+                            if (text[i] == '.' || text[i] == '!' || text[i] == '?') {
+                                if (i + 1 >= text.size() || text[i + 1] == ' ' ||
+                                    text[i + 1] == '\n') {
+                                    sentences++;
+                                }
+                            }
+                        }
+
+                        // Structured content → eligible
+                        if (text.find("\n\n") != String::npos) return true;
+                        if (text.find("\n- ") != String::npos ||
+                            text.find("\n* ") != String::npos) return true;
+                        for (size_t i = 0; i + 2 < text.size(); ++i) {
+                            if (text[i] == '\n' && text[i + 1] >= '0' &&
+                                text[i + 1] <= '9') return true;
+                        }
+                        if (text.find("```") != String::npos) return true;
+
+                        // Long or multi-sentence substantive → eligible
+                        if (substantiveChars > 80) return true;
+                        if (sentences >= 2) return true;
+
+                        // Short single-sentence starting with transitional → deny
+                        static const std::vector<String> transitionalPrefixes = {
+                            "let me", "now let me", "i'll", "i will", "let's",
+                            "next", "then", "also",
+                            "and the", "and now", "now i'll",
+                            "checking", "reading", "searching", "looking at",
+                            "moving on",
+                        };
+                        for (const auto& prefix : transitionalPrefixes) {
+                            if (lower.find(prefix) == 0) return false;
+                        }
+
+                        return true;
+                    };
+
+                    // Find previous significant block, skipping dimmed/empty/
+                    // non-eligible AnswerText so transitional text doesn't
+                    // block real phase headers from seeing prior tool blocks.
                     auto findPrevSignificant = [&](size_t i) -> const ContentBlock* {
                         for (size_t j = i; j > 0; --j) {
                             const auto& prev = contentBlocks_[j - 1];
                             if (prev.type == ContentBlock::AnswerText) {
-                                if (prev.dimmed || prev.text.find_first_not_of(" \t\n\r") == String::npos) {
+                                if (prev.dimmed ||
+                                    prev.text.find_first_not_of(" \t\n\r") == String::npos) {
+                                    continue;
+                                }
+                                if (!isPhaseHeaderEligible(prev)) {
                                     continue;
                                 }
                             }
@@ -547,6 +627,13 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                         if (block.type != ContentBlock::AnswerText) continue;
 
                         if (block.dimmed) {
+                            block.isFirst = false;
+                            continue;
+                        }
+
+                        // P6-P2a: non-eligible transitional → no ●, don't
+                        // affect seenNonDimmedAnswer or significant-block lookup
+                        if (!isPhaseHeaderEligible(block)) {
                             block.isFirst = false;
                             continue;
                         }
