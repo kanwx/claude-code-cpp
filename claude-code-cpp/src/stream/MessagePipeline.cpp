@@ -296,6 +296,18 @@ bool MessagePipeline::isToolNarration(const ContentBlock& block) const {
     return false;
 }
 
+void MessagePipeline::dimToolNarration(std::vector<ContentBlock>& blocks,
+                                       size_t startIndex) const {
+    for (size_t i = startIndex; i < blocks.size(); ++i) {
+        auto& block = blocks[i];
+        if (block.type == ContentBlock::AnswerText &&
+            !block.dimmed &&
+            isToolNarration(block)) {
+            block.dimmed = true;
+        }
+    }
+}
+
 bool MessagePipeline::isGroupBreaker(const ContentBlock& block) const {
     // Assistant text with non-empty content breaks the group
     if (block.type == ContentBlock::AnswerText && !block.text.empty()) {

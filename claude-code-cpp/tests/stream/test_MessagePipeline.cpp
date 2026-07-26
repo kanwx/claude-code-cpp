@@ -902,3 +902,250 @@ TEST_CASE("P6-P1a: P6-P0b ExplorationGroup grouping regression",
         CHECK(a->dimmed == true);
     }
 }
+
+// ============================================================================
+// P2b Tests: Centralized narration dimming pass (dimToolNarration)
+// ============================================================================
+
+// Test P2b.1: "Let me read the key files." between Bash and Read → dimmed
+TEST_CASE("P2b: dimToolNarration dims narration between non-collapsible tools",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeBash("t1", "tests passed"));
+    blocks.push_back(makeAnswerText("Let me read the key files."));
+    blocks.push_back(makeRead("t2", "StreamBuffer.cpp (317 lines)"));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == true);
+}
+
+// Test P2b.2: "Now I'll edit the config." before Edit → dimmed
+TEST_CASE("P2b: dimToolNarration dims narration before Edit",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "42 lines"));
+    blocks.push_back(makeAnswerText("Now I'll edit the config."));
+    // No Edit tool helper; use ToolResult with toolName "Edit"
+    ContentBlock edit;
+    edit.type = ContentBlock::ToolResult;
+    edit.toolName = "Edit";
+    edit.toolCallId = "t2";
+    edit.summary = ToolResultSummary::success("edited");
+    edit.resultStatus = ToolResultStatus::Success;
+    blocks.push_back(edit);
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == true);
+}
+
+// Test P2b.3: "Let me run the tests." before Bash → dimmed
+TEST_CASE("P2b: dimToolNarration dims narration before Bash",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeRead("t1", "42 lines"));
+    blocks.push_back(makeAnswerText("Let me run the tests."));
+    blocks.push_back(makeBash("t2", "all tests passed"));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == true);
+}
+
+// Test P2b.4: Already-dimmed narration remains dimmed (idempotent)
+TEST_CASE("P2b: dimToolNarration idempotent on already-dimmed blocks",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock a = makeAnswerText("Let me search.");
+    a.dimmed = true;
+    blocks.push_back(a);
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == true);  // still dimmed
+}
+
+// Test P2b.5: "Here is the complete analysis:" → NOT dimmed
+// (contains conclusion words, isToolNarration returns false)
+TEST_CASE("P2b: phase headers not dimmed — Here is",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Here is the complete analysis:"));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == false);
+}
+
+// Test P2b.6: "The output pipeline follows:" → NOT dimmed
+// (doesn't start with narration prefix)
+TEST_CASE("P2b: phase headers not dimmed — output pipeline",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("The output pipeline follows:"));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == false);
+}
+
+// Test P2b.7: Multi-paragraph summary → NOT dimmed
+TEST_CASE("P2b: multi-paragraph summary not dimmed",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText(
+        "Here is a summary of the changes.\n\n"
+        "First, we refactored the pipeline.\n"
+        "Second, we added tests."));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == false);
+}
+
+// Test P2b.8: Short non-narration text "Done." → NOT dimmed
+TEST_CASE("P2b: short non-narration text not dimmed",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Done."));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 1);
+    CHECK(answers[0]->dimmed == false);
+}
+
+// Test P2b.9: AgentProgress text is not affected (not AnswerText)
+TEST_CASE("P2b: AgentProgress not affected by dimToolNarration",
+          "[MessagePipeline][p2b]") {
+    std::vector<ContentBlock> blocks;
+    ContentBlock agent;
+    agent.type = ContentBlock::AgentProgress;
+    agent.toolName = "general-purpose";
+    agent.text = "Let me analyze the codebase...";
+    blocks.push_back(agent);
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    // AgentProgress should not be dimmed (only AnswerText is checked)
+    REQUIRE(blocks.size() == 1);
+    CHECK(blocks[0].dimmed == false);
+}
+
+// Test P2b.10: current-turn-only — previous turn blocks not mutated
+TEST_CASE("P2b: dimToolNarration respects startIndex (current-turn scoped)",
+          "[MessagePipeline][p2b]") {
+    // Turn 1: user message + narration + tool
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me read the file."));
+    blocks.push_back(makeRead("t1", "42 lines"));
+
+    // Turn 2 starts here (snapshot index)
+    size_t turn2Start = blocks.size();
+    ContentBlock user2;
+    user2.type = ContentBlock::UserMessage;
+    user2.text = "run tests";
+    blocks.push_back(user2);
+    blocks.push_back(makeAnswerText("Let me run the tests."));
+    blocks.push_back(makeBash("t2", "tests passed"));
+
+    // Dim only Turn 2's range
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, turn2Start);
+
+    // Turn 1's narration should NOT be dimmed
+    auto allAnswers = findAnswerTexts(blocks);
+    REQUIRE(allAnswers.size() == 2);
+    CHECK(allAnswers[0]->dimmed == false);  // Turn 1: NOT dimmed (out of range)
+    CHECK(allAnswers[1]->dimmed == true);   // Turn 2: dimmed (in range)
+}
+
+// Test P2b.11: P2a regression — dimmed narration never reaches ● eligibility.
+// dimToolNarration covers ALL isToolNarration()==true blocks regardless of
+// tool context. Combined with P2b dimming happening before P1b/P2a in
+// FtxuiRepl, this guarantees dimmed narration is skipped by P2a.
+TEST_CASE("P2b: dimmed narration skips P2a eligibility path",
+          "[MessagePipeline][p2b]") {
+    // This test verifies the structural guarantee: after dimToolNarration,
+    // all isToolNarration()==true blocks are dimmed, so P1b skips them
+    // and P2a eligibility check never runs on them.
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeBash("t1", "command output"));
+    blocks.push_back(makeAnswerText("Let me read the key files."));
+    blocks.push_back(makeAnswerText("Here is the analysis:"));
+
+    MessagePipeline pipeline;
+    pipeline.dimToolNarration(blocks, 0);
+
+    auto answers = findAnswerTexts(blocks);
+    REQUIRE(answers.size() == 2);
+    // First AnswerText: isToolNarration → dimmed, P2a never sees it
+    CHECK(answers[0]->dimmed == true);
+    // Second AnswerText: has "here is" → not narration → not dimmed → P2a eligible
+    CHECK(answers[1]->dimmed == false);
+}
+
+// Test P2b.12: P1a/P1b/P1c/P1d regression — full pipeline with dimToolNarration
+TEST_CASE("P2b: full pipeline + dimToolNarration preserves grouping",
+          "[MessagePipeline][p2b][regression]") {
+    // Baseline Task B scenario with mixed collapsible and non-collapsible tools
+    std::vector<ContentBlock> blocks;
+    blocks.push_back(makeAnswerText("Let me search for pipeline files."));
+    blocks.push_back(makeGrep("t1", "Found 12 matches"));
+    blocks.push_back(makeAnswerText("Let me read the key files."));
+    blocks.push_back(makeRead("t2", "StreamBuffer.cpp (317 lines)"));
+    blocks.push_back(makeAnswerText("Now let me run the tests."));
+    blocks.push_back(makeBash("t3", "all tests passed"));
+    blocks.push_back(makeAnswerText("Here is the complete analysis:"));
+
+    // Run full pipeline first (P1a dims narration in collapsible sequences)
+    MessagePipeline pipeline;
+    auto result = pipeline.process(std::move(blocks));
+
+    // Then P2b pass over the current turn
+    pipeline.dimToolNarration(result, 0);
+
+    // All narrations should be dimmed
+    auto answers = findAnswerTexts(result);
+    REQUIRE(answers.size() == 4);
+
+    // "Let me search for pipeline files." — between non-collapsible,
+    // P1a may or may not dim depending on config. P2b dims it.
+    CHECK(answers[0]->dimmed == true);
+
+    // "Let me read the key files." — between collapsible (Grep+Read),
+    // P1a dims it. P2b is idempotent.
+    CHECK(answers[1]->dimmed == true);
+
+    // "Now let me run the tests." — between Read+Bash, non-collapsible.
+    // P2b dims it (this is the key fix).
+    CHECK(answers[2]->dimmed == true);
+
+    // "Here is the complete analysis:" — phase header, NOT narration
+    CHECK(answers[3]->dimmed == false);
+}

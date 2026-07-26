@@ -512,6 +512,16 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 }
                 contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
 
+                // P6-P2b: Centralized narration dimming pass.
+                // P1a dims narration only within collapsible sequences
+                // (collapseReadSearchGroups). This pass dims ALL remaining
+                // inter-tool narration in the current turn so that
+                // transitional text between non-collapsible tools
+                // (Bash, Edit, Write) also recedes visually.
+                // Current-turn scoped: only processes [currentTurnStartIndex_, end).
+                messagePipeline_.dimToolNarration(contentBlocks_,
+                                                  currentTurnStartIndex_);
+
                 // P6-P1b: Phase-aware AnswerText prefix detection.
                 // After pipeline, re-assign isFirst on AnswerText blocks:
                 //   - First non-dimmed eligible AnswerText → isFirst=true (phase header)
