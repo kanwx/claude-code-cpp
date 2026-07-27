@@ -31,6 +31,25 @@ String FtxuiRepl::truncate(const String& s, size_t maxLen) {
     return s.substr(0, maxLen - 3) + "...";
 }
 
+String FtxuiRepl::buildTurnDurationText(const String& verb, int seconds, int toolCount,
+                                        int64_t outputTokens) {
+    String text = verb + " for " + formatElapsed(seconds);
+    if (toolCount > 0) {
+        text += " · " + std::to_string(toolCount) + (toolCount == 1 ? " tool" : " tools");
+    }
+    if (outputTokens > 0) {
+        auto fmtK = [](int64_t n) -> String {
+            if (n >= 1'000'000) return std::to_string(n / 1'000'000) + "." +
+                std::to_string((n % 1'000'000) / 100'000) + "M";
+            if (n >= 1'000) return std::to_string(n / 1'000) + "." +
+                std::to_string((n % 1'000) / 100) + "K";
+            return std::to_string(n);
+        };
+        text += " · " + fmtK(outputTokens) + " tokens";
+    }
+    return text;
+}
+
 // ========== Refresh thread — spinner animation + safety net flush ==========
 
 static void refreshLog(const char* msg) {
@@ -193,11 +212,7 @@ void FtxuiRepl::finishStream(bool success, const String& error) {
                         toolCount += static_cast<int>(block.toolUseIds.size());
                     }
                 }
-                td.text = verb + " for " + formatElapsed(seconds);
-                if (toolCount > 0) {
-                    td.text += " · " + std::to_string(toolCount) +
-                               (toolCount == 1 ? " tool" : " tools");
-                }
+                td.text = buildTurnDurationText(verb, seconds, toolCount, lastTurnOutputTokens_);
                 contentBlocks_.push_back(std::move(td));
             }
             turnDurationEmitted_ = true;
