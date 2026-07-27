@@ -30,10 +30,15 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
             );
         }
 
-        // Content blocks — render via renderFtxuiElement
+        // Content blocks — render via renderFtxuiElement, with separator before
+        // the final answer after tool output.
         if (st->contentBlocks && !st->contentBlocks->empty()) {
-            for (const auto& block : *st->contentBlocks) {
-                contentEls.push_back(renderFtxuiElement(block));
+            auto sepIndices = findAnswerSeparatorIndices(*st->contentBlocks);
+            for (size_t i = 0; i < st->contentBlocks->size(); ++i) {
+                if (std::find(sepIndices.begin(), sepIndices.end(), i) != sepIndices.end()) {
+                    contentEls.push_back(renderAnswerSeparator());
+                }
+                contentEls.push_back(renderFtxuiElement((*st->contentBlocks)[i], {}));
             }
         }
 
@@ -53,7 +58,7 @@ ftxui::Component ContentAreaComponent(ContentState& state, const RenderContext& 
             streamingCb.isFirst = st->contentBlocks &&
                 std::none_of(st->contentBlocks->begin(), st->contentBlocks->end(),
                     [](const ContentBlock& b) { return b.type == ContentBlock::AnswerText; });
-            contentEls.push_back(renderFtxuiElement(streamingCb));
+            contentEls.push_back(renderFtxuiElement(streamingCb, {}));
 
             // Blinking cursor after streaming text
             bool cursorVisible = (st->streaming.tickCounter % 4) < 2;

@@ -18,6 +18,9 @@ target_link_libraries(test_tool PRIVATE claude_core Catch2::Catch2WithMain)
 add_executable(test_permission test_permission.cpp)
 target_link_libraries(test_permission PRIVATE claude_core Catch2::Catch2WithMain)
 
+add_executable(test_ansi_suppress test_ansi_suppress.cpp)
+target_link_libraries(test_ansi_suppress PRIVATE claude_core Catch2::Catch2WithMain)
+
 add_executable(test_agent_loop test_agent_loop.cpp)
 target_link_libraries(test_agent_loop PRIVATE claude_core Catch2::Catch2WithMain)
 
@@ -60,6 +63,9 @@ target_link_libraries(test_beta_headers PRIVATE claude_core Catch2::Catch2WithMa
 add_executable(test_agent_loop_recovery test_agent_loop_recovery.cpp)
 target_link_libraries(test_agent_loop_recovery PRIVATE claude_core Catch2::Catch2WithMain)
 
+add_executable(test_history_repair test_history_repair.cpp)
+target_link_libraries(test_history_repair PRIVATE claude_core Catch2::Catch2WithMain)
+
 add_executable(test_autocompact_circuit test_autocompact_circuit.cpp)
 target_link_libraries(test_autocompact_circuit PRIVATE claude_core Catch2::Catch2WithMain)
 
@@ -101,6 +107,7 @@ target_link_libraries(test_prompt_command PRIVATE claude_core Catch2::Catch2With
 include(Catch)
 catch_discover_tests(test_tool)
 catch_discover_tests(test_permission)
+catch_discover_tests(test_ansi_suppress)
 catch_discover_tests(test_agent_loop)
 catch_discover_tests(test_compact)
 catch_discover_tests(test_claude_md)
@@ -115,6 +122,7 @@ catch_discover_tests(test_e2e)
 catch_discover_tests(test_bridge)
 catch_discover_tests(test_beta_headers)
 catch_discover_tests(test_agent_loop_recovery)
+catch_discover_tests(test_history_repair)
 catch_discover_tests(test_autocompact_circuit)
 catch_discover_tests(test_retryable_client)
 catch_discover_tests(test_retry_policy_413)
@@ -283,3 +291,35 @@ catch_discover_tests(test_session_migration)
 add_executable(test_ui_mode test_ui_mode.cpp)
 target_link_libraries(test_ui_mode PRIVATE claude_core Catch2::Catch2WithMain)
 catch_discover_tests(test_ui_mode)
+
+add_executable(test_grep_safety test_grep_safety.cpp)
+target_link_libraries(test_grep_safety PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_grep_safety)
+
+add_executable(test_markdown test_markdown.cpp)
+target_link_libraries(test_markdown PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_markdown)
+
+add_executable(test_ftxui_markdown test_ftxui_markdown.cpp)
+target_link_libraries(test_ftxui_markdown PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ftxui_markdown)
+
+add_executable(test_ctrlc_doublepress test_ctrlc_doublepress.cpp)
+target_link_libraries(test_ctrlc_doublepress PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ctrlc_doublepress)
+
+add_executable(test_ftxui_read_expand test_ftxui_read_expand.cpp)
+target_link_libraries(test_ftxui_read_expand PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ftxui_read_expand)
+
+add_executable(test_ftxui_esc test_ftxui_esc.cpp)
+target_link_libraries(test_ftxui_esc PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_ftxui_esc)
+
+add_executable(test_bash_cancel test_bash_cancel.cpp)
+target_link_libraries(test_bash_cancel PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_bash_cancel)
+
+add_executable(test_auto_compact_continuity test_auto_compact_continuity.cpp)
+target_link_libraries(test_auto_compact_continuity PRIVATE claude_core Catch2::Catch2WithMain)
+catch_discover_tests(test_auto_compact_continuity)

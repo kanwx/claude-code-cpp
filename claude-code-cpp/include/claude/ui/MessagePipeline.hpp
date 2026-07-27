@@ -1,50 +1,11 @@
 #pragma once
 
 #include "UiMessageTypes.hpp"
+#include <claude/core/StreamEvent.hpp>
 #include <vector>
 #include <memory>
 
 namespace claude {
-
-// ========== Stream Events ==========
-// Raw input events from AgentLoop, mirroring TS stream events.
-// These are the "source of truth" events that flow into the pipeline.
-
-struct StreamEvent {
-    enum class Type {
-        TextDelta,          // Streaming text chunk
-        ThinkingDelta,      // Thinking content chunk
-        ToolUseStart,       // Tool invocation begins (tool_use block started)
-        ToolUseComplete,    // Tool invocation input complete (tool_use block stopped)
-        ToolResultReady,    // Tool execution finished, result available
-        ToolChunkReady,     // Partial tool output available (streaming)
-        StreamStart,        // New API request begins
-        StreamEnd,          // API response complete
-        StreamError,        // Error during streaming
-        UserMessage,        // User submitted input
-        SystemMessage,      // System informational message
-        ErrorMessage,       // Error message
-        TurnDuration,       // Turn duration summary
-        CompactBoundary,    // Context compaction marker
-        HookSummary,        // Hook progress summary
-        Tombstone,          // Model fallback — previous partial content invalidated
-    };
-
-    Type type;
-
-    // Content (which fields are valid depends on type)
-    String text;               // TextDelta, ThinkingDelta, UserMessage, SystemMessage, ErrorMessage, TurnDuration
-    String toolId;             // ToolUseStart, ToolUseComplete, ToolResultReady
-    String toolName;           // ToolUseStart, ToolUseComplete, ToolResultReady
-    String toolInput;          // ToolUseStart (partial), ToolUseComplete (full JSON)
-    String toolResult;         // ToolResultReady
-    bool toolIsError = false;  // ToolResultReady
-    bool toolIsCancelled = false; // ToolResultReady
-    bool toolIsRejected = false;  // ToolResultReady
-    bool success = true;       // StreamEnd
-    String fallbackFromModel;   // For Tombstone events
-    String fallbackToModel;     // For Tombstone events
-};
 
 // ========== Pipeline Stage Interface ==========
 

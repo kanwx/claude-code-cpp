@@ -41,8 +41,10 @@ ftxui::Element renderFooter(const FooterState& state) {
     // Keyboard hints (context-dependent)
     if (state.isStreaming) {
         leftParts.push_back(text("esc to interrupt") | color(MacShadow) | dim);
+    } else if (state.collapsibleNavActive) {
+        leftParts.push_back(text("[/] select tool · Ctrl+O expand/collapse  ⇧+drag select  ⌃Y copy") | color(MacShadow) | dim);
     } else {
-        leftParts.push_back(text("? shortcuts  ⇧+drag select  ⌃Y copy") | color(MacShadow) | dim);
+        leftParts.push_back(text("⇧+drag select  ⌃Y copy") | color(MacShadow) | dim);
     }
 
     // Right side: auth status only

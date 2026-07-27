@@ -3,10 +3,11 @@
 #include "claude/ui/FtxuiRepl.hpp"
 #include "claude/core/UnifiedTaskStore.hpp"
 #include "claude/ui/FtxuiMarkdown.hpp"
-#include "claude/ui/ThinkingFilter.hpp"
-#include "claude/console/CreativeVerbs.hpp"
 #include "FtxuiColors.hpp"
 #include <spdlog/spdlog.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <ctime>
 #include <algorithm>
 
 namespace claude {
@@ -32,19 +33,38 @@ String FtxuiRepl::truncate(const String& s, size_t maxLen) {
 
 // ========== Refresh thread — spinner animation + safety net flush ==========
 
+static void refreshLog(const char* msg) {
+    auto t = std::time(nullptr);
+    struct tm tm_buf;
+    localtime_r(&t, &tm_buf);
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d] REFRESH-DBG %s\n",
+                       tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, msg);
+    if (len > 0) {
+        int fd = open("/tmp/esc-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) { write(fd, buf, static_cast<size_t>(len)); close(fd); }
+    }
+}
+
 void FtxuiRepl::startRefreshThread() {
     if (refreshActive_.exchange(true)) return;
+    refreshLog("[REFRESH] startRefreshThread spawning thread");
     refreshThread_ = std::thread([this]() { refreshLoop(); });
 }
 
 void FtxuiRepl::stopRefreshThread() {
+    refreshLog("[REFRESH] stopRefreshThread begin");
     refreshActive_ = false;
     if (refreshThread_.joinable()) {
+        refreshLog("[REFRESH] stopRefreshThread joining refresh thread");
         refreshThread_.join();
+        refreshLog("[REFRESH] stopRefreshThread join done");
     }
+    refreshLog("[REFRESH] stopRefreshThread end");
 }
 
 void FtxuiRepl::refreshLoop() {
+    refreshLog("[REFRESH] refreshLoop started");
     int bgCheckCounter = 0;
 
     while (refreshActive_ && running_) {
@@ -76,25 +96,27 @@ void FtxuiRepl::refreshLoop() {
             }
 
             if (runningCount > 0 && !isStreaming_) {
-                for (auto& m : progressMsgs) {
-                    m.messageId = MessageIdGenerator::next();
-                }
                 screen_->Post([this, msgs = std::move(progressMsgs)]() {
-                    messages_.erase(
-                        std::remove_if(messages_.begin(), messages_.end(),
-                            [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
-                        messages_.end()
+                    // Remove stale AgentProgress blocks, push fresh ones
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                            [](const ContentBlock& b) { return b.type == ContentBlock::AgentProgress; }),
+                        contentBlocks_.end()
                     );
                     for (auto& m : msgs) {
-                        messages_.push_back(std::move(m));
+                        ContentBlock cb;
+                        cb.type = ContentBlock::AgentProgress;
+                        cb.toolName = m.permissionToolName;
+                        cb.text = m.text;
+                        contentBlocks_.push_back(std::move(cb));
                     }
                 });
             } else if (runningCount == 0) {
                 screen_->Post([this]() {
-                    messages_.erase(
-                        std::remove_if(messages_.begin(), messages_.end(),
-                            [](const DisplayMessage& m) { return m.type == DisplayMessage::Type::AgentProgress; }),
-                        messages_.end()
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
+                            [](const ContentBlock& b) { return b.type == ContentBlock::AgentProgress; }),
+                        contentBlocks_.end()
                     );
                 });
             }
@@ -104,6 +126,7 @@ void FtxuiRepl::refreshLoop() {
         screen_->RequestAnimationFrame();
     }
     refreshActive_ = false;
+    refreshLog("[REFRESH] refreshLoop exited");
 }
 
 // ========== Streaming — the key to smooth output ==========
@@ -116,49 +139,69 @@ void FtxuiRepl::appendStreamText(const String& chunk) {
 void FtxuiRepl::finishStream(bool success, const String& error) {
     if (!screen_) return;
 
-    int durationMs = 0;
-    if (startTime_.time_since_epoch().count() > 0) {
-        durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - startTime_).count();
-    }
-
-    screen_->Post([this, success, err = String(error), durationMs]() {
+    screen_->Post([this, success, err = String(error)]() {
         // Clear streaming text — pipeline commits it via StreamEnd
         streamingText_.clear();
         streamingRenderer_.reset();
 
-        // If AnswerEnd didn't fire (error case), commit via pipeline's StreamEnd
-        if (isStreaming_) {
-            StreamEvent endEvent;
-            endEvent.type = StreamEvent::Type::StreamEnd;
-            endEvent.success = success;
-            endEvent.text = err;
-            if (messagePipeline_.processEvent(endEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-            }
-        }
-
-        if (!success && !err.empty() && !isStreaming_) {
-            StreamEvent errEvent;
-            errEvent.type = StreamEvent::Type::ErrorMessage;
-            errEvent.text = err;
-            if (messagePipeline_.processEvent(errEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
-            }
-        }
-
         isStreaming_ = false;
         isThinking_ = false;
 
-        if (success && durationMs > 2000) {
-            int seconds = durationMs / 1000;
-            String tmsg = console::CreativeVerbs::randomCreativeVerb() + " for " + formatElapsed(seconds);
-            StreamEvent durEvent;
-            durEvent.type = StreamEvent::Type::TurnDuration;
-            durEvent.text = std::move(tmsg);
-            if (messagePipeline_.processEvent(durEvent)) {
-                messages_ = ThinkingFilter::apply(messagePipeline_.getDisplayMessages());
+        // Push stream-end markers as content blocks (old pipeline API)
+        if (!success && !err.empty()) {
+            ContentBlock cb;
+            cb.type = ContentBlock::ErrorMessage;
+            cb.text = err;
+            contentBlocks_.push_back(std::move(cb));
+        }
+        // P1: TurnDuration is deferred from AnswerEnd to here.
+        // AnswerEnd fires at API stream end (StreamBuffer::StreamEnd),
+        // but the turn is not complete until tool execution finishes
+        // and runStreaming() returns.  finishStream is called after
+        // runStreaming() returns, so the wall-clock duration is correct.
+        //
+        // Guards: only create TurnDuration if a turn actually started
+        // (turnStarted_) and hasn't already been emitted (turnDurationEmitted_).
+        // This prevents: (a) TurnDuration for /clear and other non-turn
+        // finishStream calls, (b) duplicate TurnDuration from late finalize
+        // or repeated finishStream calls.
+        if (turnStarted_ && !turnDurationEmitted_) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - startTime_).count();
+            if (elapsedMs > 0) {
+                int seconds = static_cast<int>(elapsedMs / 1000);
+                ContentBlock td;
+                td.type = ContentBlock::TurnDuration;
+                td.stableId = nextStableId_++;
+
+                static const std::vector<String> kTurnVerbs = {
+                    "Baked", "Brewed", "Churned", "Cogitated",
+                    "Cooked", "Crunched", "Sauteed", "Worked",
+                };
+                size_t idx = turnVerbIndex_.fetch_add(1, std::memory_order_relaxed);
+                String verb = kTurnVerbs[idx % kTurnVerbs.size()];
+
+                // P6-P1d: count tool uses in the current turn only [currentTurnStartIndex_, end)
+                int toolCount = 0;
+                for (size_t i = currentTurnStartIndex_; i < contentBlocks_.size(); ++i) {
+                    const auto& block = contentBlocks_[i];
+                    if (block.type == ContentBlock::ToolResult && !block.toolCallId.empty()) {
+                        toolCount++;
+                    } else if (block.type == ContentBlock::ToolGroup ||
+                               block.type == ContentBlock::CollapsedGroup) {
+                        toolCount += static_cast<int>(block.toolUseIds.size());
+                    }
+                }
+                td.text = verb + " for " + formatElapsed(seconds);
+                if (toolCount > 0) {
+                    td.text += " · " + std::to_string(toolCount) +
+                               (toolCount == 1 ? " tool" : " tools");
+                }
+                contentBlocks_.push_back(std::move(td));
             }
+            turnDurationEmitted_ = true;
+            turnStarted_ = false;
         }
 
         stopRefreshThread();

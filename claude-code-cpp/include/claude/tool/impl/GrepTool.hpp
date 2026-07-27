@@ -40,6 +40,18 @@ public:
     /// Check if ripgrep is installed on the system
     static bool hasRipgrep();
 
+    // ---- Test injection points (for unit-testing fallback paths) ----
+    static bool forceUseFallbackForTest;
+    static String ripgrepPathOverride;
+
+    // Exposed for tests; not part of public tool contract.
+    /// Check if pattern is safe for std::regex (no catastrophic backtracking risk)
+    static bool isRegexPatternSafe(const String& pattern);
+
+    // Exposed for tests; not part of public tool contract.
+    /// Check if pattern contains no regex metacharacters (plain literal)
+    static bool isLiteralPattern(const String& pattern);
+
 private:
     /// Execute search using ripgrep subprocess
     String executeWithRipgrep(const Json& input, ToolContext& context);

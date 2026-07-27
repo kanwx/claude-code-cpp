@@ -1,5 +1,54 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
+#include "claude/ui/PathDisplay.hpp"
+#include "claude/stream/AnswerPostProcessor.hpp"
+
+namespace claude {
+
+bool isToolLikeBlock(const ContentBlock& block) {
+    switch (block.type) {
+        case ContentBlock::ToolResult:
+        case ContentBlock::ToolGroup:
+        case ContentBlock::CollapsedGroup:
+        case ContentBlock::AgentProgress:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool isCollapsibleFocusTarget(const ContentBlock& block) {
+    if (block.type == ContentBlock::ToolResult &&
+        AnswerPostProcessor::isCollapsibleTool(block.toolName)) {
+        return true;
+    }
+    return block.type == ContentBlock::ToolGroup ||
+           block.type == ContentBlock::CollapsedGroup;
+}
+
+std::vector<size_t> findAnswerSeparatorIndices(const std::vector<ContentBlock>& blocks) {
+    std::vector<size_t> indices;
+    if (blocks.empty()) return indices;
+
+    for (size_t i = 1; i < blocks.size(); ++i) {
+        if (blocks[i].type != ContentBlock::AnswerText) continue;
+        if (!isToolLikeBlock(blocks[i - 1])) continue;
+
+        bool hasToolAfter = false;
+        for (size_t j = i + 1; j < blocks.size(); ++j) {
+            if (isToolLikeBlock(blocks[j])) {
+                hasToolAfter = true;
+                break;
+            }
+        }
+        if (!hasToolAfter) {
+            indices.push_back(i);
+        }
+    }
+    return indices;
+}
+
+} // namespace claude
 
 #ifdef HAS_FTXUI
 #include <ftxui/component/component.hpp>
@@ -48,14 +97,23 @@ Element renderToolBadge(const String& toolName, bool dimmed = false) {
     return badge;
 }
 
-/// Render the Ctrl+O hint
-Element ctrlOHint() {
-    return text(" [Ctrl+O]") | dim | color(MacShadow);
+/// Render the Ctrl+O hint — only shown for the focused collapsible item.
+Element ctrlOHint(bool focused, bool expanded) {
+    if (!focused) return text("");
+    return text(expanded ? " [Ctrl+O collapse]" : " [Ctrl+O expand]")
+        | color(MacSky) | bold;
+}
+
+/// Render a focus marker (› prefix) for the focused collapsible item.
+Element focusMarker(bool focused) {
+    if (!focused) return text("  ");
+    return text("› ") | color(MacSky) | bold;
 }
 
 } // anonymous namespace
 
-ftxui::Element renderFtxuiElement(const ContentBlock& block) {
+ftxui::Element renderFtxuiElement(const ContentBlock& block, const BlockRenderOptions& opts) {
+    bool focused = opts.isFocusedCollapsible;
     switch (block.type) {
         // ===== User Message =====
         case ContentBlock::UserMessage: {
@@ -102,29 +160,63 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                 filler(),
                 text("─╯") | color(borderColor),
             }));
+            // Spacing to next AnswerText
+            els.push_back(text(""));
             return vbox(std::move(els));
         }
 
         // ===== Assistant Text =====
         case ContentBlock::AnswerText: {
             if (block.dimmed) {
-                return text(block.text) | dim | color(MacCream);
+                return hbox({
+                    text("   "),
+                    text(block.text) | dim | color(MacCream),
+                });
             }
+            if (block.text.find_first_not_of(" \t\n\r") == String::npos) {
+                return text("");
+            }
+
+            // P6-P1b: Three-state prefix preserving gutter alignment (3 chars).
+            //   ●  = phase header (first answer after tool output)
+            //   ⏺  = continuation (same phase)
+            //   (dimmed narration returns early with "   " gutter, no marker)
+            String prefix = block.isFirst ? " ● " : " ⏺ ";
+
+            // Single-paragraph plain text: use hbox so the prefix gutter is
+            // preserved.  Embedding the prefix inside paragraph() causes FTXUI
+            // to strip leading whitespace, making intermediate AnswerText
+            // (isFirst=false, prefix="   ") appear at column 0 instead of
+            // aligning with tool group summaries.
+            if (block.text.find('\n') == String::npos &&
+                block.text.find("```") == String::npos &&
+                block.text.find('*') == String::npos &&
+                block.text.find('#') == String::npos &&
+                block.text.find('`') == String::npos &&
+                block.text.find('|') == String::npos &&
+                block.text.find('>') == String::npos &&
+                block.text.find('[') == String::npos) {
+                return hbox({
+                    text(prefix),
+                    paragraph(block.text),
+                });
+            }
+
+            // Complex markdown: use full renderer, wrapped lines get "   " gutter.
             auto elements = FtxuiMarkdown::render(block.text);
             if (elements.empty()) return text("");
             Elements result;
-            String prefix = block.isFirst ? "● " : "  ";
             bool first = true;
             for (auto& el : elements) {
                 if (first) {
                     result.push_back(hbox({
-                        text(prefix) | color(MacSky),
+                        text(prefix),
                         std::move(el) | flex,
                     }));
                     first = false;
                 } else {
                     result.push_back(hbox({
-                        text("  "),
+                        text("   "),
                         std::move(el) | flex,
                     }));
                 }
@@ -166,7 +258,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
         // ===== Tool Progress =====
         case ContentBlock::ToolProgress: {
             return hbox({
-                text("  ⎿ "),
+                text(" ⎿ "),
                 renderToolBadge(block.toolName),
                 text(" "),
                 text(block.activity) | dim,
@@ -180,7 +272,8 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             if (dm.isError) {
                 String errDisplay = dm.errorText.empty() ? "Error" : dm.errorText;
                 return hbox({
-                    text("  ⎿ "),
+                    focusMarker(focused),
+                    text("⎿ "),
                     renderToolBadge(dm.toolName),
                     text(" "),
                     text(errDisplay) | color(MacRose),
@@ -190,7 +283,8 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             if (dm.isCancelled || dm.isRejected) {
                 String label = dm.isRejected ? "Rejected" : "Interrupted";
                 return hbox({
-                    text("  ⊘ ") | dim,
+                    focusMarker(focused),
+                    text("⎿ "),
                     renderToolBadge(dm.toolName, /*dimmed=*/true),
                     text(" "),
                     text(label) | dim,
@@ -202,10 +296,14 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
             String detailText;
             // FTXUI-specific: show file path on second line for Edit/Write
             if ((dm.toolName == "Edit" || dm.toolName == "Write") && !dm.filePath.empty()) {
-                detailText = dm.filePath;
+                detailText = truncatePathForDisplay(dm.filePath);
             }
 
-            auto summaryEl = text(displayText) | dim;
+            // Bash: green tint for exit 0, other tools: dimmed summary
+            auto summaryStyle = (dm.toolName == "Bash") ? color(MacMint) : dim;
+            // Focused items get bold summary
+            if (focused) summaryStyle = bold;
+            auto summaryEl = text(displayText) | summaryStyle;
             if (!detailText.empty()) {
                 summaryEl = vbox({
                     text(displayText) | dim,
@@ -213,41 +311,69 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                 });
             }
 
-            if (!block.expanded) {
+            if (!block.expanded && !opts.isInExpandedGroup) {
                 return hbox({
-                    text("  ⎿ "),
+                    focusMarker(focused),
+                    text("⎿ "),
                     renderToolBadge(dm.toolName),
                     text(" "),
                     summaryEl,
-                    ctrlOHint(),
+                    ctrlOHint(focused, block.expanded),
                 });
             }
-            return hbox({
-                text("  ⎿ "),
+            // Expanded view: show summary + content preview
+            Elements expandedEls;
+            expandedEls.push_back(hbox({
+                focusMarker(focused),
+                text("⎿ "),
                 renderToolBadge(dm.toolName),
                 text(" "),
                 summaryEl,
-            });
+                ctrlOHint(focused, block.expanded),
+            }));
+            if (block.summary.contentPreview.empty()) {
+                return hbox(std::move(expandedEls));
+            }
+            // Render content preview with truncation indicator
+            String preview = block.summary.contentPreview;
+            // Strip trailing newline from preview for cleaner display
+            while (!preview.empty() && preview.back() == '\n') preview.pop_back();
+            expandedEls.push_back(
+                text(preview) | dim | color(MacShadow)
+            );
+            if (block.summary.contentPreviewTruncated) {
+                String truncMsg = "  ... truncated, " +
+                    std::to_string(block.summary.previewLinesShown) +
+                    " of " + std::to_string(block.summary.totalLines) +
+                    " lines shown";
+                expandedEls.push_back(
+                    text(truncMsg) | dim | color(MacShadow)
+                );
+            }
+            return vbox(std::move(expandedEls));
         }
 
         // ===== Tool Group =====
         case ContentBlock::ToolGroup: {
-            if (!block.expanded) {
+            if (!block.expanded && !opts.isInExpandedGroup) {
                 return hbox({
-                    text("  ⎿ "),
-                    text(block.summary.primaryText) | dim,
-                    ctrlOHint(),
+                    focusMarker(focused),
+                    text("⎿ ") | dim,
+                    text(block.summary.primaryText) | (focused ? bold : dim),
+                    ctrlOHint(focused, block.expanded),
                 });
             }
             Elements childrenEls;
             childrenEls.push_back(hbox({
-                text("  ⎿ "),
+                focusMarker(focused),
+                text("⎿ ") | dim,
                 text(block.summary.primaryText) | dim,
+                ctrlOHint(focused, block.expanded),
             }));
             for (auto& child : block.children) {
                 childrenEls.push_back(hbox({
                     text("    "),
-                    renderFtxuiElement(child),
+                    renderFtxuiElement(child, {.isInExpandedGroup = true}),
                 }));
             }
             return vbox(std::move(childrenEls));
@@ -256,7 +382,7 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
         // ===== Agent Progress =====
         case ContentBlock::AgentProgress:
             return hbox({
-                text("  ⎿ "),
+                text(" ⎿ "),
                 text("● ") | color(MacLilac),
                 text(block.toolName + ": " + block.text) | dim | color(MacLilac),
             });
@@ -279,25 +405,26 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
                     dotColor = MacRose;
                 }
                 return hbox({
-                    text("  "),
-                    text("⏺ ") | color(dotColor),
-                    text(block.summary.primaryText) | dim,
-                    ctrlOHint(),
+                    focusMarker(focused),
+                    text("⎿ ") | color(dotColor),
+                    text(block.summary.primaryText) | (focused ? bold : dim),
+                    ctrlOHint(focused, block.expanded),
                 });
             }
             // Expanded: header + indented children with tree connectors
             Elements cel;
             cel.push_back(hbox({
-                text("  "),
-                text("⏺ ") | color(MacMint),
+                focusMarker(focused),
+                text("⎿ ") | color(MacMint),
                 text(block.summary.primaryText) | dim,
+                ctrlOHint(focused, block.expanded),
             }));
             for (size_t i = 0; i < block.children.size(); i++) {
                 bool last = (i == block.children.size() - 1);
                 String connector = last ? "  └─ " : "  ├─ ";
                 cel.push_back(hbox({
                     text(connector) | dim | color(MacShadow),
-                    renderFtxuiElement(block.children[i]),
+                    renderFtxuiElement(block.children[i], {.isInExpandedGroup = true}),
                 }));
             }
             return vbox(std::move(cel));
@@ -363,17 +490,25 @@ ftxui::Element renderFtxuiElement(const ContentBlock& block) {
 
         // ===== Turn Duration =====
         case ContentBlock::TurnDuration: {
-            String verb = console::CreativeVerbs::randomCreativeVerb();
-            return hbox({
-                text("  ● ") | color(MacSky),
-                text(verb + "  ") | dim,
-                text(block.text) | dim,
+            return vbox({
+                text(""),
+                hbox({
+                    text(" ✻ "),
+                    text(block.text) | dim,
+                }),
+                text(""),
             });
         }
 
         default:
             return text(block.text);
     }
+}
+
+ftxui::Element renderAnswerSeparator() {
+    return hbox({
+        text("  ─────────") | dim | color(MacShadow),
+    });
 }
 
 } // namespace claude

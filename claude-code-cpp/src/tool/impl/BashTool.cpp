@@ -2,6 +2,8 @@
 #include <claude/utils/Process.hpp>
 #include <claude/permission/BashClassifier.hpp>
 #include <spdlog/spdlog.h>
+#include <atomic>
+#include <memory>
 
 namespace claude {
 
@@ -77,7 +79,12 @@ String BashTool::execute(const Json& input, ToolContext& context) {
         spdlog::debug("BashTool: running in sandbox mode");
     }
 
-    auto result = Process::execute(command, context.workDir, timeout);
+    // Read per-tool cancel token set by StreamingToolExecutor
+    Process::CancelToken cancelToken;
+    if (auto tok = context.get<std::shared_ptr<std::atomic<bool>>>("__p4_cancel_token")) {
+        cancelToken = *tok;
+    }
+    auto result = Process::execute(command, context.workDir, timeout, cancelToken);
 
     String output;
 
@@ -143,6 +150,12 @@ String BashTool::executeStreaming(const Json& input, ToolContext& context,
         if (onChunk) onChunk(securityPrefix);
     }
 
+    // Read per-tool cancel token set by StreamingToolExecutor
+    Process::CancelToken cancelToken;
+    if (auto tok = context.get<std::shared_ptr<std::atomic<bool>>>("__p4_cancel_token")) {
+        cancelToken = *tok;
+    }
+
     // Execute with streaming stdout
     auto result = Process::executeStreaming(command, context.workDir, timeout,
         [&onChunk](const String& chunk) -> bool {
@@ -150,7 +163,7 @@ String BashTool::executeStreaming(const Json& input, ToolContext& context,
                 return onChunk(chunk);
             }
             return true;
-        });
+        }, cancelToken);
 
     // Build the final result string (matches execute() output format)
     String output = securityPrefix + result.stdout;

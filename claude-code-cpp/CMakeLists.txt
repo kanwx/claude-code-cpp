@@ -475,6 +475,7 @@ set(UI_SOURCES
     src/ui/FtxuiPermission.cpp
     src/ui/FtxuiRender.cpp
     src/ui/FtxuiMarkdown.cpp
+    src/ui/UiMessageTypes.cpp
     src/ui/VirtualScroll.cpp
     src/ui/OffscreenFreeze.cpp
     src/ui/components/StatusBarRenderer.cpp
@@ -485,13 +486,43 @@ set(UI_SOURCES
     src/ui/components/StreamingText.cpp
     src/ui/components/ThinkingIndicator.cpp
     src/ui/components/ContentArea.cpp
+    src/ui/components/MessageList.cpp
+    src/ui/components/MessageComponent.cpp
+    src/ui/components/MessageRenderer.cpp
+    src/ui/components/UserPromptComponent.cpp
+    src/ui/components/AssistantTextComponent.cpp
+    src/ui/components/AssistantTextRenderer.cpp
+    src/ui/components/AssistantThinkingComponent.cpp
+    src/ui/components/ToolUseComponent.cpp
+    src/ui/components/ToolUseRenderer.cpp
+    src/ui/components/SystemInfoComponent.cpp
+    src/ui/components/SystemErrorComponent.cpp
+    src/ui/components/TurnDurationComponent.cpp
+    src/ui/components/CompactBoundaryComponent.cpp
+    src/ui/components/CollapsedReadSearchComponent.cpp
+    src/ui/components/CollapsibleToolResult.cpp
+    src/ui/components/GroupedToolUseComponent.cpp
+    src/ui/components/AgentProgressComponent.cpp
     src/ui/components/AppLayout.cpp
     src/ui/PromptInputFooter.cpp
     src/ui/renderers/ContentBlockAnsi.cpp
     src/ui/renderers/ContentBlockFtxui.cpp
+    src/ui/renderers/DefaultToolRenderer.cpp
+    src/ui/renderers/BashToolRenderer.cpp
+    src/ui/renderers/ReadToolRenderer.cpp
+    src/ui/renderers/WriteToolRenderer.cpp
+    src/ui/renderers/EditToolRenderer.cpp
+    src/ui/renderers/GlobToolRenderer.cpp
+    src/ui/renderers/GrepToolRenderer.cpp
+    src/ui/renderers/LspToolRenderer.cpp
+    src/ui/renderers/WebFetchToolRenderer.cpp
+    src/ui/renderers/WebSearchToolRenderer.cpp
+    src/ui/renderers/AgentToolRenderer.cpp
     src/ui/ToolResultFormatter.cpp
+    src/ui/PathDisplay.cpp
     src/ui/SearchOverlay.cpp
     src/ui/PermissionRendererRegistry.cpp
+    src/ui/ToolRendererRegistry.cpp
     src/ui/permissions/DefaultPermissionRenderer.cpp
     src/ui/permissions/BashPermissionRenderer.cpp
     src/ui/permissions/FileEditPermissionRenderer.cpp

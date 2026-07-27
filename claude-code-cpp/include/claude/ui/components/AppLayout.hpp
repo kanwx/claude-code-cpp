@@ -33,6 +33,7 @@ struct FooterState {
     bool authenticated = false;
     bool modeHintDismissed = false;
     bool isStreaming = false;
+    bool collapsibleNavActive = false;
 };
 
 struct AppLayoutState {

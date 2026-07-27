@@ -66,6 +66,11 @@ struct AgentLoop::Impl {
 
     // Cancellation
     std::atomic<bool> cancelled{false};
+    // Monotonic counter incremented on every cancel(), never reset.
+    // Old runs snapshot this before tool execution so they can detect
+    // cancellation that happened during the tool phase, even after a
+    // new turn's resetCancel() clears the cancelled flag.
+    std::atomic<uint64_t> cancelGeneration{0};
 
     // Per-agent overrides
     int maxIterations = AgentLoop::DEFAULT_MAX_ITERATIONS;
@@ -74,6 +79,10 @@ struct AgentLoop::Impl {
 
     // Reactive compact
     int reactiveCompactAttempts = 0;
+
+    // Compact backoff: skip compact if history size hasn't changed since
+    // last validation failure.  See attemptReactiveCompact / applyAutoCompact.
+    size_t lastFailedCompactSize = 0;
 
     // Context injection
     ContextInjector* contextInjector = nullptr;
@@ -86,6 +95,10 @@ struct AgentLoop::Impl {
 
     // Interleaved execution
     bool interleaveToolExecution = false;
+
+    // Diagnostic: tracks whether compaction ran since last API request dump
+    bool compactionRecentlyRan = false;
+    int apiRequestCounter = 0;
 
     // Current user input
     String currentUserInput;

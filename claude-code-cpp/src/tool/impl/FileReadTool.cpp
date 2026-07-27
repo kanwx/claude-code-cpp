@@ -285,7 +285,60 @@ ToolResultSummary FileReadTool::renderToolResult(const String& result, bool isEr
     for (char c : result) { if (c == '\n') lines++; }
     if (!result.empty() && result.back() != '\n') lines++;
     if (lines == 0) lines = 1;
-    return ToolResultSummary::success("Read " + std::to_string(lines) + " lines", /*bold=*/true);
+
+    // Thread-safe: extract file path from result string, not from shared member.
+    // Result starts with "Contents of <path>:\n\n" for text files,
+    // "[IMAGE: <path> | ..." for images.
+    // Downstream formatToolResult expects primaryText = "N lines" (number first)
+    // and secondaryText = " from <path>" (with " from " prefix for cleanFilePath).
+    String secondary;
+    const String contentsPrefix = "Contents of ";
+    if (result.size() > contentsPrefix.size() &&
+        result.compare(0, contentsPrefix.size(), contentsPrefix) == 0) {
+        auto colon = result.find(":\n", contentsPrefix.size());
+        if (colon != String::npos) {
+            secondary = " from " + result.substr(contentsPrefix.size(),
+                                                  colon - contentsPrefix.size());
+        }
+    } else if (result.size() > 8 && result.compare(0, 8, "[IMAGE: ") == 0) {
+        auto pipePos = result.find(" |", 8);
+        if (pipePos != String::npos) {
+            secondary = " from " + result.substr(8, pipePos - 8);
+        }
+    }
+
+    // Build content preview: extract body after the "Contents of <path>:\n\n" header
+    String contentPreview;
+    bool truncated = false;
+    int previewLines = 0;
+    auto bodyStart = result.find("\n\n");
+    if (bodyStart != String::npos && bodyStart + 2 < result.size()) {
+        String body = result.substr(bodyStart + 2);
+        // Truncate to max 20 lines or 2000 chars
+        static constexpr int kMaxPreviewLines = 20;
+        static constexpr int kMaxPreviewChars = 2000;
+        int lineCount = 0;
+        size_t cutPos = 0;
+        for (size_t i = 0; i < body.size() && lineCount < kMaxPreviewLines && i < kMaxPreviewChars; ++i) {
+            if (body[i] == '\n') lineCount++;
+            cutPos = i + 1;
+        }
+        if (cutPos < body.size()) {
+            truncated = true;
+        }
+        contentPreview = body.substr(0, cutPos);
+        // Count actual preview lines
+        for (char c : contentPreview) { if (c == '\n') previewLines++; }
+        if (!contentPreview.empty() && contentPreview.back() != '\n') previewLines++;
+    }
+
+    auto summary = ToolResultSummary::success(std::to_string(lines) + " lines", /*bold=*/true,
+                                              /*secondary=*/secondary);
+    summary.contentPreview = std::move(contentPreview);
+    summary.contentPreviewTruncated = truncated;
+    summary.previewLinesShown = previewLines;
+    summary.totalLines = lines;
+    return summary;
 }
 
 } // namespace claude

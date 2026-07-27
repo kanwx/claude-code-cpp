@@ -745,7 +745,10 @@ std::vector<FtxuiMarkdown::ParsedBlock> FtxuiMarkdown::parse(const std::string& 
             continue;
         }
 
-        if (line.empty()) {
+        // Skip empty and whitespace-only lines.
+        // They still act as paragraph separators (break accumulation)
+        // but produce no visible element of their own.
+        if (line.empty() || line.find_first_not_of(" \t\r") == std::string::npos) {
             continue;
         }
 
@@ -1029,8 +1032,12 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
         case ParsedBlock::BulletList: {
             std::vector<Element> items;
             for (const auto& item : block.items) {
-                // Use paragraph with bullet prefix so text wraps naturally
-                items.push_back(ftxui::paragraph("  • " + item) | color(MdGold));
+                // hbox with fixed bullet prefix + flex paragraph gives hanging indent:
+                // wrapped continuation lines stay aligned with text after the bullet.
+                items.push_back(hbox({
+                    ftxui::text("  • ") | color(MdGold),
+                    ftxui::paragraph(item) | flex | color(MdGold),
+                }));
             }
             return vbox(std::move(items));
         }
@@ -1039,7 +1046,11 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
             std::vector<Element> items;
             int num = 1;
             for (const auto& item : block.items) {
-                items.push_back(ftxui::paragraph("  " + std::to_string(num) + ". " + item) | color(MdGold));
+                std::string prefix = "  " + std::to_string(num) + ". ";
+                items.push_back(hbox({
+                    ftxui::text(prefix) | color(MdGold),
+                    ftxui::paragraph(item) | flex | color(MdGold),
+                }));
                 num++;
             }
             return vbox(std::move(items));
@@ -1201,7 +1212,10 @@ Element FtxuiMarkdown::renderBlock(const ParsedBlock& block) {
             for (const auto& item : block.items) {
                 int indent = block.indentLevel;
                 std::string prefix = std::string(indent * 2, ' ') + "  • ";
-                items.push_back(ftxui::paragraph(prefix + item) | color(MdGold));
+                items.push_back(hbox({
+                    ftxui::text(prefix) | color(MdGold),
+                    ftxui::paragraph(item) | flex | color(MdGold),
+                }));
             }
             return vbox(std::move(items));
         }
@@ -1221,8 +1235,13 @@ bool FtxuiMarkdown::hasMarkdownSyntax(const std::string& text) {
 }
 
 std::vector<Element> FtxuiMarkdown::render(const std::string& markdown, const RenderOptions& options) {
-    // Fast path: skip the parser for plain text with no Markdown syntax
+    // Fast path: skip the parser for plain text with no Markdown syntax.
+    // Guard against all-whitespace input to avoid rendering a blank
+    // paragraph that still carries an "● " prefix in AnswerText.
     if (!hasMarkdownSyntax(markdown)) {
+        if (markdown.find_first_not_of(" \t\n\r") == std::string::npos) {
+            return {};
+        }
         auto elem = ftxui::paragraph(markdown);
         if (options.dimAll) {
             return {std::move(elem) | ftxui::dim};

@@ -4,6 +4,7 @@
 #include <claude/api/RetryableClient.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <iostream>
 
 namespace claude {
 
@@ -238,12 +239,11 @@ bool AgentLoop::hasCognitiveBackend() const {
 
 void AgentLoop::cancel() {
     impl_->cancelled.store(true, std::memory_order_release);
+    impl_->cancelGeneration.fetch_add(1, std::memory_order_release);
     impl_->apiClient.abort();
     if (impl_->toolExecutor) {
         impl_->toolExecutor->cancel();
     }
-    // Note: spdlog is NOT async-signal-safe, so we log from the
-    // loop's cancel check point rather than here.
 }
 
 bool AgentLoop::isCancelled() const {
@@ -489,11 +489,27 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             break;
         }
 
-        // Check cancellation after API call returns
-        // If cancelled mid-stream, the partial message may have incomplete content.
-        // Don't add it to history — just return what we have.
-        if (impl_->cancelled.load(std::memory_order_acquire)) {
+        // Check cancellation after API call returns.
+        // If cancelled mid-stream, the streaming code has already pushed the
+        // assistant message (with tool_use blocks) to history.  We must write
+        // synthetic tool_results here — otherwise P0's API-copy repair has to
+        // synthesize placeholders for every orphan tool_use.
+        if (result.wasAborted || impl_->cancelled.load(std::memory_order_acquire)) {
             spdlog::debug("AgentLoop: cancelled after API iteration {}", iteration);
+            if (result.message.hasToolCalls()) {
+                std::vector<ToolResponse> cancelledResults;
+                for (auto& tc : result.message.toolCalls) {
+                    ToolResponse resp;
+                    resp.callId = tc.id;
+                    resp.toolName = tc.name;
+                    resp.content = "Interrupted: tool execution was cancelled";
+                    resp.isError = true;
+                    resp.isCancelled = true;
+                    cancelledResults.push_back(std::move(resp));
+                }
+                insertOrMergeToolResultsAfterAssistant(
+                    result.message.toolCalls, cancelledResults, "Interrupted");
+            }
             {
                 auto cb = [&] {
                     std::lock_guard lock(impl_->callbackMutex);
@@ -508,10 +524,13 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // Add assistant message to history
+        // Save toolCalls before move — needed later for ordered
+        // insertOrMergeToolResultsAfterAssistant placement.
+        auto savedToolCalls = result.message.toolCalls;
         result.message.apiRound = iteration;
         {
             std::lock_guard lock(impl_->historyMutex);
-            impl_->messageHistory.push_back(result.message);
+            impl_->messageHistory.push_back(std::move(result.message));
         }
 
         // ========== Stop Hook ==========
@@ -593,7 +612,7 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
         }
 
         // No tool calls → end
-        if (!result.message.hasToolCalls() && result.interleavedToolResults.empty()) {
+        if (savedToolCalls.empty() && result.interleavedToolResults.empty()) {
             break;
         }
 
@@ -605,17 +624,59 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
             toolResponses = std::move(result.interleavedToolResults);
         }
 
+        // Snapshot the cancel generation BEFORE tool execution.
+        // cancelGeneration is monotonic (never reset), so even if a new turn's
+        // resetCancel() clears impl_->cancelled during a long-running tool,
+        // we can still detect that a cancel happened during THIS run.
+        const uint64_t cancelGenBefore = impl_->cancelGeneration.load(std::memory_order_acquire);
+
         // Execute any remaining tool calls (not interleaved)
-        if (result.message.hasToolCalls()) {
-            auto batchResponses = executeToolCalls(result.message.toolCalls);
+        if (!savedToolCalls.empty()) {
+            auto batchResponses = executeToolCalls(savedToolCalls);
             toolResponses.insert(toolResponses.end(),
                 std::make_move_iterator(batchResponses.begin()),
                 std::make_move_iterator(batchResponses.end()));
         }
 
+        // Check whether any tool was cancelled — per-result local state
+        // that survives resetCancel() in a new thread.
+        const bool toolWasCancelled = std::any_of(toolResponses.begin(), toolResponses.end(),
+            [](const ToolResponse& r) { return r.isCancelled; });
+
+        // Per-run sticky cancellation detection.  Uses three signals:
+        // 1. cancelGeneration:      monotonic — did cancel() fire during this run?
+        // 2. impl_->cancelled:      may be false if resetCancel() raced ahead
+        // 3. toolWasCancelled:      any tool response has isCancelled=true
+        const bool turnCancelled = (impl_->cancelGeneration.load(std::memory_order_acquire) != cancelGenBefore)
+                                 || impl_->cancelled.load(std::memory_order_acquire)
+                                 || toolWasCancelled;
+
         // Check cancellation after tool execution
-        if (impl_->cancelled.load(std::memory_order_acquire)) {
-            spdlog::debug("AgentLoop: cancelled after tool execution at iteration {}", iteration);
+        if (turnCancelled) {
+            spdlog::debug("AgentLoop: cancelled after tool execution at iteration {} "
+                          "(cancelGen {} -> {})", iteration, cancelGenBefore,
+                          impl_->cancelGeneration.load(std::memory_order_acquire));
+
+            // Force-override ALL tool results as cancelled.  Even if the tool
+            // process finished normally (e.g. a 30 s sleep that completed
+            // after ESC was pressed), from the agent's perspective this turn
+            // was cancelled and the result must be treated as interrupted.
+            // If we don't rewrite here, the late real result (e.g. "Slept for
+            // 30 seconds") would overwrite the "Interrupted" placeholder in
+            // history, causing the UI to show a stale success state.
+            for (auto& tr : toolResponses) {
+                tr.isCancelled = true;
+                if (!tr.isError) {
+                    tr.content = "Interrupted: tool execution was cancelled";
+                }
+            }
+
+            // Write tool results into messageHistory before returning.
+            // Without this, the assistant tool_use blocks in history lack
+            // matching tool_results, forcing P0's API-copy repair to synthesize
+            // [Error: tool execution was interrupted] placeholders.
+            insertOrMergeToolResultsAfterAssistant(
+                savedToolCalls, toolResponses, "Interrupted");
             {
                 auto cb = [&] {
                     std::lock_guard lock(impl_->callbackMutex);
@@ -674,8 +735,15 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
                 pendingSkillModel, pendingSkillTools.size(), pendingSkillPrompt.size());
         }
 
-        // Add tool results to history
-        {
+        // Add tool results to history — use ordered insert so
+        // tool_results land immediately after the assistant message
+        // even when an old (detached) thread runs after a new prompt
+        // has already pushed user messages.
+        if (!savedToolCalls.empty()) {
+            insertOrMergeToolResultsAfterAssistant(
+                savedToolCalls, toolResponses, "Interrupted");
+        } else if (!toolResponses.empty()) {
+            // Interleaved-only: no toolCalls in the message itself
             auto toolMsg = Message::toolResult(std::move(toolResponses));
             toolMsg.apiRound = iteration;
             std::lock_guard lock(impl_->historyMutex);
@@ -734,6 +802,131 @@ std::expected<String, String> AgentLoop::executeLoop(bool streaming, OnToken onT
 // API request building
 // ============================================================================
 
+namespace {
+
+// Escape newlines/tabs for single-line preview output
+String escapePreview(const String& s) {
+    String out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '\n') out += "\\n";
+        else if (c == '\t') out += "\\t";
+        else if (c == '\r') out += "\\r";
+        else out += c;
+    }
+    return out;
+}
+
+void dumpApiMessagesDiagnostic(
+    const std::vector<Message>& legacyHistory,
+    const Json& apiMessages,
+    int requestIndex,
+    bool compactionRecentlyRan,
+    double contextUsagePercent
+) {
+    const char* env = std::getenv("CLAUDE_CODE_DEBUG_API_MESSAGES");
+    if (!env || env[0] != '1' || env[1] != '\0') return;
+
+    std::ostream& out = std::cerr;
+    out << "\n=== API_REQUEST_MESSAGES_DUMP ===\n";
+    out << "request_index: " << requestIndex << "\n";
+    out << "compaction_recently_ran: " << (compactionRecentlyRan ? "true" : "false") << "\n";
+    out << "context_usage_percent: " << static_cast<int>(contextUsagePercent * 100) << "%\n";
+    out << "legacy_message_count: " << legacyHistory.size() << "\n";
+    out << "api_message_count: " << (apiMessages.is_array() ? apiMessages.size() : 0) << "\n";
+
+    // --- Legacy history (internal Message structs) ---
+    out << "\n--- LEGACY MESSAGE HISTORY ---\n";
+    for (size_t i = 0; i < legacyHistory.size(); ++i) {
+        const auto& msg = legacyHistory[i];
+        const char* roleStr = "unknown";
+        switch (msg.role) {
+            case MessageRole::System:    roleStr = "system"; break;
+            case MessageRole::User:      roleStr = "user"; break;
+            case MessageRole::Assistant: roleStr = "assistant"; break;
+            case MessageRole::ToolResult: roleStr = "tool_result"; break;
+        }
+        out << "  [" << i << "] role=" << roleStr;
+        if (!msg.toolCalls.empty()) {
+            out << " toolCalls=" << msg.toolCalls.size() << " ids=[";
+            for (size_t j = 0; j < msg.toolCalls.size(); ++j) {
+                if (j) out << ", ";
+                out << msg.toolCalls[j].id;
+            }
+            out << "]";
+        }
+        if (!msg.toolResults.empty()) {
+            out << " toolResults=" << msg.toolResults.size() << " ids=[";
+            for (size_t j = 0; j < msg.toolResults.size(); ++j) {
+                if (j) out << ", ";
+                out << msg.toolResults[j].callId;
+            }
+            out << "]";
+        }
+        // Preview of text content (first 120 chars, escaped)
+        String preview;
+        if (!msg.content.empty()) {
+            preview = msg.content.size() > 120 ? msg.content.substr(0, 120) + "..." : msg.content;
+        }
+        // Also check toolResults content
+        if (preview.empty() && !msg.toolResults.empty()) {
+            for (const auto& tr : msg.toolResults) {
+                if (!tr.content.empty()) {
+                    preview = tr.content.size() > 120 ? tr.content.substr(0, 120) + "..." : tr.content;
+                    break;
+                }
+            }
+        }
+        if (!preview.empty()) {
+            out << " content_preview=\"" << escapePreview(preview) << "\"";
+        }
+        out << "\n";
+    }
+
+    // --- API messages (serialized) ---
+    out << "\n--- API MESSAGES ---\n";
+    if (!apiMessages.is_array()) {
+        out << "  (not an array)\n";
+    } else {
+        for (size_t i = 0; i < apiMessages.size(); ++i) {
+            const auto& m = apiMessages[i];
+            String role = m.value("role", "?");
+            out << "  [" << i << "] role=" << role;
+            if (m.contains("content") && m["content"].is_array()) {
+                out << " content_blocks=" << m["content"].size() << "\n";
+                for (const auto& block : m["content"]) {
+                    String type = block.value("type", "?");
+                    out << "      - type=" << type;
+                    if (type == "text") {
+                        String text = block.value("text", "");
+                        String preview = text.size() > 120 ? text.substr(0, 120) + "..." : text;
+                        out << " len=" << text.size()
+                            << " preview=\"" << escapePreview(preview) << "\"";
+                    } else if (type == "tool_use") {
+                        out << " id=" << block.value("id", "?")
+                            << " name=" << block.value("name", "?");
+                    } else if (type == "tool_result") {
+                        out << " tool_use_id=" << block.value("tool_use_id", "?")
+                            << " is_error=" << (block.value("is_error", false) ? "true" : "false");
+                    } else if (type == "thinking") {
+                        String thinking = block.value("thinking", "");
+                        out << " len=" << thinking.size();
+                    } else if (type == "redacted_thinking") {
+                        out << " data_len=" << block.value("data", "").size();
+                    }
+                    out << "\n";
+                }
+            } else {
+                out << "\n";
+            }
+        }
+    }
+
+    out << "=== END API_REQUEST_MESSAGES_DUMP ===\n" << std::endl;
+}
+
+} // anonymous namespace
+
 Json AgentLoop::buildApiRequest() {
     // Convert legacy messages to ContentMessage, then serialize via
     // provider-specific functions. The internal messageHistory stays as
@@ -745,6 +938,85 @@ Json AgentLoop::buildApiRequest() {
         for (const auto& old : impl_->messageHistory) {
             contentHistory.push_back(convertLegacyMessage(old));
         }
+    }
+
+    // ===== API_MESSAGES_PRECHECK: dump summary before any repair =====
+    dumpContentHistory("API_MESSAGES_PRECHECK (raw)", contentHistory);
+
+    // ===== Validate empty messages BEFORE repair =====
+    // Catch cancelled turns that left empty assistant messages, empty text
+    // blocks, etc. before the tool_result injector runs.
+    if (!validateEmptyMessages(contentHistory)) {
+        fprintf(stderr, "[ERROR] buildApiRequest: empty message/content detected "
+                "in pre-repair check — rejecting request\n");
+        throw std::runtime_error(
+            "Cannot send request: empty message or content block in history. "
+            "This usually means a cancelled turn was persisted incorrectly.");
+    }
+
+    // ===== Protocol safety net: inject synthetic tool_results for orphaned tool_uses =====
+    // If a previous turn was cancelled or interrupted before tool_results were
+    // committed to history, orphan tool_use blocks would cause 400 errors from
+    // the Anthropic API.  Repair the local copy by injecting/moving tool_results
+    // to the correct positions, then validate the result.
+    int syntheticResults = injectMissingToolResults(contentHistory);
+    if (syntheticResults > 0) {
+        fprintf(stderr, "[WARN] buildApiRequest: repaired %d synthetic tool_result(s) "
+                "for orphaned tool_use blocks\n", syntheticResults);
+    }
+
+    // Final safety net: coalesce any adjacent same-role messages that may
+    // remain after repair.  The coalesce inside injectMissingToolResults
+    // covers removals made during repair, but other code paths (e.g.
+    // auto-compact) can introduce consecutive assistants that weren't
+    // visited by the repair loop.
+    int coalesced = coalesceAdjacentSameRole(contentHistory);
+    if (coalesced > 0) {
+        spdlog::debug("buildApiRequest: coalesced {} adjacent same-role message(s) "
+                      "as safety net", coalesced);
+    }
+
+    // Persist the repaired ContentMessage history back to impl_->messageHistory
+    // so repair is idempotent — the same orphan tool_use won't be repaired again
+    // on subsequent API calls, and coalesced adjacent messages stay merged.
+    //
+    // Only write back if repair actually changed something (synthetic injected
+    // or messages were merged/coalesced), to avoid unnecessary history locks.
+    {
+        std::lock_guard lock(impl_->historyMutex);
+        // Convert each repaired ContentMessage back to legacy Message.
+        // A ToolResult ContentMessage that was merged into a User message
+        // becomes part of that User message's toolResults vector — no more
+        // standalone ToolResult messages that cause consecutive users.
+        std::vector<Message> repairedHistory;
+        repairedHistory.reserve(contentHistory.size());
+        for (const auto& cm : contentHistory) {
+            repairedHistory.push_back(convertContentMessageToLegacy(cm));
+        }
+
+        // Verify the conversion didn't lose information by comparing sizes
+        if (repairedHistory.size() != contentHistory.size()) {
+            fprintf(stderr, "[ERROR] buildApiRequest: legacy conversion size mismatch "
+                    "(%zu ContentMessage -> %zu Message) — this is a bug\n",
+                    contentHistory.size(), repairedHistory.size());
+        }
+
+        impl_->messageHistory = std::move(repairedHistory);
+    }
+
+    // Re-dump after repair
+    dumpContentHistory("API_MESSAGES_PRECHECK (repaired)", contentHistory);
+
+    // Hard validation: after repair, verify protocol invariants.
+    // If still invalid, reject the request locally rather than sending a
+    // guaranteed 400 to the API.
+    if (!validateEmptyMessages(contentHistory) ||
+        !validateToolResultOrdering(contentHistory)) {
+        fprintf(stderr, "[ERROR] buildApiRequest: protocol validation FAILED "
+                "after repair — rejecting request\n");
+        throw std::runtime_error(
+            "Cannot send request: pending tool result not finalized. "
+            "Wait for the current tool to complete or press ESC to cancel.");
     }
 
     // Strip thinking from assistant messages (ContentMessage view).
@@ -775,8 +1047,10 @@ Json AgentLoop::buildApiRequest() {
 
     // Build messages using provider-specific serialization
     auto provider = impl_->apiClient.getProviderName();
+    Json apiMessages;
     if (provider == "anthropic") {
-        request["messages"] = buildAnthropicApiMessages(contentHistory);
+        apiMessages = buildAnthropicApiMessages(contentHistory);
+        request["messages"] = apiMessages;
     } else {
         // OpenAI: serialize each ContentMessage, expand tool results to separate messages
         Json messages = Json::array();
@@ -789,7 +1063,11 @@ Json AgentLoop::buildApiRequest() {
                         Json tr;
                         tr["role"] = "tool";
                         tr["tool_call_id"] = block.toolUseId;
-                        tr["content"] = block.resultContent;
+                        String content = block.resultContent;
+                        if (content.empty()) {
+                            content = "(no output)";
+                        }
+                        tr["content"] = content;
                         messages.push_back(tr);
                     }
                 }
@@ -797,7 +1075,29 @@ Json AgentLoop::buildApiRequest() {
                 messages.push_back(serializeContentMessageForOpenAI(msg));
             }
         }
+        apiMessages = messages;
         request["messages"] = messages;
+    }
+
+    // --- Diagnostic dump (gated by CLAUDE_CODE_DEBUG_API_MESSAGES=1) ---
+    {
+        impl_->apiRequestCounter++;
+        int reqIdx = impl_->apiRequestCounter;
+        bool compactRan = impl_->compactionRecentlyRan;
+        double usagePct = impl_->tokenTracker.getUsagePercentage();
+
+        // Snapshot legacy history under lock for the dump
+        std::vector<Message> legacySnapshot;
+        {
+            std::lock_guard lock(impl_->historyMutex);
+            legacySnapshot = impl_->messageHistory;
+        }
+
+        dumpApiMessagesDiagnostic(legacySnapshot, apiMessages, reqIdx, compactRan, usagePct);
+
+        // Reset compaction flag after dump so it only shows true for
+        // the request immediately following a compaction
+        impl_->compactionRecentlyRan = false;
     }
 
     // Convert tool definitions to JSON array (per provider format)
@@ -857,6 +1157,31 @@ Json AgentLoop::buildApiRequest() {
     }
     if (impl_->maxTokensOverride > 0) {
         impl_->apiClient.setMaxTokens(impl_->maxTokensOverride);
+    }
+
+    // ===== Final JSON validation: check the ACTUAL serialized payload =====
+    // The C++ struct validators pass, but the JSON serializer may strip
+    // fields or produce blocks that fail Anthropic's schema.  Catch that here.
+    if (!validateSerializedApiJson(request)) {
+        if (getenv("CLAUDE_CODE_DEBUG_API_MESSAGES")) {
+            fprintf(stderr, "[ERROR] buildApiRequest: serialized JSON validation FAILED\n");
+            // Dump sanitized JSON summary (no user content)
+            String summary;
+            if (request.contains("messages")) {
+                auto& msgs = request["messages"];
+                for (size_t i = 0; i < msgs.size() && i < 20; ++i) {
+                    auto& m = msgs[i];
+                    String role = m.value("role", "?");
+                    size_t nBlocks = m.value("content", Json::array()).size();
+                    summary += "[" + std::to_string(i) + "] role=" + role
+                             + " blocks=" + std::to_string(nBlocks) + "\n";
+                }
+            }
+            fprintf(stderr, "--- FAILING JSON SUMMARY ---\n%s--- END SUMMARY ---\n", summary.c_str());
+        }
+        throw std::runtime_error(
+            "Cannot send request: serialized JSON failed protocol validation. "
+            "See stderr for details (set CLAUDE_CODE_DEBUG_API_MESSAGES=1).");
     }
 
     return request;

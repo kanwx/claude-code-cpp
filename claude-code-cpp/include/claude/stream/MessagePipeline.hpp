@@ -61,6 +61,15 @@ public:
     // Categories: 0=collapsible, 1=search, 2=read, 3=list, 4=memory
     void setToolClassifier(ToolClassifier cb) { toolClassifier_ = std::move(cb); }
 
+    /// Check if an AnswerText block is inter-tool narration (should not break groups).
+    bool isToolNarration(const ContentBlock& block) const;
+
+    /// P6-P2b: Dim all AnswerText blocks identified as inter-tool narration
+    /// in [startIndex, blocks.size()).  Only affects non-dimmed blocks —
+    /// already-dimmed blocks are left unchanged (idempotent, current-turn scoped).
+    void dimToolNarration(std::vector<ContentBlock>& blocks,
+                          size_t startIndex = 0) const;
+
 private:
     Config config_;
     MessageLookups lookups_;

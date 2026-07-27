@@ -150,11 +150,18 @@ struct ToolResultSummary {
     /// layer through to the MessagePipeline collapse summary without text parsing.
     String displayHint;
 
+    /// Expanded content preview for Read tool (empty for all other tools).
+    /// Populated by FileReadTool::renderToolResult() from the raw file content.
+    String contentPreview;
+    bool contentPreviewTruncated = false;
+    int previewLinesShown = 0;
+    int totalLines = 0;
+
     static ToolResultSummary success(const String& primary, bool bold = false,
                                       const String& secondary = "",
                                       const String& expand = "",
                                       const String& hint = "") {
-        return {primary, bold, secondary, expand, "", false, false, hint};
+        return {primary, bold, secondary, expand, "", false, false, hint, "", false, 0, 0};
     }
     static ToolResultSummary dim(const String& primary) {
         return {primary, false, "", "", "", true, false, ""};

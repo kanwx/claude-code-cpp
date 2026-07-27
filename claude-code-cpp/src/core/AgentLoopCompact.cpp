@@ -5,8 +5,171 @@
 #include <claude/core/compact/SessionMemoryCompact.hpp>
 #include <claude/core/compact/ApiMicroCompact.hpp>
 #include <spdlog/spdlog.h>
+#include <cstdio>
+#include <set>
 
 namespace claude {
+
+namespace {
+
+/// Dump a message summary line for compact diagnostics.
+/// Format: idx=<N> role=<role> blocks=<N> toolUseIds=[...] toolResultIds=[...] textLen=<N> preview="..."
+static void dumpCompactMessage(const Message& msg, size_t idx, FILE* out) {
+    const char* roleStr = "?";
+    switch (msg.role) {
+        case MessageRole::System:    roleStr = "system"; break;
+        case MessageRole::User:      roleStr = "user"; break;
+        case MessageRole::Assistant: roleStr = "assistant"; break;
+        case MessageRole::ToolResult:roleStr = "tool_result"; break;
+    }
+
+    // Collect tool_use / tool_result IDs
+    std::vector<String> toolUseIds, toolResultIds;
+    for (auto& tc : msg.toolCalls) toolUseIds.push_back(tc.id);
+    for (auto& tr : msg.toolResults) toolResultIds.push_back(tr.callId);
+
+    size_t textLen = msg.content.size();
+    // Build IDs string
+    String tuStr, trStr;
+    for (size_t k = 0; k < toolUseIds.size(); ++k) {
+        if (k) tuStr += ",";
+        tuStr += toolUseIds[k];
+    }
+    for (size_t k = 0; k < toolResultIds.size(); ++k) {
+        if (k) trStr += ",";
+        trStr += toolResultIds[k];
+    }
+
+    // Truncate preview
+    String preview = msg.content.size() > 80
+        ? msg.content.substr(0, 80) + "..." : msg.content;
+    // Escape newlines
+    for (auto& c : preview) if (c == '\n') c = '\\';
+
+    fprintf(out,
+        "  idx=%-4zu role=%-12s toolUseIds=[%s] toolResultIds=[%s] textLen=%-6zu preview=\"%s\"\n",
+        idx, roleStr, tuStr.c_str(), trStr.c_str(), textLen, preview.c_str());
+}
+
+/// Dump compact diagnostics: before/after message structure.
+static void dumpCompactDiagnostics(const std::vector<Message>& history,
+                                   const char* label,
+                                   size_t maxLines = 24) {
+    FILE* out = stderr;
+    size_t n = history.size();
+    fprintf(out, "\n[%s] total_messages=%zu\n", label, n);
+    if (n <= maxLines) {
+        for (size_t i = 0; i < n; ++i) {
+            dumpCompactMessage(history[i], i, out);
+        }
+    } else {
+        // First 5
+        fprintf(out, "  --- first 5 ---\n");
+        for (size_t i = 0; i < 5 && i < n; ++i) {
+            dumpCompactMessage(history[i], i, out);
+        }
+        // Last (maxLines - 5)
+        size_t show = maxLines - 5;
+        fprintf(out, "  --- last %zu ---\n", show);
+        for (size_t i = n - show; i < n; ++i) {
+            dumpCompactMessage(history[i], i, out);
+        }
+    }
+    fprintf(out, "\n");
+}
+
+/// Validate compacted history structure.
+/// Checks for critical structural issues that would corrupt tool ownership
+/// or violate API protocol invariants.  Prints detailed diagnostics on failure.
+bool validateCompactedHistory(const std::vector<Message>& history,
+                              const char* context) {
+    bool ok = true;
+    for (size_t i = 0; i < history.size(); ++i) {
+        const auto& msg = history[i];
+
+        // Check 1: no empty messages
+        if (msg.content.empty() && msg.toolCalls.empty() &&
+            msg.toolResults.empty()) {
+            fprintf(stderr, "[ERROR] %s: message[%zu] is EMPTY (no content, "
+                    "no toolCalls, no toolResults)\n", context, i);
+            ok = false;
+        }
+
+        // Check 2: no consecutive assistant messages
+        if (i > 0 && msg.role == MessageRole::Assistant &&
+            history[i - 1].role == MessageRole::Assistant) {
+            fprintf(stderr,
+                "[ERROR] %s: consecutive assistant messages at [%zu, %zu]\n"
+                "  prev[%zu]: toolUseIds=%zu textLen=%zu\n"
+                "  cur [%zu]: toolUseIds=%zu textLen=%zu\n",
+                context, i - 1, i,
+                i - 1, history[i - 1].toolCalls.size(), history[i - 1].content.size(),
+                i, msg.toolCalls.size(), msg.content.size());
+            ok = false;
+        }
+
+        // Check 2b: no consecutive user messages
+        if (i > 0 && msg.role == MessageRole::User &&
+            history[i - 1].role == MessageRole::User) {
+            fprintf(stderr,
+                "[ERROR] %s: consecutive user messages at [%zu, %zu]\n"
+                "  prev[%zu]: textLen=%zu\n"
+                "  cur [%zu]: textLen=%zu\n",
+                context, i - 1, i,
+                i - 1, history[i - 1].content.size(),
+                i, msg.content.size());
+            ok = false;
+        }
+    }
+
+    // Check 3: no orphaned tool_use (assistant with toolCalls must have
+    // matching toolResults in subsequent messages before the next assistant)
+    for (size_t i = 0; i < history.size(); ++i) {
+        if (history[i].role != MessageRole::Assistant) continue;
+        if (history[i].toolCalls.empty()) continue;
+
+        // Collect expected call IDs
+        std::vector<String> expectedIds;
+        for (auto& tc : history[i].toolCalls) {
+            expectedIds.push_back(tc.id);
+        }
+
+        // Search forward for matching toolResults (before next assistant)
+        std::set<String> foundIds;
+        size_t nextAsst = history.size();
+        for (size_t j = i + 1; j < history.size(); ++j) {
+            if (history[j].role == MessageRole::Assistant) {
+                nextAsst = j;
+                break;
+            }
+            for (auto& tr : history[j].toolResults) {
+                foundIds.insert(tr.callId);
+            }
+        }
+
+        for (auto& id : expectedIds) {
+            if (foundIds.count(id) == 0) {
+                fprintf(stderr,
+                    "[ERROR] %s: orphan tool_use '%s' at assistant[%zu]\n"
+                    "  no matching tool_result found in messages [%zu, %zu)\n"
+                    "  next assistant at [%zu]\n",
+                    context, id.c_str(), i,
+                    i + 1, nextAsst, nextAsst);
+                ok = false;
+            }
+        }
+    }
+
+    if (ok) {
+        spdlog::debug("{}: VALIDATION_AFTER_COMPACT PASS", context);
+    } else {
+        spdlog::error("{}: VALIDATION_AFTER_COMPACT FAIL", context);
+        dumpCompactDiagnostics(history, context, 24);
+    }
+    return ok;
+}
+
+} // anonymous namespace
 
 // ============================================================================
 // Compact operations
@@ -69,21 +232,57 @@ bool AgentLoop::applyAutoCompact() {
             std::lock_guard lock(impl_->historyMutex);
             historySnapshot = impl_->messageHistory;
         }
+
+        // Backoff: if compact failed on this same history size, skip until
+        // history changes.  Prevents the fail-loop where compact repeatedly
+        // fails and burns API calls without making progress.
+        if (impl_->lastFailedCompactSize > 0 &&
+            historySnapshot.size() == impl_->lastFailedCompactSize) {
+            spdlog::debug("Auto-compact: skipping (backoff — last compact failed "
+                          "at same history size={})", historySnapshot.size());
+            return false;
+        }
+
+        // Diagnostic: dump pre-compact state
+        spdlog::debug("COMPACT_BEFORE: {} messages, usage={:.1f}%",
+            historySnapshot.size(),
+            static_cast<double>(currentTokens) / contextWindow * 100.0);
+        dumpCompactDiagnostics(historySnapshot, "COMPACT_BEFORE_LAST12", 12);
+
         auto newHistory = impl_->autoCompact->compact(historySnapshot);
         if (newHistory) {
+            impl_->compactionRecentlyRan = true;
+
+            // Pre-cleanup validation: check if compressAndRebuild output
+            // is already structurally invalid before cleanup touches it.
+            bool preCleanupOk = validateCompactedHistory(
+                *newHistory, "before_cleanup_auto_compact");
+
             // Post-compact cleanup
             compact::PostCompactCleanup::cleanup(*newHistory);
 
-            // Extract session memory from compacted messages
-            auto facts = compact::SessionMemoryCompact::extractKeyFacts(historySnapshot);
-            if (!facts.empty()) {
-                String memoryBlock = compact::SessionMemoryCompact::buildMemoryBlock(facts);
-                spdlog::debug("Auto-compact: extracted {} key facts into memory block", facts.size());
-                if (newHistory->size() > 2) {
-                    newHistory->insert(newHistory->end() - 2,
-                        Message::user("[Session memory from prior conversation]\n" + memoryBlock));
-                }
+            // Validate compacted history structure BEFORE replacing live history.
+            // If validation fails, discard the compact result and keep the
+            // original history intact — a corrupt compact must not poison the
+            // conversation.
+            if (!validateCompactedHistory(*newHistory, "after_auto_compact")) {
+                spdlog::error("Auto-compact: validation failed — discarding "
+                              "compacted result, keeping original history "
+                              "(pre_cleanup_ok={})", preCleanupOk);
+                // Record failure for backoff: don't retry compact on same history size
+                impl_->lastFailedCompactSize = historySnapshot.size();
+                return false;
             }
+
+            // Compact succeeded — clear backoff
+            impl_->lastFailedCompactSize = 0;
+
+            spdlog::debug("COMPACT_AFTER: {} messages -> {} messages, "
+                          "VALIDATION_AFTER_COMPACT PASS",
+                          historySnapshot.size(), newHistory->size());
+
+            // Session memory is already injected by compressAndRebuild() —
+            // no duplicate extraction here.
 
             std::lock_guard lock(impl_->historyMutex);
             size_t oldSize = impl_->messageHistory.size();
@@ -216,7 +415,22 @@ bool AgentLoop::applyAutoCompact() {
     }
 
     // Post-compact cleanup on the new history
+    impl_->compactionRecentlyRan = true;
+    bool fallbackPreCleanupOk = validateCompactedHistory(
+        newHistory, "before_cleanup_fallback_compact");
     compact::PostCompactCleanup::cleanup(newHistory);
+
+    // Validate compacted history structure BEFORE replacing live history.
+    if (!validateCompactedHistory(newHistory, "after_fallback_compact")) {
+        spdlog::error("Auto-compact (fallback): validation failed — discarding "
+                      "compacted result, keeping original history "
+                      "(pre_cleanup_ok={})", fallbackPreCleanupOk);
+        // Record failure for backoff
+        size_t snapSize = toCompressSnapshot.size() + recentMsgsSnapshot.size() + 1;
+        impl_->lastFailedCompactSize = snapSize;
+        return false;
+    }
+    impl_->lastFailedCompactSize = 0;
 
     {
         std::lock_guard lock(impl_->historyMutex);
@@ -257,9 +471,21 @@ bool AgentLoop::attemptReactiveCompact(long tokenGap) {
             std::lock_guard lock(impl_->historyMutex);
             historySnapshot = impl_->messageHistory;
         }
+        dumpCompactDiagnostics(historySnapshot, "REACTIVE_COMPACT_BEFORE_LAST12", 12);
         auto newHistory = impl_->autoCompact->compact(historySnapshot);
         if (newHistory) {
+            impl_->compactionRecentlyRan = true;
+            bool preCleanupOk = validateCompactedHistory(
+                *newHistory, "before_cleanup_reactive_compact");
             compact::PostCompactCleanup::cleanup(*newHistory);
+            if (!validateCompactedHistory(*newHistory, "after_reactive_compact")) {
+                spdlog::error("Reactive compact: validation failed — discarding "
+                              "compacted result, keeping original history "
+                              "(pre_cleanup_ok={})", preCleanupOk);
+                impl_->lastFailedCompactSize = historySnapshot.size();
+                return false;
+            }
+            impl_->lastFailedCompactSize = 0;
             std::lock_guard lock(impl_->historyMutex);
             impl_->messageHistory = std::move(*newHistory);
 

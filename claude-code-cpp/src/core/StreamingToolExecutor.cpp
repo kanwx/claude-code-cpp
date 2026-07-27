@@ -33,9 +33,23 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
 ) {
     if (toolCalls.empty()) return {};
 
+    // Bump generation so any stale executeSingle calls from a previous
+    // (detached) thread will detect the mismatch and bail out without
+    // touching the callbacks we're about to wire.
+    generation_.fetch_add(1, std::memory_order_release);
+
     // Reset cancellation state at the start of each batch
     cancelled_.store(false, std::memory_order_relaxed);
     executing_.store(true, std::memory_order_release);
+
+    // Clean up stale cancel tokens from previous runs
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        activeCancelTokens_.erase(
+            std::remove_if(activeCancelTokens_.begin(), activeCancelTokens_.end(),
+                [](const std::weak_ptr<std::atomic<bool>>& w) { return w.expired(); }),
+            activeCancelTokens_.end());
+    }
 
     // Result vector pre-allocated to preserve ordering by index
     std::vector<ToolExecutionResult> results(toolCalls.size());
@@ -163,7 +177,20 @@ std::vector<ToolExecutionResult> StreamingToolExecutor::executeWithOrder(
 
 void StreamingToolExecutor::cancel() {
     cancelled_.store(true, std::memory_order_relaxed);
-    spdlog::debug("StreamingToolExecutor: cancellation requested");
+    generation_.fetch_add(1, std::memory_order_release);
+    spdlog::debug("StreamingToolExecutor: cancellation requested (gen={})",
+                  generation_.load(std::memory_order_acquire));
+
+    // P4: Signal all active per-tool cancel tokens so running Process
+    // polling loops detect the cancellation and kill the process group.
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        for (auto& weak : activeCancelTokens_) {
+            if (auto token = weak.lock()) {
+                token->store(true, std::memory_order_relaxed);
+            }
+        }
+    }
 }
 
 bool StreamingToolExecutor::isExecuting() const {
@@ -267,6 +294,11 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     bool parallel
 ) {
     auto startTime = std::chrono::steady_clock::now();
+
+    // Capture generation at entry so we can detect when a newer execute()
+    // (or cancel()) has happened on a different thread while we were
+    // blocked inside tool->execute() (e.g. sleep).
+    const uint64_t entryGen = generation_.load(std::memory_order_acquire);
 
     activeCount_.fetch_add(1, std::memory_order_relaxed);
 
@@ -406,6 +438,16 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     }
 
     // ====== Execute the tool ======
+    // P4: Create a per-tool cancel token so Process::execute() can be
+    // interrupted from the cancel() path.  Shared with BashTool via context
+    // and tracked via weak_ptr so the token lifetime matches the tool call.
+    auto cancelToken = std::make_shared<std::atomic<bool>>(false);
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        activeCancelTokens_.push_back(cancelToken);
+    }
+    context_.set("__p4_cancel_token", cancelToken);
+
     String result;
     bool isError = false;
     try {
@@ -424,6 +466,15 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     } catch (...) {
         result = "Error: Unknown exception during tool execution";
         isError = true;
+    }
+
+    // Clean up the P4 cancel token now that tool execution has finished
+    {
+        std::lock_guard<std::mutex> lock(cancelTokensMutex_);
+        activeCancelTokens_.erase(
+            std::remove_if(activeCancelTokens_.begin(), activeCancelTokens_.end(),
+                [](const std::weak_ptr<std::atomic<bool>>& w) { return w.expired(); }),
+            activeCancelTokens_.end());
     }
 
     // ====== Per-tool result truncation ======
@@ -447,13 +498,33 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
     // ====== Post-execution cancellation check ======
     // If cancellation was requested while the tool was executing,
     // mark the response as cancelled so the UI renders it correctly.
-    bool wasCancelled = cancelled_.load(std::memory_order_relaxed);
+    //
+    // Also detect stale generation: if another thread called execute() or
+    // cancel() while we were blocked inside tool->execute() (e.g. sleep),
+    // the generation counter will have changed.  In that case the callbacks
+    // wired by the old executeToolCalls() may have been overwritten or
+    // reference dangling stack variables — we must NOT call them.
+    const bool generationChanged = generation_.load(std::memory_order_acquire) != entryGen;
+    bool wasCancelled = cancelled_.load(std::memory_order_relaxed) || generationChanged;
+
+    if (generationChanged) {
+        // Override the tool result so callers see a cancellation, not a
+        // stale success that would overwrite the Interrupted placeholder
+        // already in messageHistory.
+        result = "Interrupted: tool execution was cancelled";
+        isError = true;
+    }
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - startTime);
 
     activeCount_.fetch_sub(1, std::memory_order_relaxed);
-    if (onToolComplete_) onToolComplete_(call.name, !isError);
+
+    // Skip callbacks when generation changed — they belong to a newer
+    // execution and capturing references may be dangling.
+    if (!generationChanged) {
+        if (onToolComplete_) onToolComplete_(call.name, !isError);
+    }
 
     // ====== Build result with display summary ======
     ToolExecutionResult execResult{
@@ -481,7 +552,8 @@ ToolExecutionResult StreamingToolExecutor::executeSingle(
 
     // Fire per-tool-result-ready callback — enables progressive yielding
     // (each tool completion immediately emits a StreamToolEvent rather than batching)
-    if (onToolResultReady_) {
+    // Skip when generation changed (callbacks belong to a newer execution).
+    if (!generationChanged && onToolResultReady_) {
         onToolResultReady_(execResult);
     }
 

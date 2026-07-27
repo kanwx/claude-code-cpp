@@ -17,6 +17,7 @@
 #include <claude/permission/RuleEngine.hpp>
 #include <claude/permission/PermissionSettings.hpp>
 #include <claude/console/AnsiStyle.hpp>
+#include <claude/console/AnsiSuppress.hpp>
 #include <claude/console/MessageResponse.hpp>
 #include <claude/console/Spinner.hpp>
 #include <claude/context/ContextInjector.hpp>
@@ -295,7 +296,8 @@ void setupCallbacks(AgentLoop& loop,
                      Spinner* spinner,
                      FtxuiRepl* ftxuiRepl,
                      HeadlessContentBlockAccumulator* headlessAccumulator,
-                     std::function<PermissionChoice(const PermissionRequest&)> permissionCallback) {
+                     std::function<PermissionChoice(const PermissionRequest&)> permissionCallback,
+                     bool isPrintMode) {
     // Tool event callback — now handled by new 5-layer pipeline via StreamToolEvent.
     // Kept as minimal callback for spinner stop and debug logging only.
     loop.setOnToolEvent([spinner](const ToolEvent& event) {
@@ -336,12 +338,16 @@ void setupCallbacks(AgentLoop& loop,
     });
 
     // TAOR loop continue callback
-    loop.setOnLoopContinue([useFtxui](int iteration, int maxIterations) {
-        if (!useFtxui) {
-            std::cout << "\n\033[s"
-                      << AnsiStyle::DIM << "  ⟳ Continuing... (turn "
-                      << iteration << ")" << AnsiStyle::RESET
-                      << "\033[u" << std::flush;
+    loop.setOnLoopContinue([useFtxui, isPrintMode](int iteration, int /*maxIterations*/) {
+        if (!useFtxui && !isPrintMode) {
+            if (supportsAnsiStdout()) {
+                std::cout << "\n\033[s"
+                          << AnsiStyle::DIM << "  ⟳ Continuing... (turn "
+                          << iteration << ")" << AnsiStyle::RESET
+                          << "\033[u" << std::flush;
+            } else {
+                std::cout << "\n  ⟳ Continuing... (turn " << iteration << ")\n" << std::flush;
+            }
         }
     });
 
@@ -357,8 +363,12 @@ void setupCallbacks(AgentLoop& loop,
         } else
 #endif
         {
-            std::cout << "\n" << AnsiStyle::YELLOW << "⚠ " << msg
-                      << AnsiStyle::RESET << "\n";
+            if (supportsAnsiStdout()) {
+                std::cout << "\n" << AnsiStyle::YELLOW << "⚠ " << msg
+                          << AnsiStyle::RESET << "\n";
+            } else {
+                std::cout << "\n⚠ " << msg << "\n";
+            }
         }
     });
 
@@ -371,8 +381,14 @@ void setupCallbacks(AgentLoop& loop,
 
     auto postProcessor = std::make_shared<AnswerPostProcessor>();  // B4
 
+    // Track whether TextPartial already emitted text for the current paragraph
+    // in ANSI/headless mode.  TextParagraph carries the FULL paragraph text,
+    // so if we already printed TextPartial deltas we must not re-emit.
+    auto ansiPrintedPartial = std::make_shared<bool>(false);
+
     streamBuffer->setDisplayCallback(
-        [useFtxui, ftxuiRepl, postProcessor, headlessAccumulator, spinner](DisplayEvent&& event) {
+        [useFtxui, ftxuiRepl, postProcessor, headlessAccumulator, spinner,
+         ansiPrintedPartial, isPrintMode](DisplayEvent&& event) {
             if (useFtxui && ftxuiRepl) {
                 // B4: Route through AnswerPostProcessor for tool grouping/reordering.
                 // Reset processor on AnswerStart to clear stale state from
@@ -384,10 +400,18 @@ void setupCallbacks(AgentLoop& loop,
                     // Phase 1: process the AnswerEnd event itself
                     auto proc = postProcessor->process(std::move(event));
                     ftxuiRepl->handleDisplayEvent(std::move(proc));
-                    // Phase 2: finalize — group tools, reorder traces, emit tombstones
+                    // Phase 2: finalize — group tools, reorder traces, emit tombstones.
+                    // Only dispatch NEW event types (Tombstone, ToolGroup) produced by
+                    // finalize().  All other types were already dispatched individually
+                    // during streaming.  Replaying them causes duplicate AnswerText
+                    // blocks (TextParagraph ×2) and extra AnswerStart/AnswerEnd cycles
+                    // that erase historical TurnDuration blocks.
                     auto finalEvents = postProcessor->finalize();
                     for (auto& fe : finalEvents) {
-                        ftxuiRepl->handleDisplayEvent(std::move(fe));
+                        if (fe.type == DisplayEventType::Tombstone ||
+                            fe.type == DisplayEventType::ToolGroup) {
+                            ftxuiRepl->handleDisplayEvent(std::move(fe));
+                        }
                     }
                     postProcessor->reset();
                 } else {
@@ -413,12 +437,26 @@ void setupCallbacks(AgentLoop& loop,
                             // AnswerText from appearing on the same line as the
                             // spinner frame.
                             if (spinner) spinner->stop();
+                            *ansiPrintedPartial = false;
                             std::cout << "\n" << std::flush;
                             break;
 
-                        case DisplayEventType::TextParagraph:
                         case DisplayEventType::TextPartial:
                             std::cout << event.text << std::flush;
+                            *ansiPrintedPartial = true;
+                            break;
+
+                        case DisplayEventType::TextParagraph:
+                            // TextParagraph carries the full paragraph text.
+                            // If TextPartial already emitted the content as
+                            // incremental deltas, skip re-emission to avoid
+                            // duplication.  Fallback: if no TextPartial fired
+                            // (short paragraph), emit the full text here.
+                            if (!*ansiPrintedPartial) {
+                                std::cout << event.text << std::flush;
+                            }
+                            std::cout << "\n" << std::flush;
+                            *ansiPrintedPartial = false;
                             break;
 
                         case DisplayEventType::ThinkingBlock:
@@ -433,28 +471,48 @@ void setupCallbacks(AgentLoop& loop,
                             break;
 
                         case DisplayEventType::ToolResult: {
+                            // Suppressed in print mode: tool markers pollute
+                            // machine-consumable stdout for scripts/pipes.
+                            if (isPrintMode) break;
                             ContentBlock cb;
                             cb.type = ContentBlock::ToolResult;
                             cb.toolName = event.toolName;
                             cb.summary = event.summary;
-                            std::cout << ContentBlockRenderer::renderAnsi(cb)
-                                      << "\n" << std::flush;
+                            if (supportsAnsiStdout()) {
+                                std::cout << ContentBlockRenderer::renderAnsi(cb)
+                                          << "\n" << std::flush;
+                            } else {
+                                std::cout << ContentBlockRenderer::renderPlain(cb)
+                                          << "\n" << std::flush;
+                            }
                             break;
                         }
                         case DisplayEventType::ToolGroup: {
+                            // Suppressed in print mode: tool markers pollute
+                            // machine-consumable stdout for scripts/pipes.
+                            if (isPrintMode) break;
                             ContentBlock cb;
                             cb.type = ContentBlock::ToolGroup;
                             cb.toolName = event.toolName;
                             cb.summary = event.summary;
-                            std::cout << ContentBlockRenderer::renderAnsi(cb)
-                                      << "\n" << std::flush;
+                            if (supportsAnsiStdout()) {
+                                std::cout << ContentBlockRenderer::renderAnsi(cb)
+                                          << "\n" << std::flush;
+                            } else {
+                                std::cout << ContentBlockRenderer::renderPlain(cb)
+                                          << "\n" << std::flush;
+                            }
                             break;
                         }
                         case DisplayEventType::Error:
                             if (spinner) spinner->stop();
-                            std::cout << "\n" << AnsiStyle::RED
-                                      << "✕ " << event.text
-                                      << AnsiStyle::RESET << "\n" << std::flush;
+                            if (supportsAnsiStdout()) {
+                                std::cout << "\n" << AnsiStyle::RED
+                                          << "✕ " << event.text
+                                          << AnsiStyle::RESET << "\n" << std::flush;
+                            } else {
+                                std::cout << "\n✕ " << event.text << "\n" << std::flush;
+                            }
                             break;
 
                         case DisplayEventType::AnswerEnd:

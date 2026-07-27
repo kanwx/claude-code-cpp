@@ -90,7 +90,10 @@ inline void HeadlessContentBlockAccumulator::handleDisplayEvent(DisplayEvent&& e
         }
 
         case DisplayEventType::ToolResult: {
-            // Commit any pending streaming text before the tool result
+            // Commit any pending streaming text before the tool result.
+            // Track whether we inserted text so we can fix up ordering
+            // after the in-place replacement below.
+            bool textFlushed = false;
             if (!streamingText_.empty()) {
                 ContentBlock textCb;
                 textCb.type = ContentBlock::AnswerText;
@@ -100,30 +103,16 @@ inline void HeadlessContentBlockAccumulator::handleDisplayEvent(DisplayEvent&& e
                 streamingText_.clear();
                 textCb.stableId = nextStableId_++;
                 contentBlocks_.push_back(std::move(textCb));
+                textFlushed = true;
             }
-            // Remove the corresponding ToolProgress block (O(1) via index map)
-            String callId = ev.toolCallId;
-            if (!callId.empty()) {
-                auto it = toolProgressIndices_.find(callId);
-                if (it != toolProgressIndices_.end()) {
-                    size_t idx = it->second;
-                    if (idx < contentBlocks_.size() &&
-                        contentBlocks_[idx].type == ContentBlock::ToolProgress &&
-                        contentBlocks_[idx].toolCallId == callId) {
-                        contentBlocks_.erase(contentBlocks_.begin() + static_cast<long>(idx));
-                        for (auto& [tid, i] : toolProgressIndices_) {
-                            if (i > idx) --i;
-                        }
-                    }
-                    toolProgressIndices_.erase(it);
-                }
-            }
+
+            // Build the ToolResult block
             ContentBlock cb;
             cb.type = ContentBlock::ToolResult;
             cb.toolName = std::move(ev.toolName);
             cb.summary = std::move(ev.summary);
             cb.rawResultPath = std::move(ev.rawResultPath);
-            cb.toolCallId = std::move(callId);
+            cb.toolCallId = ev.toolCallId;
             cb.expanded = verboseTools_;
             if (cb.summary.isError) {
                 cb.resultStatus = ToolResultStatus::Error;
@@ -134,8 +123,38 @@ inline void HeadlessContentBlockAccumulator::handleDisplayEvent(DisplayEvent&& e
                     cb.resultStatus = ToolResultStatus::Rejected;
                 }
             }
-            cb.stableId = nextStableId_++;
-            contentBlocks_.push_back(std::move(cb));
+
+            // O(1) in-place ToolProgress → ToolResult replacement.
+            // No index shifting — other ToolProgress blocks stay at stable positions.
+            String callId = cb.toolCallId;
+            bool replaced = false;
+            if (!callId.empty()) {
+                auto it = toolProgressIndices_.find(callId);
+                if (it != toolProgressIndices_.end()) {
+                    size_t idx = it->second;
+                    if (idx < contentBlocks_.size() &&
+                        contentBlocks_[idx].type == ContentBlock::ToolProgress &&
+                        contentBlocks_[idx].toolCallId == callId) {
+                        // If we just flushed text (push_back), the AnswerText
+                        // is at the end — after the ToolProgress. Swap them
+                        // so AnswerText appears before the tool result.
+                        if (textFlushed && idx < contentBlocks_.size() - 1) {
+                            std::swap(contentBlocks_[idx], contentBlocks_.back());
+                            idx = contentBlocks_.size() - 1;
+                        }
+                        auto oldStableId = contentBlocks_[idx].stableId;
+                        contentBlocks_[idx] = std::move(cb);
+                        contentBlocks_[idx].stableId = oldStableId;
+                        contentBlocks_[idx].activity.clear();
+                        replaced = true;
+                    }
+                    toolProgressIndices_.erase(it);
+                }
+            }
+            if (!replaced) {
+                cb.stableId = nextStableId_++;
+                contentBlocks_.push_back(std::move(cb));
+            }
             // Headless: no incremental pipeline — full pipeline runs at AnswerEnd
             break;
         }

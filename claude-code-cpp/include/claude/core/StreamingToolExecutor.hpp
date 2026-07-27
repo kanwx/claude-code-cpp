@@ -12,6 +12,7 @@
 #include <vector>
 #include <future>
 #include <mutex>
+#include <memory>
 
 namespace claude {
 
@@ -128,6 +129,13 @@ private:
     std::atomic<int> activeCount_{0};
     std::atomic<bool> executing_{false};
 
+    /// Monotonic generation counter — incremented on cancel() and on each
+    /// new execute() call.  Used by executeSingle to detect stale executions
+    /// from a detached thread.  After an old thread's tool.sleep() returns,
+    /// the generation mismatch prevents it from touching callbacks that now
+    /// belong to a newer execute() call.
+    std::atomic<uint64_t> generation_{0};
+
     /// Protects permission engine evaluation + applyChoice (not thread-safe internally)
     std::mutex permissionMutex_;
 
@@ -145,6 +153,14 @@ private:
         std::future<ToolExecutionResult> future;
     };
     std::vector<PendingFuture> pendingFutures_;
+
+    // ========== P4: Per-tool cancel tokens ==========
+    // Each running tool gets a shared_ptr<atomic<bool>>.  The executor
+    // retains a weak_ptr so the token is freed automatically when the
+    // tool finishes.  cancel() locks each weak_ptr and sets the token
+    // to true, which Process::execute() picks up in its polling loop.
+    mutable std::mutex cancelTokensMutex_;
+    std::vector<std::weak_ptr<std::atomic<bool>>> activeCancelTokens_;
 
     /// Classify a tool call as parallel-safe or sequential
     bool isParallelSafe(const ToolCall& call) const;

@@ -11,12 +11,55 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <termios.h>
 #include <algorithm>
+#include <ctime>
 
 namespace claude {
 
 using namespace ftxui_colors;
+
+// Diagnostic helper — writes directly to /tmp/esc-debug.log bypassing spdlog.
+// ESC debug: use raw write() syscall to fd 2 (stderr) and also to a tmp file.
+// FILE*-based I/O (fprintf/fopen) was unreliable in FTXUI fullscreen on macOS.
+static void escLog(const char* msg) {
+    auto t = std::time(nullptr);
+    struct tm tm_buf;
+    localtime_r(&t, &tm_buf);
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d] ESC-DBG %s\n",
+                       tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, msg);
+    if (len > 0) {
+        write(STDERR_FILENO, buf, static_cast<size_t>(len));
+        // Also write to file as fallback
+        int fd = open("/tmp/esc-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            write(fd, buf, static_cast<size_t>(len));
+            close(fd);
+        }
+    }
+}
+
+
+// Running-status verb list — curated subset from TS spinnerVerbs.ts.
+// One verb is randomly selected per user turn and displayed during the
+// thinking/streaming phase.  Completely independent from the final
+// turn-completion verbs (Baked/Brewed/Churned/… in kTurnVerbs).
+namespace {
+static const std::vector<String> kRunningVerbs = {
+    "Calculating",   "Cerebrating",   "Choreographing",
+    "Cogitating",    "Composing",     "Computing",
+    "Concocting",    "Considering",   "Contemplating",
+    "Crafting",      "Crunching",     "Deciphering",
+    "Deliberating",  "Elucidating",   "Generating",
+    "Ideating",      "Inferring",     "Marinating",
+    "Orchestrating", "Percolating",   "Perusing",
+    "Pondering",     "Processing",    "Ruminating",
+    "Synthesizing",  "Tinkering",     "Wandering",
+};
+} // anonymous namespace
 
 // ========== ContentBlock-based display event handler ==========
 
@@ -143,7 +186,39 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     : std::move(ev.text);
                 streamingText_.clear();
                 streamingRenderer_.reset();
-                // Guard: skip empty or whitespace-only paragraphs
+
+                // Trim leading/trailing blank lines (same logic as AnswerEnd).
+                // Without this, a leading "\n" in the flushed paragraph produces
+                // an empty first element in the markdown renderer, which causes
+                // the "⏺" prefix to render standalone on its own line.
+                if (!committed.empty()) {
+                    size_t textStart = 0;
+                    while (textStart < committed.size()) {
+                        size_t nl = committed.find('\n', textStart);
+                        size_t lineEnd = (nl == String::npos) ? committed.size() : nl;
+                        if (committed.find_first_not_of(" \t\r", textStart) < lineEnd) break;
+                        textStart = (nl == String::npos) ? committed.size() : nl + 1;
+                    }
+                    if (textStart > 0 && textStart < committed.size()) {
+                        committed = committed.substr(textStart);
+                    } else if (textStart >= committed.size()) {
+                        committed.clear();
+                    }
+                    // Trim trailing blank lines
+                    if (!committed.empty()) {
+                        size_t textEnd = committed.size();
+                        while (textEnd > 0) {
+                            size_t prevNl = committed.rfind('\n', textEnd - 1);
+                            size_t lineStart = (prevNl == String::npos) ? 0 : prevNl + 1;
+                            if (committed.find_first_not_of(" \t\r", lineStart) < textEnd) break;
+                            textEnd = (lineStart > 0) ? lineStart - 1 : 0;
+                        }
+                        if (textEnd < committed.size()) {
+                            committed.resize(textEnd);
+                        }
+                    }
+                }
+
                 if (!committed.empty() &&
                     committed.find_first_not_of(" \t\n\r") != String::npos) {
                     ContentBlock cb;
@@ -190,7 +265,10 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::ToolResult: {
-                // Clear streaming text before tool result
+                // Clear streaming text before tool result.
+                // Track whether we inserted text so we can fix up ordering
+                // after the in-place replacement below.
+                bool textFlushed = false;
                 if (!streamingText_.empty()) {
                     ContentBlock textCb;
                     textCb.type = ContentBlock::AnswerText;
@@ -201,31 +279,16 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     streamingRenderer_.reset();
                     textCb.stableId = nextStableId_++;
                     contentBlocks_.push_back(std::move(textCb));
+                    textFlushed = true;
                 }
-                // B5: O(1) ToolProgress removal using index map
-                String callId = ev.toolCallId;
-                if (!callId.empty()) {
-                    auto it = toolProgressIndices_.find(callId);
-                    if (it != toolProgressIndices_.end()) {
-                        size_t idx = it->second;
-                        if (idx < contentBlocks_.size() &&
-                            contentBlocks_[idx].type == ContentBlock::ToolProgress &&
-                            contentBlocks_[idx].toolCallId == callId) {
-                            contentBlocks_.erase(contentBlocks_.begin() + static_cast<long>(idx));
-                            // Shift all indices after the removed position
-                            for (auto& [tid, i] : toolProgressIndices_) {
-                                if (i > idx) --i;
-                            }
-                        }
-                        toolProgressIndices_.erase(it);
-                    }
-                }
+
+                // Build the ToolResult block
                 ContentBlock cb;
                 cb.type = ContentBlock::ToolResult;
                 cb.toolName = std::move(ev.toolName);
                 cb.summary = std::move(ev.summary);
                 cb.rawResultPath = std::move(ev.rawResultPath);
-                cb.toolCallId = std::move(callId);
+                cb.toolCallId = ev.toolCallId;
                 cb.expanded = verboseTools_;
                 // Set result status from summary
                 if (cb.summary.isError) {
@@ -238,8 +301,38 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                         cb.resultStatus = ToolResultStatus::Rejected;
                     }
                 }
-                cb.stableId = nextStableId_++;
-                contentBlocks_.push_back(std::move(cb));
+
+                // B5: O(1) in-place ToolProgress → ToolResult replacement.
+                // No index shifting — other ToolProgress blocks stay at stable positions.
+                String callId = cb.toolCallId;
+                bool replaced = false;
+                if (!callId.empty()) {
+                    auto it = toolProgressIndices_.find(callId);
+                    if (it != toolProgressIndices_.end()) {
+                        size_t idx = it->second;
+                        if (idx < contentBlocks_.size() &&
+                            contentBlocks_[idx].type == ContentBlock::ToolProgress &&
+                            contentBlocks_[idx].toolCallId == callId) {
+                            // If we just flushed text (push_back), the AnswerText
+                            // is at the end — after the ToolProgress. Swap them
+                            // so AnswerText appears before the tool result.
+                            if (textFlushed && idx < contentBlocks_.size() - 1) {
+                                std::swap(contentBlocks_[idx], contentBlocks_.back());
+                                idx = contentBlocks_.size() - 1;
+                            }
+                            auto oldStableId = contentBlocks_[idx].stableId;
+                            contentBlocks_[idx] = std::move(cb);
+                            contentBlocks_[idx].stableId = oldStableId;
+                            contentBlocks_[idx].activity.clear();
+                            replaced = true;
+                        }
+                        toolProgressIndices_.erase(it);
+                    }
+                }
+                if (!replaced) {
+                    cb.stableId = nextStableId_++;
+                    contentBlocks_.push_back(std::move(cb));
+                }
                 runIncrementalPipeline();
                 break;
             }
@@ -299,21 +392,42 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::AnswerStart:
-                // Remove ALL stale TurnDuration blocks from previous API calls
-                // within the same user turn. Each AnswerEnd appends a TurnDuration,
-                // but tool results can arrive between AnswerEnd and the next
-                // AnswerStart, so we must scan the entire list, not just pop_back().
-                contentBlocks_.erase(
-                    std::remove_if(contentBlocks_.begin(), contentBlocks_.end(),
-                        [](const ContentBlock& b) { return b.type == ContentBlock::TurnDuration; }),
-                    contentBlocks_.end()
-                );
+                // Remove stale TurnDuration and ThinkingBlock within the
+                // CURRENT user turn only (after the last UserMessage).
+                // Must not touch blocks from earlier turns — those are
+                // historical content that must persist across turns.
+                {
+                    size_t lastUserMsg = contentBlocks_.size();
+                    for (size_t i = contentBlocks_.size(); i > 0; --i) {
+                        if (contentBlocks_[i - 1].type == ContentBlock::UserMessage) {
+                            lastUserMsg = i - 1;
+                            break;
+                        }
+                    }
+                    contentBlocks_.erase(
+                        std::remove_if(contentBlocks_.begin() + static_cast<long>(lastUserMsg),
+                                       contentBlocks_.end(),
+                            [](const ContentBlock& b) {
+                                return b.type == ContentBlock::TurnDuration ||
+                                       b.type == ContentBlock::ThinkingBlock;
+                            }),
+                        contentBlocks_.end()
+                    );
+                }
 
                 apiRoundIndex_++;  // each AnswerStart = new API round within the user turn
 
+                // P1: Only set startTime_ on the first AnswerStart of a user turn.
+                // Subsequent TAOR iterations must not reset the clock so
+                // finishStream can compute the full turn duration.
+                if (!turnStarted_) {
+                    startTime_ = std::chrono::steady_clock::now();
+                    turnStarted_ = true;
+                    turnDurationEmitted_ = false;
+                }
+
                 isStreaming_ = true;
                 isThinking_ = true;
-                isFirstAnswerBlock_ = true;
                 streamingText_.clear();
                 streamingRenderer_.reset();
                 currentTurnStartIndex_ = contentBlocks_.size();    // preserve scrollback
@@ -323,17 +437,45 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 break;
 
             case DisplayEventType::AnswerEnd: {
-                // Commit any remaining streaming text
+                // Commit any remaining streaming text.
+                // Trim leading/trailing blank lines to avoid rendering a
+                // standalone "●" prefix with no visible content beneath it.
                 if (!streamingText_.empty()) {
-                    ContentBlock cb;
-                    cb.type = ContentBlock::AnswerText;
-                    cb.isFirst = isFirstAnswerBlock_;
-                    cb.text = std::move(streamingText_);
-                    isFirstAnswerBlock_ = false;
+                    // Trim leading blank lines (empty or whitespace-only)
+                    size_t textStart = 0;
+                    while (textStart < streamingText_.size()) {
+                        size_t nl = streamingText_.find('\n', textStart);
+                        size_t lineEnd = (nl == String::npos) ? streamingText_.size() : nl;
+                        if (streamingText_.find_first_not_of(" \t\r", textStart) < lineEnd) break;
+                        textStart = (nl == String::npos) ? streamingText_.size() : nl + 1;
+                    }
+
+                    if (textStart < streamingText_.size()) {
+                        // Trim trailing blank lines
+                        size_t textEnd = streamingText_.size();
+                        while (textEnd > textStart) {
+                            size_t prevNl = streamingText_.rfind('\n', textEnd - 1);
+                            size_t lineStart = (prevNl == String::npos) ? 0 : prevNl + 1;
+                            if (streamingText_.find_first_not_of(" \t\r", lineStart) < textEnd) break;
+                            textEnd = (lineStart > 0) ? lineStart - 1 : 0;
+                        }
+
+                        String trimmed = (textStart > 0 || textEnd < streamingText_.size())
+                            ? streamingText_.substr(textStart, textEnd - textStart)
+                            : std::move(streamingText_);
+
+                        if (trimmed.find_first_not_of(" \t\n\r") != String::npos) {
+                            ContentBlock cb;
+                            cb.type = ContentBlock::AnswerText;
+                            cb.isFirst = isFirstAnswerBlock_;
+                            cb.text = std::move(trimmed);
+                            isFirstAnswerBlock_ = false;
+                            cb.stableId = nextStableId_++;
+                            contentBlocks_.push_back(std::move(cb));
+                        }
+                    }
                     streamingText_.clear();
                     streamingRenderer_.reset();
-                    cb.stableId = nextStableId_++;
-                    contentBlocks_.push_back(std::move(cb));
                 }
                 // B5: Clean up orphaned ToolProgress blocks (tools that never completed)
                 for (auto& [callId, idx] : toolProgressIndices_) {
@@ -369,6 +511,157 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
                 contentBlocks_ = messagePipeline_.process(std::move(contentBlocks_));
+
+                // P6-P2b: Centralized narration dimming pass.
+                // P1a dims narration only within collapsible sequences
+                // (collapseReadSearchGroups). This pass dims ALL remaining
+                // inter-tool narration in the current turn so that
+                // transitional text between non-collapsible tools
+                // (Bash, Edit, Write) also recedes visually.
+                // Current-turn scoped: only processes [currentTurnStartIndex_, end).
+                messagePipeline_.dimToolNarration(contentBlocks_,
+                                                  currentTurnStartIndex_);
+
+                // P6-P1b: Phase-aware AnswerText prefix detection.
+                // After pipeline, re-assign isFirst on AnswerText blocks:
+                //   - First non-dimmed eligible AnswerText → isFirst=true (phase header)
+                //   - Non-dimmed eligible AnswerText preceded by tool-like block → isFirst=true
+                //   - All other non-dimmed AnswerText → isFirst=false (continuation)
+                //   - Dimmed narration → isFirst=false always
+                // P6-P2a: Non-eligible transitional AnswerText (short, single-sentence,
+                //   starts with tool-intro pattern, no phase keywords) → isFirst=false,
+                //   does NOT affect seenNonDimmedAnswer or previous-significant lookup.
+                {
+                    auto isToolLikeBlock = [](const ContentBlock& b) {
+                        return b.type == ContentBlock::ToolResult ||
+                               b.type == ContentBlock::ToolGroup ||
+                               b.type == ContentBlock::CollapsedGroup ||
+                               b.type == ContentBlock::AgentProgress;
+                    };
+
+                    // P6-P2a: Phase-header eligibility classifier.
+                    // Denies ● promotion for short transitional tool-intro text
+                    // (e.g. "Let me read the key files.") while allowing real
+                    // phase headers and substantive answers through.
+                    auto isPhaseHeaderEligible = [](const ContentBlock& block) -> bool {
+                        String text = block.text;
+                        size_t start = text.find_first_not_of(" \t\n\r");
+                        if (start == String::npos) return false;
+                        size_t end = text.find_last_not_of(" \t\n\r");
+                        text = text.substr(start, end - start + 1);
+
+                        String lower = text;
+                        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+                        // Phase/summary/conclusion keywords always eligible
+                        static const std::vector<String> phaseKeywords = {
+                            "here is", "here's", "summary", "analysis", "overview",
+                            "conclusion", "result", "results", "findings",
+                            "recommendation", "the output pipeline follows",
+                            "the pipeline follows", "based on",
+                        };
+                        for (const auto& kw : phaseKeywords) {
+                            if (lower.find(kw) != String::npos) return true;
+                        }
+
+                        // Text metrics
+                        size_t substantiveChars = 0;
+                        for (char c : text) {
+                            if (c != ' ' && c != '\n' && c != '\t' && c != '\r') {
+                                substantiveChars++;
+                            }
+                        }
+                        int sentences = 0;
+                        for (size_t i = 0; i < text.size(); ++i) {
+                            if (text[i] == '.' || text[i] == '!' || text[i] == '?') {
+                                if (i + 1 >= text.size() || text[i + 1] == ' ' ||
+                                    text[i + 1] == '\n') {
+                                    sentences++;
+                                }
+                            }
+                        }
+
+                        // Structured content → eligible
+                        if (text.find("\n\n") != String::npos) return true;
+                        if (text.find("\n- ") != String::npos ||
+                            text.find("\n* ") != String::npos) return true;
+                        for (size_t i = 0; i + 2 < text.size(); ++i) {
+                            if (text[i] == '\n' && text[i + 1] >= '0' &&
+                                text[i + 1] <= '9') return true;
+                        }
+                        if (text.find("```") != String::npos) return true;
+
+                        // Long or multi-sentence substantive → eligible
+                        if (substantiveChars > 80) return true;
+                        if (sentences >= 2) return true;
+
+                        // Short single-sentence starting with transitional → deny
+                        static const std::vector<String> transitionalPrefixes = {
+                            "let me", "now let me", "i'll", "i will", "let's",
+                            "next", "then", "also",
+                            "and the", "and now", "now i'll",
+                            "checking", "reading", "searching", "looking at",
+                            "moving on",
+                        };
+                        for (const auto& prefix : transitionalPrefixes) {
+                            if (lower.find(prefix) == 0) return false;
+                        }
+
+                        return true;
+                    };
+
+                    // Find previous significant block, skipping dimmed/empty/
+                    // non-eligible AnswerText so transitional text doesn't
+                    // block real phase headers from seeing prior tool blocks.
+                    auto findPrevSignificant = [&](size_t i) -> const ContentBlock* {
+                        for (size_t j = i; j > 0; --j) {
+                            const auto& prev = contentBlocks_[j - 1];
+                            if (prev.type == ContentBlock::AnswerText) {
+                                if (prev.dimmed ||
+                                    prev.text.find_first_not_of(" \t\n\r") == String::npos) {
+                                    continue;
+                                }
+                                if (!isPhaseHeaderEligible(prev)) {
+                                    continue;
+                                }
+                            }
+                            return &prev;
+                        }
+                        return nullptr;
+                    };
+
+                    bool seenNonDimmedAnswer = false;
+
+                    for (size_t i = 0; i < contentBlocks_.size(); ++i) {
+                        auto& block = contentBlocks_[i];
+                        if (block.type != ContentBlock::AnswerText) continue;
+
+                        if (block.dimmed) {
+                            block.isFirst = false;
+                            continue;
+                        }
+
+                        // P6-P2a: non-eligible transitional → no ●, don't
+                        // affect seenNonDimmedAnswer or significant-block lookup
+                        if (!isPhaseHeaderEligible(block)) {
+                            block.isFirst = false;
+                            continue;
+                        }
+
+                        const auto* prev = findPrevSignificant(i);
+
+                        if (!seenNonDimmedAnswer) {
+                            block.isFirst = true;
+                        } else if (prev && isToolLikeBlock(*prev)) {
+                            block.isFirst = true;
+                        } else {
+                            block.isFirst = false;
+                        }
+
+                        seenNonDimmedAnswer = true;
+                    }
+                }
+
                 lastStableIndex_ = contentBlocks_.size();
                 {
                     const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
@@ -390,61 +683,53 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
 
-                // Insert or update collapsed ThinkingBlock after pipeline (before turn duration).
-                // If the model emitted thinking content, show it as a collapsed block
-                // at the start of the assistant response. When multiple continuation API
-                // calls each produce thinking (e.g., DeepSeek), merge into a single block.
-                if (!thinkingText_.empty()) {
-                    // Check if a ThinkingBlock already exists from a previous continuation
-                    auto existingThink = std::find_if(contentBlocks_.begin(), contentBlocks_.end(),
-                        [](const ContentBlock& b) { return b.type == ContentBlock::ThinkingBlock; });
+                // Thinking is rendered by the AppLayout streaming overlay
+                // (s->content.thinking.active).  We do not persist a
+                // ThinkingBlock ContentBlock — TS compact mode hides
+                // thinking in the final frame.
+                thinkingSummary_.clear();
+                thinkingText_.clear();
 
-                    if (existingThink != contentBlocks_.end()) {
-                        // Merge: append new thinking text to existing block
-                        existingThink->detailText += "\n\n" + thinkingText_;
-                        // Keep expanded state of existing block
-                    } else {
-                        ContentBlock thinkBlock;
-                        thinkBlock.type = ContentBlock::ThinkingBlock;
-                        thinkBlock.detailText = std::move(thinkingText_);
-                        thinkBlock.expanded = false;
-                        thinkBlock.text = thinkingSummary_.empty()
-                            ? "Thinking..." : thinkingSummary_;
-                        thinkBlock.stableId = nextStableId_++;
-                        // Insert after the user message (at position 0) but before first response block
-                        auto it = contentBlocks_.begin();
-                        while (it != contentBlocks_.end() &&
-                               (it->type == ContentBlock::UserMessage ||
-                                it->type == ContentBlock::ThinkingBlock)) {
-                            ++it;
-                        }
-                        contentBlocks_.insert(it, std::move(thinkBlock));
-                    }
-                    thinkingSummary_.clear();
-                    thinkingText_.clear();
-                }
+                // TurnDuration is deferred to finishStream().
+                // AnswerEnd = API stream end ≠ whole turn end.
+                // The turn is not complete until tool execution finishes
+                // and executeLoop returns.  Creating TurnDuration here
+                // would show a premature duration (e.g. "Baked for 1s"
+                // while sleep 30 is still running).
 
-                // Insert turn duration block after all response content
+                // [DIAGNOSTIC] contentBlocks_ final dump — gated by CLAUDE_CODE_DEBUG_METRICS
                 {
-                    auto& meta = newPipelineStatusMetadata_;
-                    if (!meta.durationStr.empty() || meta.outputTokens > 0) {
-                        ContentBlock td;
-                        td.type = ContentBlock::TurnDuration;
-                        td.text = meta.durationStr;
-                        td.stableId = nextStableId_++;
-                        if (meta.outputTokens > 0) {
-                            auto fmtK = [](int64_t n) -> String {
-                                if (n >= 1'000) return std::to_string(n / 100) + "." +
-                                    std::to_string((n % 100) / 10) + "K";
-                                return std::to_string(n);
-                            };
-                            if (!td.text.empty()) td.text += " · ";
-                            td.text += fmtK(meta.outputTokens) + " tokens";
+                    const bool debugMetrics = (std::getenv("CLAUDE_CODE_DEBUG_METRICS") != nullptr &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[0] == '1' &&
+                                               std::getenv("CLAUDE_CODE_DEBUG_METRICS")[1] == '\0');
+                    if (debugMetrics) {
+                        fprintf(stderr, "\n=== CONTENT_BLOCKS_DUMP (turn=%d, apiRound=%d, total=%zu) ===\n",
+                                userTurnIndex_, apiRoundIndex_, contentBlocks_.size());
+                        static const char* kTypeNames[] = {
+                            "UserMessage","AnswerText","ThinkingBlock","ToolProgress",
+                            "ToolResult","ToolGroup","AgentProgress","ErrorMessage",
+                            "SystemMessage","CompactBoundary","CollapsedGroup","TurnDuration"
+                        };
+                        for (size_t bi = 0; bi < contentBlocks_.size(); ++bi) {
+                            const auto& b = contentBlocks_[bi];
+                            int t = static_cast<int>(b.type);
+                            const char* tn = (t >= 0 && t < 12) ? kTypeNames[t] : "?";
+                            String preview;
+                            for (size_t ci = 0; ci < b.text.size() && ci < 120; ++ci) {
+                                unsigned char c = static_cast<unsigned char>(b.text[ci]);
+                                if (c == '\n') preview += "\\n";
+                                else if (c == '\r') preview += "\\r";
+                                else if (c == '\t') preview += "\\t";
+                                else if (c < 0x20) { char buf[8]; snprintf(buf, sizeof(buf), "\\x%02x", c); preview += buf; }
+                                else preview += static_cast<char>(c);
+                            }
+                            fprintf(stderr, "  [%zu] %-15s text.size=%4zu text=\"%s\"%s%s isFirst=%d\n",
+                                    bi, tn, b.text.size(), preview.c_str(),
+                                    b.text.size() > 120 ? "..." : "",
+                                    t == 11 ? " <<<TURN_DURATION" : "",  // type 11 = TurnDuration
+                                    b.isFirst ? 1 : 0);
                         }
-                        if (!meta.costStr.empty()) {
-                            td.text += " · " + meta.costStr;
-                        }
-                        contentBlocks_.push_back(std::move(td));
+                        fprintf(stderr, "=== END CONTENT_BLOCKS_DUMP ===\n\n");
                     }
                 }
 
@@ -530,9 +815,13 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                     }
                 }
 
-                isStreaming_ = false;
+                // Keep isStreaming_ true until finishStream() — the turn is not
+                // complete until runStreaming() returns and main.cpp calls
+                // finishStream().  Setting isStreaming_=false here allowed the
+                // Return handler to accept new user input while tools were still
+                // executing in the background, producing orphan tool_use blocks
+                // and 400 errors from the API (E8 bug).
                 isThinking_ = false;
-                stopRefreshThread();
 
                 // B6: Record turn boundary
                 turnBoundaries_.push_back(contentBlocks_.size());
@@ -714,6 +1003,26 @@ void FtxuiRepl::syncLayoutState() {
     ls.content.thinking.summary = thinkingSummary_;
     ls.content.thinking.stalled = false; // will be computed from lastOutputTime_
     ls.content.thinking.tickCounter = ls.tickCounter;
+
+    // Running-status fields: elapsed time, token estimate, running verb.
+    if (isThinking_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - startTime_).count();
+        ls.content.thinking.elapsedSeconds = static_cast<int>(elapsedMs / 1000);
+        ls.content.thinking.tokenEstimate = static_cast<int>(streamingText_.size() / 4);
+        if (thinkingVerb_.empty()) {
+            // Pick a random verb per turn — stable for the duration.
+            static size_t runningVerbIdx = 0;
+            thinkingVerb_ = kRunningVerbs[runningVerbIdx % kRunningVerbs.size()];
+            runningVerbIdx++;
+        }
+        ls.content.thinking.runningVerb = thinkingVerb_;
+    } else {
+        ls.content.thinking.elapsedSeconds = 0;
+        ls.content.thinking.tokenEstimate = 0;
+        ls.content.thinking.runningVerb.clear();
+    }
     ls.content.messagesAbove = static_cast<int>(virtualScroll_.firstVisibleIndex());
     ls.content.autoScroll = ls.autoScroll;
     ls.content.scrollRatio = ls.scrollRatio;
@@ -797,6 +1106,9 @@ void FtxuiRepl::syncLayoutState() {
         ls.collapsibleFocusIndex = -1;
     }
 
+    // Footer nav hint
+    ls.footer.collapsibleNavActive = (ls.collapsibleCount > 0 && !isStreaming_);
+
     // Text selection
     ls.selectionActive = selectionActive_;
     ls.selectionStartY = selectionHighlightStartY_;
@@ -808,8 +1120,10 @@ void FtxuiRepl::syncLayoutState() {
 FtxuiRepl::FtxuiRepl() = default;
 
 FtxuiRepl::~FtxuiRepl() {
+    escLog("[LIFETIME] ~FtxuiRepl destructor");
     running_ = false;
     stopRefreshThread();
+    escLog("[LIFETIME] ~FtxuiRepl destructor complete");
 }
 
 // ========== Thread-safe message operations ==========
@@ -826,6 +1140,7 @@ void FtxuiRepl::addUserMessage(const String& content) {
         }
         metricsTurnStartIndex_ = contentBlocks_.size();  // user turn starts at this UserMessage
         apiRoundIndex_ = 0;
+        isFirstAnswerBlock_ = true;  // fresh per user turn; survives tool-only API rounds
         userTurnIndex_++;
         contentBlocks_.push_back(std::move(cb));
     });
@@ -1015,32 +1330,87 @@ void FtxuiRepl::run() {
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
 
+    escLog("=== FTXUI starting, ESC debug log active ===");
     spdlog::debug("FTXUI: Building component...");
     auto component = BuildMainComponent();
     spdlog::debug("FTXUI: Creating screen...");
     auto screen = ScreenInteractive::Fullscreen();
     screen_ = &screen;
+    // Let Ctrl+C pass through to our CatchEvent handler instead of
+    // FTXUI intercepting it and exiting the loop immediately.
+    screen.ForceHandleCtrlC(false);
     spdlog::debug("FTXUI: Enabling mouse tracking...");
     screen.TrackMouse();
+
     spdlog::debug("FTXUI: Starting loop...");
 
     try {
         screen.Loop(component);
+        escLog("[LOOP] screen.Loop() returned normally");
     } catch (const std::exception& e) {
+        escLog("[LOOP] screen.Loop() EXCEPTION — exiting");
         spdlog::error("FTXUI loop exception: {}", e.what());
+    } catch (...) {
+        escLog("[LOOP] screen.Loop() UNKNOWN EXCEPTION — exiting");
     }
 
     screen_ = nullptr;
     stopRefreshThread();
+    escLog("[LOOP] run() exiting, screen teardown complete");
     spdlog::debug("FTXUI: Loop ended");
 }
 
 void FtxuiRepl::exit() {
-    running_ = false;
-    stopRefreshThread();
-    if (screen_) {
-        screen_->Exit();
+    escLog("[EXIT] FtxuiRepl::exit() called");
+
+    // Stack trace to identify who called exit()
+    {
+        void* bt[32];
+        int n = backtrace(bt, 32);
+        int fd = open("/tmp/esc-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            backtrace_symbols_fd(bt, n, fd);
+            close(fd);
+        }
     }
+
+    running_ = false;
+    escLog("[EXIT] running_=false set");
+    stopRefreshThread();
+    escLog("[EXIT] stopRefreshThread done");
+    if (screen_) {
+        escLog("[EXIT] calling screen_->Exit()");
+        screen_->Exit();
+        escLog("[EXIT] screen_->Exit() returned");
+    }
+    escLog("[EXIT] exit() complete");
+}
+
+bool FtxuiRepl::handleCtrlC(std::chrono::steady_clock::time_point now, int timeoutMs) {
+    if (ctrlCPending_) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastCtrlC_).count();
+        if (elapsed < timeoutMs) {
+            escLog("[EXIT] handleCtrlC double-press -> exit()");
+            exit();
+            return true;
+        }
+        // Timeout expired — fall through to treat as first press
+    }
+    ctrlCPending_ = true;
+    lastCtrlC_ = now;
+
+    // Dedup: don't push another hint if the last block is already one
+    static constexpr const char* kCtrlCHint = "Press Ctrl+C again to exit.";
+    if (contentBlocks_.empty() ||
+        contentBlocks_.back().text != kCtrlCHint) {
+        ContentBlock cb;
+        cb.type = ContentBlock::AnswerText;
+        cb.text = kCtrlCHint;
+        cb.dimmed = true;
+        contentBlocks_.push_back(std::move(cb));
+    }
+    return true;
 }
 
 // ========== BuildMainComponent — creates AppLayout + event handler ==========
@@ -1072,6 +1442,10 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
     auto eventHandler = CatchEvent([r, ls](Event event) -> bool {
         // Sync state from FtxuiRepl to layoutState_ before processing
         r->syncLayoutState();
+
+        if (event == Event::Escape) {
+            escLog("[ESC] CatchEvent ENTRY — event reached FtxuiRepl handler");
+        }
 
         if (event.is_mouse()) {
             auto& mouse = event.mouse();
@@ -1293,6 +1667,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             if (r->permissionFeedbackActive_) {
                 if (event == Event::Escape) {
                     // Escape in feedback mode: close feedback, stay in prompt
+                    escLog("[ESC] permission feedback: closing feedback, staying in prompt");
                     r->permissionFeedbackActive_ = false;
                     ls->permissionFeedbackActive = false;
                     return true;
@@ -1426,6 +1801,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 return true;
             }
             if (event == Event::Escape) {
+                escLog("[ESC] permission prompt: deny once, closing prompt");
                 r->permissionPromptActive_ = false;
                 ls->permissionActive = false;
                 clearPermissionProgress();
@@ -1441,33 +1817,87 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             return true;
         }
 
+        // --- Ctrl+C: unified double-press exit (idle and streaming) ---
+        // ESC is for cancel; Ctrl+C is ONLY for exit confirmation.
+        if (event == Event::CtrlC) {
+            return r->handleCtrlC(std::chrono::steady_clock::now());
+        }
+
         if (r->isStreaming_) {
-            if (event == Event::Escape || event == Event::CtrlC) {
+            if (event == Event::Escape) {
+                try {
+                escLog("[ESC] streaming: cancelling turn");
                 if (r->onCancel_) {
+                    escLog("[ESC] streaming: calling onCancel_");
                     r->onCancel_();
+                    escLog("[ESC] streaming: onCancel_ returned");
                 }
 
+                escLog("[ESC] cleanup: before isStreaming=false");
                 r->isStreaming_ = false;
-                r->isThinking_ = false;
+                escLog("[ESC] cleanup: after isStreaming=false");
 
+                // Clear pipeline status metadata so the footer/status bar
+                // stops showing "● Running..." and stale token counts.
+                r->newPipelineStatusMetadata_ = TurnMetadata{};
+                r->outputTokens_ = 0;
+                r->inputTokens_ = 0;
+
+                escLog("[ESC] cleanup: before isThinking=false");
+                r->isThinking_ = false;
+                escLog("[ESC] cleanup: after isThinking=false");
+
+                escLog("[ESC] cleanup: before turnStarted=false");
+                r->turnStarted_ = false;
+                escLog("[ESC] cleanup: after turnStarted=false");
+
+                escLog("[ESC] cleanup: before move streamingText");
                 String partial = std::move(r->streamingText_);
+                escLog("[ESC] cleanup: after move streamingText");
+
+                escLog("[ESC] cleanup: before clear streamingText_");
                 r->streamingText_.clear();
+                escLog("[ESC] cleanup: after clear streamingText_");
+
+                escLog("[ESC] cleanup: before reset streamingRenderer_");
                 r->streamingRenderer_.reset();
+                escLog("[ESC] cleanup: after reset streamingRenderer_");
+
                 if (!partial.empty()) {
+                    escLog("[ESC] cleanup: pushing partial AnswerText block");
                     ContentBlock cb;
                     cb.type = ContentBlock::AnswerText;
                     cb.text = std::move(partial);
                     r->contentBlocks_.push_back(std::move(cb));
+                    escLog("[ESC] cleanup: partial AnswerText block pushed");
                 }
                 {
+                    escLog("[ESC] cleanup: before push Cancelled block");
                     ContentBlock cb;
                     cb.type = ContentBlock::AnswerText;
                     cb.text = "Cancelled";
                     cb.dimmed = true;
                     r->contentBlocks_.push_back(std::move(cb));
+                    escLog("[ESC] cleanup: Cancelled block pushed");
                 }
 
+                escLog("[ESC] cleanup: before stopRefreshThread");
                 r->stopRefreshThread();
+                escLog("[ESC] cleanup: after stopRefreshThread");
+                escLog("[ESC] cleanup: DONE, returning true");
+                } catch (const std::exception& e) {
+                    escLog("[ESC] streaming: std::exception caught");
+                } catch (...) {
+                    escLog("[ESC] streaming: unknown exception caught");
+                }
+                return true;
+            }
+            // Explicitly block Enter/Return during streaming to prevent
+            // new user prompt submission while a turn is active.
+            // Text input (character events) still passes through to the
+            // Input component so the user can type, but submitting is
+            // gated here until finishStream() runs.
+            if (event == Event::Return) {
                 return true;
             }
             return false;
@@ -1477,6 +1907,14 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             if (!ls->input.text.empty()) {
                 r->ctrlCPending_ = false;
                 String current = ls->input.text;
+                {
+                    // Log the submitted text (truncated for safety)
+                    char buf[256];
+                    String preview = current.size() > 40 ? current.substr(0, 40) + "..." : current;
+                    snprintf(buf, sizeof(buf), "[RETURN] submitted input: '%s' (first char: 0x%02x)",
+                             preview.c_str(), static_cast<unsigned char>(current[0]));
+                    escLog(buf);
+                }
                 ls->input.text.clear();
                 ls->input.cursorPos = 0;
                 ContentBlock userCb;
@@ -1492,6 +1930,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 }
                 r->metricsTurnStartIndex_ = r->contentBlocks_.size();  // user turn starts here
                 r->apiRoundIndex_ = 0;
+                r->isFirstAnswerBlock_ = true;  // fresh per user turn
                 r->userTurnIndex_++;
                 r->contentBlocks_.push_back(std::move(userCb));
                 r->isStreaming_ = true;
@@ -1499,6 +1938,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 r->streamingText_.clear();
                 r->streamingRenderer_.reset();
                 r->thinkingSummary_.clear();
+                r->thinkingVerb_.clear();     // fresh verb per user turn
                 r->startTime_ = std::chrono::steady_clock::now();
                 ls->autoScroll = true;
                 ls->scrollRatio = 1.0f;
@@ -1513,8 +1953,10 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 r->startRefreshThread();
 
                 if (!current.empty() && current[0] == '/' && r->onCommand_) {
+                    escLog("[RETURN] routing to onCommand_");
                     r->onCommand_(current);
                 } else if (r->onSubmit_) {
+                    escLog("[RETURN] routing to onSubmit_");
                     r->onSubmit_(current);
                 }
             }
@@ -1677,6 +2119,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             return true;
         }
         if (event == Event::Escape) {
+            escLog("[ESC] idle: consuming escape");
             if (!r->completer_.currentCompletions().empty()) {
                 r->completer_.clearCompletions();
                 ls->completions.clear();
@@ -1686,26 +2129,9 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
             }
             return true;
         }
-        if (event == Event::CtrlC) {
-            auto now = std::chrono::steady_clock::now();
-            if (r->ctrlCPending_) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - r->lastCtrlC_).count();
-                if (elapsed < 800) {
-                    r->exit();
-                    return true;
-                }
-            }
-            r->ctrlCPending_ = true;
-            r->lastCtrlC_ = now;
-            {
-                ContentBlock cb;
-                cb.type = ContentBlock::AnswerText;
-                cb.text = "Press Ctrl+C again to exit";
-                cb.dimmed = true;
-                r->contentBlocks_.push_back(std::move(cb));
-            }
-            return true;
+        // Log any unhandled event that falls through to help debug ESC issue
+        if (event == Event::Escape) {
+            escLog("[ESC] WARNING: ESC fell through all handlers!");
         }
         return false;
     });

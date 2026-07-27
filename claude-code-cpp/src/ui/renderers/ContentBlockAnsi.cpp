@@ -1,6 +1,7 @@
 #include "claude/ui/ContentBlockRenderer.hpp"
 #include "claude/ui/ToolResultFormatter.hpp"
 #include "claude/console/AnsiStyle.hpp"
+#include "claude/console/AnsiSuppress.hpp"
 #include <sstream>
 
 namespace claude {
@@ -18,7 +19,7 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
                 return String(AnsiStyle::DIM) + "Thinking...\n" + block.detailText +
                        "\nThinking" + AnsiStyle::RESET;
             }
-            return String(AnsiStyle::DIM) + "Thinking  (Ctrl+O to expand)" + AnsiStyle::RESET;
+            return String(AnsiStyle::DIM) + "Thinking" + AnsiStyle::RESET;
 
         case ContentBlock::ToolProgress:
             return String(AnsiStyle::DIM) + "  \xe2\x8e\xbf \xe2\x97\x8f " + block.activity + "..." + AnsiStyle::RESET;
@@ -46,21 +47,13 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
                 result += String(AnsiStyle::DIM) + displayText + AnsiStyle::RESET;
             }
 
-            if (!block.expanded && !dm.isError && !dm.isCancelled && !dm.isRejected) {
-                if (!dm.expandHint.empty()) {
-                    result += "  " + dm.expandHint;
-                } else {
-                    result += "  [Ctrl+O]";
-                }
-            }
+            // [Ctrl+O] hints are FTXUI-only; non-FTXUI renderers omit them.
             return result;
         }
 
         case ContentBlock::ToolGroup: {
             String result = "  \xe2\x8e\xbf " + String(AnsiStyle::DIM) + block.summary.primaryText + AnsiStyle::RESET;
-            if (!block.expanded) {
-                result += "  [Ctrl+O]";
-            } else {
+            if (block.expanded) {
                 for (auto& child : block.children) {
                     result += "\n    " + renderAnsi(child);
                 }
@@ -78,11 +71,13 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
         case ContentBlock::CollapsedGroup: {
             String result = "  \xe2\x8e\xbf " + String(AnsiStyle::DIM) +
                            block.summary.primaryText + AnsiStyle::RESET;
-            if (!block.expanded) {
-                result += "  [Ctrl+O]";
-            } else {
-                for (auto& child : block.children) {
-                    result += "\n    \xe2\x94\x9c\xe2\x94\x80 " + renderAnsi(child);
+            if (block.expanded) {
+                for (size_t i = 0; i < block.children.size(); ++i) {
+                    bool last = (i == block.children.size() - 1);
+                    const char* connector = last
+                        ? "\n    \xe2\x94\x94\xe2\x94\x80 "
+                        : "\n    \xe2\x94\x9c\xe2\x94\x80 ";
+                    result += connector + renderAnsi(block.children[i]);
                 }
             }
             return result;
@@ -105,6 +100,10 @@ String ContentBlockRenderer::renderAnsi(const ContentBlock& block) {
 
 String ContentBlockRenderer::renderFtxuiText(const ContentBlock& block) {
     return renderAnsi(block);
+}
+
+String ContentBlockRenderer::renderPlain(const ContentBlock& block) {
+    return stripAnsi(renderAnsi(block));
 }
 
 String ContentBlockRenderer::toolBadge(const String& toolName) {

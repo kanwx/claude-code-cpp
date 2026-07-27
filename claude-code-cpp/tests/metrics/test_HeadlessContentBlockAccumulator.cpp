@@ -279,17 +279,15 @@ TEST_CASE("HeadlessContentBlockAccumulator FTXUI consistency", "[HeadlessContent
     auto j = nlohmann::json::parse(lines[0]);
 
     // M2: inter-tool words
-    // "Let me check the codebase structure." = 6 words → before CollapsedGroup → inter-tool
-    // "Now let me read the main file." = 7 words → between CollapsedGroups → inter-tool
-    // "The codebase has 3 directories." = 5 words → next is ThinkingBlock → NOT inter-tool
+    // P6-P0a: "Let me check the codebase structure." (6w) is tool narration that
+    // passes through without breaking the group. It is no longer classified as
+    // inter-tool since it appears before the first CollapsedGroup.
+    // "Now let me read the main file." = 7 words → between CollapsedGroups → inter-tool.
+    // "The codebase has 3 directories." = 5 words → next is ThinkingBlock → NOT inter-tool.
     auto& m2 = j["inter_tool_words"];
     REQUIRE(m2.contains("values"));
-    CHECK(m2["values"].size() == 2);
-    CHECK(m2["values"][0] == 6);
-    CHECK(m2["values"][1] == 7);
-
-    // M4: total words = 6 + 7 + 5 = 18
-    CHECK(j["total_user_words"] == 18);
+    CHECK(m2["values"].size() == 1);
+    CHECK(m2["values"][0] == 7);
 
     // M4: total words = 6 + 7 + 5 = 18
     CHECK(j["total_user_words"] == 18);
@@ -415,6 +413,168 @@ TEST_CASE("HeadlessContentBlockAccumulator ThinkingBlock insertion", "[HeadlessC
     REQUIRE(it != blocks.end());
     CHECK(it->detailText.find("Step 1") != String::npos);
     CHECK(it->detailText.find("Step 2") != String::npos);
+}
+
+// ========== P6-P0c: in-place ToolProgress → ToolResult replacement ==========
+
+TEST_CASE("P6-P0c: ToolProgress in-place replacement position stability", "[HeadlessContentBlockAccumulator][p0c]") {
+    HeadlessContentBlockAccumulator acc;
+
+    SECTION("Single tool: ToolResult stays at same index as ToolProgress") {
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Read", "Reading f1..."));
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_1", "Read",
+            ToolResultSummary::success("f1 done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 1);
+        CHECK(blocks[0].type == ContentBlock::ToolResult);
+        CHECK(blocks[0].toolCallId == "call_1");
+        CHECK(blocks[0].toolName == "Read");
+        auto toolProgresses = countByType(blocks, ContentBlock::ToolProgress);
+        CHECK(toolProgresses == 0);
+    }
+
+    SECTION("Parallel tools: each result replaces its spinner, others stay at stable positions") {
+        // Start 3 parallel tools
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Read", "Reading f1..."));
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_2", "Read", "Reading f2..."));
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_3", "Read", "Reading f3..."));
+
+        const auto& blocks3 = acc.contentBlocks();
+        REQUIRE(blocks3.size() == 3);
+        REQUIRE(blocks3[0].type == ContentBlock::ToolProgress);
+        REQUIRE(blocks3[1].type == ContentBlock::ToolProgress);
+        REQUIRE(blocks3[2].type == ContentBlock::ToolProgress);
+        CHECK(blocks3[0].toolCallId == "call_1");
+        CHECK(blocks3[1].toolCallId == "call_2");
+        CHECK(blocks3[2].toolCallId == "call_3");
+
+        // Tool 1 completes — replaces spinner at index 0 only
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_1", "Read",
+            ToolResultSummary::success("f1 done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 3);
+        // Index 0: ToolProgress call_1 → ToolResult
+        CHECK(blocks[0].type == ContentBlock::ToolResult);
+        CHECK(blocks[0].toolCallId == "call_1");
+        // Index 1: ToolProgress call_2 unchanged
+        CHECK(blocks[1].type == ContentBlock::ToolProgress);
+        CHECK(blocks[1].toolCallId == "call_2");
+        // Index 2: ToolProgress call_3 unchanged
+        CHECK(blocks[2].type == ContentBlock::ToolProgress);
+        CHECK(blocks[2].toolCallId == "call_3");
+
+        // Tool 2 completes — replaces spinner at index 1 only
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_2", "Read",
+            ToolResultSummary::success("f2 done")));
+
+        const auto& blocks2 = acc.contentBlocks();
+        REQUIRE(blocks2.size() == 3);
+        CHECK(blocks2[0].type == ContentBlock::ToolResult);      // call_1, unchanged
+        CHECK(blocks2[1].type == ContentBlock::ToolResult);      // call_2, replaced
+        CHECK(blocks2[1].toolCallId == "call_2");
+        CHECK(blocks2[2].type == ContentBlock::ToolProgress);    // call_3, unchanged
+        CHECK(blocks2[2].toolCallId == "call_3");
+    }
+
+    SECTION("Out-of-order completion: tool2 finishes before tool1, only tool2 position affected") {
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Read", "Reading f1..."));
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_2", "Read", "Reading f2..."));
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_3", "Read", "Reading f3..."));
+
+        // Tool 2 completes out of order
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_2", "Read",
+            ToolResultSummary::success("f2 done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 3);
+        // Index 0: call_1 spinner — unchanged
+        CHECK(blocks[0].type == ContentBlock::ToolProgress);
+        CHECK(blocks[0].toolCallId == "call_1");
+        // Index 1: call_2 spinner → result (out-of-order: 2nd completes before 1st)
+        CHECK(blocks[1].type == ContentBlock::ToolResult);
+        CHECK(blocks[1].toolCallId == "call_2");
+        // Index 2: call_3 spinner — unchanged
+        CHECK(blocks[2].type == ContentBlock::ToolProgress);
+        CHECK(blocks[2].toolCallId == "call_3");
+    }
+
+    SECTION("Missing progress fallback: ToolResult appended when no matching ToolProgress") {
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_unknown", "Bash",
+            ToolResultSummary::success("Done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 1);
+        CHECK(blocks[0].type == ContentBlock::ToolResult);
+        CHECK(blocks[0].toolCallId == "call_unknown");
+    }
+
+    SECTION("Mismatched callId guard: ToolResult does not overwrite wrong ToolProgress") {
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Read", "Reading..."));
+        // ToolResult with different callId — must not overwrite call_1 spinner
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_2", "Bash",
+            ToolResultSummary::success("done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 2);
+        // Index 0: call_1 spinner still there, not overwritten
+        CHECK(blocks[0].type == ContentBlock::ToolProgress);
+        CHECK(blocks[0].toolCallId == "call_1");
+        // Index 1: call_2 result appended (fallback)
+        CHECK(blocks[1].type == ContentBlock::ToolResult);
+        CHECK(blocks[1].toolCallId == "call_2");
+    }
+
+    SECTION("stableId preserved after in-place replacement") {
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Read", "Reading..."));
+        const auto& before = acc.contentBlocks();
+        auto oldStableId = before[0].stableId;
+
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_1", "Read",
+            ToolResultSummary::success("Done")));
+
+        const auto& after = acc.contentBlocks();
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].type == ContentBlock::ToolResult);
+        CHECK(after[0].stableId == oldStableId);
+    }
+
+    SECTION("Activity field cleared after in-place replacement") {
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Bash", "Running command..."));
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_1", "Bash",
+            ToolResultSummary::success("Done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 1);
+        REQUIRE(blocks[0].type == ContentBlock::ToolResult);
+        CHECK(blocks[0].activity.empty());
+    }
+
+    SECTION("Orphan cleanup converts unfinished ToolProgress to Interrupted at AnswerEnd") {
+        acc.handleDisplayEvent(DisplayEvent::answerStart());
+        acc.handleDisplayEvent(DisplayEvent::toolProgress("call_1", "Read", "Reading..."));
+        acc.handleDisplayEvent(DisplayEvent::answerEnd());
+
+        const auto& blocks = acc.contentBlocks();
+        // ToolProgress should be converted in-place to ToolResult with Interrupted status
+        auto it = std::find_if(blocks.begin(), blocks.end(),
+            [](const auto& b) { return b.toolCallId == "call_1"; });
+        REQUIRE(it != blocks.end());
+        CHECK(it->type == ContentBlock::ToolResult);
+        CHECK(it->resultStatus == ToolResultStatus::Cancelled);
+        CHECK(it->summary.primaryText.find("Interrupted") != String::npos);
+    }
+
+    SECTION("Fallback stableId assigned when no matching ToolProgress") {
+        acc.handleDisplayEvent(DisplayEvent::toolResult("call_new", "Bash",
+            ToolResultSummary::success("Done")));
+
+        const auto& blocks = acc.contentBlocks();
+        REQUIRE(blocks.size() == 1);
+        // Fallback path assigns a new stableId (non-zero)
+        CHECK(blocks[0].stableId > 0);
+    }
 }
 
 } // namespace claude

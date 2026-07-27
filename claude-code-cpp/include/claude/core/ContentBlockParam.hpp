@@ -142,11 +142,56 @@ Json serializeContentMessageForAnthropic(const ContentMessage& msg);
 Json buildAnthropicApiMessages(const std::vector<ContentMessage>& history);
 Json serializeContentMessageForOpenAI(const ContentMessage& msg);
 
-// Legacy Message -> ContentMessage conversion
+// Legay Message -> ContentMessage conversion
 ContentMessage convertLegacyMessage(const Message& old);
+
+// ContentMessage -> legacy Message conversion (reverse of convertLegacyMessage).
+// Used to persist repaired history back to impl_->messageHistory.
+Message convertContentMessageToLegacy(const ContentMessage& cm);
 
 // Migrate old-format session JSON (flat content string + top-level tool_calls/etc.)
 // to ContentBlock array format in-place.
 void migrateLegacySession(Json& msg);
+
+// ========== Protocol invariant enforcement ==========
+
+/// Detect orphaned tool_use blocks in a ContentMessage sequence.
+/// Returns tool_use IDs that have no matching tool_result in any subsequent
+/// message before the next assistant message.
+std::vector<String> findOrphanedToolUses(const std::vector<ContentMessage>& messages);
+
+/// Inject synthetic tool_result messages for orphaned tool_use blocks.
+/// This is a protocol safety net: if a turn was cancelled or interrupted
+/// before tool_results were written to history, we synthesize error
+/// tool_results to prevent 400 errors from the Anthropic API.
+///
+/// Returns the number of synthetic results injected.
+/// Diagnostic dump: print a human-readable summary of all messages.
+/// Gated by CLAUDE_CODE_DEBUG_API_MESSAGES=1.
+void dumpContentHistory(const char* label, const std::vector<ContentMessage>& msgs);
+
+int injectMissingToolResults(std::vector<ContentMessage>& messages);
+
+/// Merge adjacent messages that share the same role (assistant+assistant
+/// or user+user).  Called from injectMissingToolResults and as a final
+/// safety net from buildApiRequest to guarantee role alternation before
+/// serialization.  Returns the number of pairs merged.
+int coalesceAdjacentSameRole(std::vector<ContentMessage>& messages);
+
+/// Hard validator: ensure every assistant tool_use is immediately followed
+/// by a user message whose first blocks are matching tool_results.
+/// Returns true if the protocol ordering is valid.
+bool validateToolResultOrdering(const std::vector<ContentMessage>& messages);
+
+/// Hard validator: ensure no message has empty content, no assistant message
+/// is empty, and no text block is an empty string.  Cancelled turns must
+/// never persist as empty assistant messages.
+bool validateEmptyMessages(const std::vector<ContentMessage>& messages);
+
+/// Hard validator: check the serialized API JSON for Anthropic protocol
+/// compliance.  Validates role alternation, tool_use/tool_result ordering,
+/// non-empty content, and catches UI-field leaks (contentPreview, stableId).
+/// Must be called on the FINAL request JSON, not the C++ intermediate structs.
+bool validateSerializedApiJson(const Json& request);
 
 } // namespace claude

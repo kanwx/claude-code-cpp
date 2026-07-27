@@ -185,6 +185,14 @@ std::vector<ContentBlock> MessagePipeline::groupConsecutiveToolUses(std::vector<
 // ========== Pass 4: collapseReadSearchGroups ==========
 
 bool MessagePipeline::isCollapsibleBlock(const ContentBlock& block) const {
+    // ToolGroups are collapsible if all their children are
+    if (block.type == ContentBlock::ToolGroup) {
+        if (block.children.empty()) return false;
+        for (const auto& child : block.children) {
+            if (!isCollapsibleBlock(child)) return false;
+        }
+        return true;
+    }
     if (block.type != ContentBlock::ToolResult) return false;
     if (block.summary.isError) return false;
     if (block.resultStatus == ToolResultStatus::Rejected ||
@@ -205,6 +213,10 @@ bool MessagePipeline::isCollapsibleBlock(const ContentBlock& block) const {
 }
 
 GroupAccumulator::Category MessagePipeline::categorizeBlock(const ContentBlock& block) const {
+    // For ToolGroups, delegate to first child
+    if (block.type == ContentBlock::ToolGroup && !block.children.empty()) {
+        return categorizeBlock(block.children[0]);
+    }
     if (toolClassifier_) {
         if (toolClassifier_(block.toolName, 1)) return GroupAccumulator::Search;
         if (toolClassifier_(block.toolName, 2)) return GroupAccumulator::FileRead;
@@ -225,6 +237,77 @@ GroupAccumulator::Category MessagePipeline::categorizeBlock(const ContentBlock& 
     return GroupAccumulator::Search;
 }
 
+bool MessagePipeline::isToolNarration(const ContentBlock& block) const {
+    if (block.type != ContentBlock::AnswerText) return false;
+    const String& text = block.text;
+    if (text.empty()) return false;
+
+    // Rule 1: Short text only — narration is brief.
+    if (text.size() > 200) return false;
+
+    // Rule 2: No markdown structures.
+    if (text.find("```") != String::npos) return false;
+    // Bullet lists
+    if (text.find("\n- ") != String::npos || text.find("\n* ") != String::npos) return false;
+    // Numbered lists
+    if (text.find("\n1. ") != String::npos) return false;
+
+    // Rule 3: No conclusion/summary signal words.
+    String lower = text;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    static const std::vector<String> conclusionWords = {
+        "summary", "conclusion", "therefore", "found that",
+        "in summary", "to summarize", "the result",
+        "overall", "in conclusion", "key findings",
+        "based on", "according to", "here is", "here's"
+    };
+    for (const auto& word : conclusionWords) {
+        if (lower.find(word) != String::npos) return false;
+    }
+
+    // Rule 4: At most 2 sentences (narration is not a paragraph).
+    int sentenceEnds = 0;
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] == '.' || text[i] == '!' || text[i] == '?') {
+            if (i + 1 >= text.size() || text[i + 1] == ' ' || text[i + 1] == '\n') {
+                sentenceEnds++;
+            }
+        }
+    }
+    if (sentenceEnds > 2) return false;
+
+    // Rule 5: Starts with a tool-narration pattern.
+    // These are brief phrases the model uses to introduce the next tool call.
+    static const std::vector<String> narrationStarts = {
+        "let me", "now let me", "i'll", "i will", "let's",
+        "first", "next", "then", "also", "finally",
+        "looking at", "checking", "reading", "searching",
+        "and the", "and now", "moving on", "additionally",
+        "now i'll", "now i will", "next i'll", "next i will",
+        "now,", "now ", "and,", "and ",
+    };
+
+    for (const auto& prefix : narrationStarts) {
+        if (lower.find(prefix) == 0) return true;
+    }
+
+    // Conservative: if no explicit narration pattern matched, treat as
+    // substantive content.  "If unsure, keep as group breaker."
+    return false;
+}
+
+void MessagePipeline::dimToolNarration(std::vector<ContentBlock>& blocks,
+                                       size_t startIndex) const {
+    for (size_t i = startIndex; i < blocks.size(); ++i) {
+        auto& block = blocks[i];
+        if (block.type == ContentBlock::AnswerText &&
+            !block.dimmed &&
+            isToolNarration(block)) {
+            block.dimmed = true;
+        }
+    }
+}
+
 bool MessagePipeline::isGroupBreaker(const ContentBlock& block) const {
     // Assistant text with non-empty content breaks the group
     if (block.type == ContentBlock::AnswerText && !block.text.empty()) {
@@ -236,11 +319,17 @@ bool MessagePipeline::isGroupBreaker(const ContentBlock& block) const {
                 break;
             }
         }
-        if (hasContent) return true;
+        // Tool narration between collapsible tools should not break groups.
+        if (hasContent && !isToolNarration(block)) return true;
     }
 
     // Non-collapsible tool results break the group
     if (block.type == ContentBlock::ToolResult && !isCollapsibleBlock(block)) {
+        return true;
+    }
+
+    // Non-collapsible ToolGroups break the group
+    if (block.type == ContentBlock::ToolGroup && !isCollapsibleBlock(block)) {
         return true;
     }
 
@@ -269,10 +358,26 @@ bool MessagePipeline::hasContentAfterIndex(const std::vector<ContentBlock>& bloc
         if (b.type == ContentBlock::ThinkingBlock) continue;
         // Collapsible tool results don't count
         if (b.type == ContentBlock::ToolResult) {
-            // If it's a collapsible read/search tool, skip
             if (b.toolName == "Read" || b.toolName == "Grep" ||
                 b.toolName == "Glob" || b.toolName == "LS" ||
                 b.toolName == "WebSearch" || b.toolName == "WebFetch") continue;
+        }
+        // Collapsible ToolGroups (all children are read/search) don't count
+        if (b.type == ContentBlock::ToolGroup) {
+            bool allCollapsible = true;
+            for (const auto& child : b.children) {
+                if (child.type != ContentBlock::ToolResult) {
+                    allCollapsible = false; break;
+                }
+                if (child.toolName != "Read" && child.toolName != "Grep" &&
+                    child.toolName != "Glob" && child.toolName != "LS" &&
+                    child.toolName != "WebSearch" && child.toolName != "WebFetch" &&
+                    child.toolName != "Bash" && child.toolName != "TaskOutput" &&
+                    child.toolName != "SendMessage" && child.toolName != "AskUserQuestion") {
+                    allCollapsible = false; break;
+                }
+            }
+            if (allCollapsible && !b.children.empty()) continue;
         }
         // Error messages don't count
         if (b.type == ContentBlock::ErrorMessage) continue;
@@ -349,51 +454,70 @@ std::vector<ContentBlock> MessagePipeline::collapseReadSearchGroups(
             }
             acc.kind = gk;
 
-            switch (cat) {
-                case GroupAccumulator::Search:
-                    acc.searchCount++;
-                    break;
-                case GroupAccumulator::FileRead:
-                    acc.readOperationCount++;
-                    // Extract file path from result summary if possible
-                    if (!block.summary.primaryText.empty()) {
-                        // Parse "Read N lines from path" to extract path
-                        auto fromPos = block.summary.primaryText.find(" from ");
-                        if (fromPos != String::npos) {
-                            acc.readFilePaths.insert(
-                                block.summary.primaryText.substr(fromPos + 6));
+            // Helper to accumulate stats for a single block / child
+            auto accumulateStats = [&](const ContentBlock& b, GroupAccumulator::Category c) {
+                switch (c) {
+                    case GroupAccumulator::Search:
+                        acc.searchCount++;
+                        break;
+                    case GroupAccumulator::FileRead:
+                        acc.readOperationCount++;
+                        if (!b.summary.primaryText.empty()) {
+                            auto fromPos = b.summary.primaryText.find(" from ");
+                            if (fromPos != String::npos) {
+                                acc.readFilePaths.insert(
+                                    b.summary.primaryText.substr(fromPos + 6));
+                            }
                         }
-                    }
-                    break;
-                case GroupAccumulator::FileList:
-                    acc.listCount++;
-                    break;
-                case GroupAccumulator::Bash:
-                    acc.bashCount++;
-                    acc.bashCommands[block.toolCallId] = block.summary.primaryText;
-                    break;
-                case GroupAccumulator::WebSearch:
-                    acc.webSearchCount++;
-                    break;
-                case GroupAccumulator::WebFetch:
-                    acc.webFetchCount++;
-                    break;
-                case GroupAccumulator::MemorySearch:
-                    acc.memorySearchCount++;
-                    break;
-                case GroupAccumulator::MemoryWrite:
-                    acc.memoryWriteCount++;
-                    break;
-                case GroupAccumulator::MCP:
-                    acc.mcpTotalCount++;
-                    break;
+                        break;
+                    case GroupAccumulator::FileList:
+                        acc.listCount++;
+                        break;
+                    case GroupAccumulator::Bash:
+                        acc.bashCount++;
+                        acc.bashCommands[b.toolCallId] = b.summary.primaryText;
+                        break;
+                    case GroupAccumulator::WebSearch:
+                        acc.webSearchCount++;
+                        break;
+                    case GroupAccumulator::WebFetch:
+                        acc.webFetchCount++;
+                        break;
+                    case GroupAccumulator::MemorySearch:
+                        acc.memorySearchCount++;
+                        break;
+                    case GroupAccumulator::MemoryWrite:
+                        acc.memoryWriteCount++;
+                        break;
+                    case GroupAccumulator::MCP:
+                        acc.mcpTotalCount++;
+                        break;
+                }
+                if (!b.summary.primaryText.empty()) {
+                    acc.latestDisplayHint = b.summary.primaryText;
+                }
+            };
+
+            if (block.type == ContentBlock::ToolGroup) {
+                for (const auto& child : block.children) {
+                    acc.toolUseIds.insert(child.toolCallId);
+                    accumulateStats(child, categorizeBlock(child));
+                }
+            } else {
+                accumulateStats(block, cat);
             }
 
-            // Track the latest display hint
-            if (!block.summary.primaryText.empty()) {
-                acc.latestDisplayHint = block.summary.primaryText;
-            }
+            i++;
+            continue;
+        }
 
+        // Tool narration between collapsible tools: pass through without
+        // breaking the current group. "Let me read X" / "Now I'll check Y"
+        // should not prevent Readx3 from collapsing into one group.
+        // Mark dimmed so the renderer can reduce visual weight.
+        if (isToolNarration(block)) {
+            block.dimmed = true;
+            result.push_back(std::move(block));
             i++;
             continue;
         }
@@ -418,17 +542,27 @@ String MessagePipeline::buildGroupSummary(const GroupAccumulator& acc, bool hasC
 
 String MessagePipeline::buildFinalizedSummary(const GroupAccumulator& acc) {
     std::vector<String> parts;
-    // Use past tense
 
+    // Exploration tools (Read + Search + List) combined with "and"
+    std::vector<String> explorationParts;
     if (acc.readCount() > 0) {
-        parts.push_back("Read " + std::to_string(acc.readCount()) + " files");
+        explorationParts.push_back("Read " + std::to_string(acc.readCount()) + " files");
     }
     if (acc.searchCount > 0) {
-        parts.push_back("Searched for " + std::to_string(acc.searchCount) + " patterns");
+        explorationParts.push_back("Searched " + std::to_string(acc.searchCount) + " patterns");
     }
     if (acc.listCount > 0) {
-        parts.push_back("Listed " + std::to_string(acc.listCount) + " directories");
+        explorationParts.push_back("Listed " + std::to_string(acc.listCount) + " directories");
     }
+    if (!explorationParts.empty()) {
+        std::ostringstream exp;
+        for (size_t i = 0; i < explorationParts.size(); i++) {
+            if (i > 0) exp << (i == explorationParts.size() - 1 ? " and " : ", ");
+            exp << explorationParts[i];
+        }
+        parts.push_back(exp.str());
+    }
+
     if (acc.bashCount > 0) {
         parts.push_back("Ran " + std::to_string(acc.bashCount) + " commands");
     }
@@ -452,11 +586,6 @@ String MessagePipeline::buildFinalizedSummary(const GroupAccumulator& acc) {
 
     if (parts.empty()) return "No operations";
 
-    // Capitalize first verb
-    if (!parts.empty() && !parts[0].empty()) {
-        // Already capitalized from template
-    }
-
     std::ostringstream oss;
     for (size_t i = 0; i < parts.size(); i++) {
         if (i > 0) oss << " · ";
@@ -467,17 +596,27 @@ String MessagePipeline::buildFinalizedSummary(const GroupAccumulator& acc) {
 
 String MessagePipeline::buildActiveSummary(const GroupAccumulator& acc) {
     std::vector<String> parts;
-    // Use present continuous tense
 
+    // Exploration tools (Read + Search + List) combined with "and"
+    std::vector<String> explorationParts;
     if (acc.readCount() > 0) {
-        parts.push_back("Reading " + std::to_string(acc.readCount()) + " files");
+        explorationParts.push_back("Reading " + std::to_string(acc.readCount()) + " files");
     }
     if (acc.searchCount > 0) {
-        parts.push_back("Searching for " + std::to_string(acc.searchCount) + " patterns");
+        explorationParts.push_back("Searching " + std::to_string(acc.searchCount) + " patterns");
     }
     if (acc.listCount > 0) {
-        parts.push_back("Listing " + std::to_string(acc.listCount) + " directories");
+        explorationParts.push_back("Listing " + std::to_string(acc.listCount) + " directories");
     }
+    if (!explorationParts.empty()) {
+        std::ostringstream exp;
+        for (size_t i = 0; i < explorationParts.size(); i++) {
+            if (i > 0) exp << (i == explorationParts.size() - 1 ? " and " : ", ");
+            exp << explorationParts[i];
+        }
+        parts.push_back(exp.str());
+    }
+
     if (acc.bashCount > 0) {
         parts.push_back("Running " + std::to_string(acc.bashCount) + " commands");
     }
