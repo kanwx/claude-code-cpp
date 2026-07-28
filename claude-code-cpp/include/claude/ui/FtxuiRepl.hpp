@@ -106,6 +106,13 @@ public:
     const std::vector<ContentBlock>& contentBlocks() const { return contentBlocks_; }
     std::vector<ContentBlock>& contentBlocks() { return contentBlocks_; }
 
+    /// P6-P3a: per-turn output tokens captured from UsageUpdate, reset at AnswerStart.
+    int64_t lastTurnOutputTokens() const { return lastTurnOutputTokens_; }
+
+    /// Build TurnDuration display text (public static for testability).
+    static String buildTurnDurationText(const String& verb, int seconds, int toolCount,
+                                        int64_t outputTokens);
+
     // State setters (called from main.cpp during setup)
     void setCurrentMode(const String& mode) { currentMode_ = mode; modeHintDismissed_ = false; }
     void setAuthStatus(bool authenticated) { isAuthenticated_ = authenticated; }
@@ -167,6 +174,7 @@ private:
     std::chrono::steady_clock::time_point lastOutputTime_{};
 
     TurnMetadata newPipelineStatusMetadata_;
+    int64_t lastTurnOutputTokens_ = 0;   // captured from UsageUpdate, survives AnswerEnd overwrite
 
     ftxui::ScreenInteractive* screen_ = nullptr;
 

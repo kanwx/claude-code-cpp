@@ -64,6 +64,16 @@ static const std::vector<String> kRunningVerbs = {
 // ========== ContentBlock-based display event handler ==========
 
 void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
+    // P6-P3a: Capture per-turn outputTokens BEFORE Post so finishStream()
+    // can read them reliably. AnswerStart resets to prevent leakage.
+    // This runs synchronously on the streaming thread — no screen needed.
+    if (event.type == DisplayEventType::TurnMetadata && event.metadata.outputTokens > 0) {
+        lastTurnOutputTokens_ = event.metadata.outputTokens;
+    }
+    if (event.type == DisplayEventType::AnswerStart) {
+        lastTurnOutputTokens_ = 0;
+    }
+
     if (!screen_) return;
 
     // Build ContentBlock directly from DisplayEvent — no StreamEvent back-conversion,
@@ -433,6 +443,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
                 currentTurnStartIndex_ = contentBlocks_.size();    // preserve scrollback
                 toolProgressIndices_.clear();                        // fresh indices for new turn
                 lastStableIndex_ = 0;                               // reset anchor for new turn
+                lastTurnOutputTokens_ = 0;                          // prevent leakage from previous turn
                 startRefreshThread();
                 break;
 
@@ -845,6 +856,7 @@ void FtxuiRepl::handleDisplayEvent(DisplayEvent&& event) {
             }
 
             case DisplayEventType::TurnMetadata:
+                // lastTurnOutputTokens_ already captured synchronously before Post
                 newPipelineStatusMetadata_ = std::move(ev.metadata);
                 break;
 
@@ -1840,6 +1852,7 @@ ftxui::Component FtxuiRepl::BuildMainComponent() {
                 // Clear pipeline status metadata so the footer/status bar
                 // stops showing "● Running..." and stale token counts.
                 r->newPipelineStatusMetadata_ = TurnMetadata{};
+                r->lastTurnOutputTokens_ = 0;
                 r->outputTokens_ = 0;
                 r->inputTokens_ = 0;
 
